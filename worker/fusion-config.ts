@@ -1,8 +1,9 @@
 import type { FusionConfig } from "../shared/contracts";
+import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { DEFAULT_FUSION_CONFIG, FUSION_MODEL_ID, normalizeFusionConfig } from "./fusion";
-import { endpointForPath, modelRoute } from "./providers";
+import { endpointForPath, modelRoute } from "./provider-catalog";
 import type { Env } from "./types";
-import { HttpError } from "./utils";
+import { HttpError } from "./http-error";
 
 const FUSION_CONFIG_KEY = "config/fusion";
 
@@ -25,9 +26,9 @@ export async function storeFusionConfig(env: Env, input: unknown): Promise<Fusio
 }
 
 export function assertFusionModels(config: FusionConfig): void {
-  for (const model of [...config.adviserModels, config.aggregatorModel]) {
+  for (const model of [...fusionAdviserModels(config), config.aggregatorModel]) {
     if (model === FUSION_MODEL_ID) throw new HttpError(400, "fusion_recursive_model", "fusion cannot use itself as an adviser or aggregator");
-    const route = modelRoute(model);
+    const route = modelRoute(model, "llm.chat");
     if (!route) throw new HttpError(400, "fusion_model_not_found", `fusion model ${model} is not registered`);
     if (!route.model.capabilities.includes("llm.chat")) throw new HttpError(400, "fusion_model_incompatible", `fusion model ${model} does not support chat completions`);
     const endpoint = endpointForPath(route.provider, "/v1/chat/completions");

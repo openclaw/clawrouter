@@ -33,6 +33,7 @@ capabilities:
     methods: [POST]
 endpoints:
   chat_completions:
+    modelPassthrough: { pricingRef: local-compute-zero-api-charge-v1 }
     path: /v1/chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions

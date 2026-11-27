@@ -1,0 +1,9 @@
+{
+  "description": "FakeCo temporary BIC health probe 20261022",
+  "expression": "(http.host eq \"clawrouter-fakeco.openclaw.ai\" and http.request.method in {\"GET\" \"HEAD\"} and http.request.uri.path in {\"/search-semantics/health\" \"/robots.txt\"} and http.request.uri.query eq \"\")",
+  "action": "set_config",
+  "action_parameters": {
+    "bic": false
+  },
+  "enabled": true
+}

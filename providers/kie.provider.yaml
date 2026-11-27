@@ -1,0 +1,46 @@
+# Native Market jobs; no cross-product model inventory or credit-to-dollar tariff.
+schema: clawrouter.service-provider.v1
+id: kie
+displayName: Kie Market
+status: experimental
+class: rest_json
+service:
+  platform: kie
+  kind: tool_provider
+  upstreamService: kie
+  configKeys: [KIE_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.kie.ai
+routing:
+  nativePrefixes: [clawrouter-kie, kie]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: media.predict
+    endpoint: create_task
+    methods: [POST]
+endpoints:
+  create_task:
+    path: /api/v1/jobs/createTask
+    requestFormat: kie.job_create
+    responseFormat: kie.job
+    lifecycle:
+      protocol: kie.jobs
+      retrieve: record_info
+    timeoutMs: 120000
+  record_info:
+    path: /api/v1/jobs/recordInfo
+    method: GET
+    requestFormat: kie.job_get
+    responseFormat: kie.job
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]

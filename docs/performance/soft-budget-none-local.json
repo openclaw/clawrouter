@@ -1,0 +1,102 @@
+{
+  "label": "soft-budget-none",
+  "environment": {
+    "node": "v26.12.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpus": 32
+  },
+  "budgetMode": "none",
+  "budgetWindow": "weekly",
+  "delayMs": 200,
+  "maxTokens": 16,
+  "cells": [
+    {
+      "scenario": "messages",
+      "concurrency": 1,
+      "completed": 100,
+      "seconds": 30.624497541999997,
+      "throughput": 3.2653596965257927,
+      "dropped": 0,
+      "errors": 0,
+      "intentionalAborts": 0,
+      "totalMs": {
+        "samples": 100,
+        "p50": 228.2477919999983,
+        "p90": 560.243625000001,
+        "p95": 589.4825420000052,
+        "p99": 737.1329580000001,
+        "max": 771.8000409999986
+      },
+      "ttfbMs": {
+        "samples": 100,
+        "p50": 228.19366699999955,
+        "p90": 560.2007090000006,
+        "p95": 589.3965420000022,
+        "p99": 736.9907500000008,
+        "max": 771.5441659999997
+      },
+      "firstByteMs": {
+        "samples": 100,
+        "p50": 228.19366699999955,
+        "p90": 560.2007090000006,
+        "p95": 589.3965420000022,
+        "p99": 736.9907500000008,
+        "max": 771.5441659999997
+      },
+      "statuses": {
+        "200": 100
+      },
+      "errorsByCode": {
+        "none": 100
+      },
+      "lanes": {
+        "subscription": 100
+      },
+      "failovers": 0,
+      "stickiness": {
+        "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+      },
+      "budgetRpc": {},
+      "routerAddedLatencyMs": {
+        "p50": 28.2477919999983,
+        "p95": 389.4825420000052
+      },
+      "authorityRpc": {
+        "/admission/resolve": 100,
+        "/grant-pools/feedback": 100
+      },
+      "routerAddedP50Ms": 28.19366699999955,
+      "bookkeeping": {
+        "expected": 100,
+        "selected": 100,
+        "usage": 100,
+        "initialBacklog": 15,
+        "drainMs": 1076.5374159999992,
+        "upstream": {
+          "requests": 100,
+          "streams": 0,
+          "count": 0,
+          "messages": 100,
+          "canceled": 0,
+          "completed": 100
+        },
+        "recentEventsChecked": 100,
+        "recentEventStatuses": {
+          "success": 100
+        },
+        "recentTokenTotals": {
+          "input": 1200,
+          "output": 400
+        },
+        "sessionsChecked": 70,
+        "sessionsWithMultipleGrants": 0,
+        "quotaUpdatedGrants": 7
+      },
+      "workerd": {
+        "peakRssMiB": 125.578125,
+        "peakCpuPercent": 3.9
+      }
+    }
+  ]
+}

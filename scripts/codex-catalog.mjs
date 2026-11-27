@@ -4,41 +4,84 @@ import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-// Native export owns prompts, tool contracts, and internal model references.
-// The router only chooses reachable slugs and narrows advertised paid tiers.
-export function buildCodexCatalog(catalog, bundled, providerId) {
-  const provider = catalog.providers?.find((item) => item.id === providerId && item.allowed && item.executable);
-  if (!provider) throw new Error("selected provider is not authorized and executable");
-  const responses = provider.routes?.filter((route) => route.methods?.includes("POST") && route.requestFormat === "openai.responses" && route.responseFormat === "openai.responses" && route.streaming === "sse");
-  if (responses?.length !== 1 || !responses[0].path.endsWith("/responses")) throw new Error("selected provider needs one executable native Responses route");
-  if (!Array.isArray(bundled.models) || !bundled.models.length) throw new Error("native Codex export contains no models");
-  const official = new Map(bundled.models.map((model) => [model.slug, model]));
-  const models = [], skipped = [], mappings = [], slugs = new Set();
-  for (const model of provider.models ?? []) {
-    if (!model.capabilities?.includes("llm.responses")) continue;
-    const upstream = model.upstream;
-    const descriptor = official.get(model.codexModel ?? upstream);
-    if (typeof upstream !== "string" || !upstream || upstream.includes("${") || !descriptor) {
-      skipped.push({ model: model.id, reason: "no exact native Codex descriptor" });
-      continue;
+import { buildCodexCatalog } from "../shared/codex-catalog.ts";
+export { buildCodexCatalog } from "../shared/codex-catalog.ts";
+
+export async function readCodexCatalog({ routerUrl, providerId, codex = "codex", env = process.env, headers = {}, catalogMode = "local", webSearch = "disabled", onStage = async () => {} }) {
+  if (!["local", "remote"].includes(catalogMode) || catalogMode === "remote" && providerId !== "openai") throw new Error("remote Codex metadata currently supports only the openai provider");
+  let origin;
+  try { origin = new URL(routerUrl); } catch { throw new Error("router URL is invalid"); }
+  if (origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/") throw new Error("router URL must be the router origin without credentials, path, or query");
+  if (origin.protocol !== "https:" && !(origin.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname))) throw new Error("router URL must use HTTPS (except loopback fixtures)");
+  const key = env.CLAWROUTER_API_KEY;
+  if (!key?.trim()) throw new Error("CLAWROUTER_API_KEY is required");
+  let routerBytes;
+  await onStage("catalog_request");
+  try {
+    const response = await fetch(new URL("/v1/catalog", origin), { headers: { ...headers, authorization: `Bearer ${key}` }, redirect: "error", signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw Object.assign(new Error(`authorized router catalog returned HTTP ${response.status}`), { status: response.status });
     }
-    if (!descriptor.model_messages?.instructions_template && !descriptor.base_instructions) throw new Error(`native descriptor for ${model.id} has no instructions`);
-    if (slugs.has(upstream)) throw new Error(`duplicate native model route: ${upstream}`);
-    slugs.add(upstream);
-    const copy = structuredClone(descriptor);
-    copy.slug = upstream;
-    const context = descriptor.max_context_window ?? descriptor.context_window;
-    const cards = (model.pricing?.serviceTiers ?? []).filter((card) => card.maxInputTokens == null || (typeof context === "number" && card.maxInputTokens >= context));
-    const tiers = new Set(cards.flatMap((card) => [card.id, ...(card.aliases ?? [])]));
-    copy.service_tiers = (copy.service_tiers ?? []).filter((tier) => tiers.has(tier.id));
-    const advertised = new Set(copy.service_tiers.map((tier) => tier.id));
-    copy.additional_speed_tiers = (copy.additional_speed_tiers ?? []).filter((tier) => advertised.has(tier === "fast" ? "priority" : tier));
-    if (copy.default_service_tier != null && !advertised.has(copy.default_service_tier)) copy.default_service_tier = null;
-    models.push(copy);
-    mappings.push({ route: model.id, upstream, descriptor: descriptor.slug });
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of response.body) {
+      size += chunk.length;
+      if (size > 16 * 1024 * 1024) throw new Error("authorized router catalog exceeds 16 MiB");
+      chunks.push(chunk);
+    }
+    routerBytes = Buffer.concat(chunks).toString("utf8");
+  } catch (error) {
+    if (error.message.startsWith("authorized router catalog ")) throw error;
+    throw new Error("authorized router catalog request failed");
   }
-  if (!models.length) throw new Error("no authorized Responses model has exact native Codex metadata");
-  return { catalog: { models }, skipped, mappings, nativeBasePath: `${provider.nativeBaseUrl}${responses[0].path.slice(0, -"/responses".length)}` };
+  let bundledBytes, version;
+  await onStage("catalog_native_export");
+  try {
+    const nativeEnv = { ...env, CLAWROUTER_API_KEY: undefined };
+    const options = { encoding: "utf8", env: nativeEnv, maxBuffer: 16 * 1024 * 1024, timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] };
+    version = execFileSync(codex, ["--version"], options).trim();
+    if (!/^codex-cli [\w.+-]+$/.test(version)) throw new Error("invalid producer version");
+    if (catalogMode === "local") bundledBytes = execFileSync(codex, ["debug", "models", "--bundled"], options);
+  } catch { throw new Error("native Codex bundled export failed; check --codex and producer version"); }
+  let catalogUrl;
+  if (catalogMode === "remote") {
+    const release = /^codex-cli (\d+)\.(\d+)\.(\d+)(?:$|[-+])/.exec(version);
+    if (!release || Number(release[1]) === 0 && Number(release[2]) < 169) throw new Error("remote catalog setup requires Codex CLI 0.169.0 or newer");
+    catalogUrl = new URL("/v1/codex/models", origin);
+    if (webSearch !== "disabled") catalogUrl.searchParams.set("standalone_search", "true");
+    const fetchUrl = new URL(catalogUrl);
+    fetchUrl.searchParams.set("client_version", release.slice(1, 4).join("."));
+    await onStage("catalog_remote_request");
+    try {
+      const response = await fetch(fetchUrl, { headers: { ...headers, authorization: `Bearer ${key}` }, redirect: "error", signal: AbortSignal.timeout(30_000) });
+      if (!response.ok) { void response.body?.cancel(); throw new Error("remote catalog rejected"); }
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of response.body) {
+        size += chunk.length;
+        if (size > 8 * 1024 * 1024) throw new Error("remote catalog too large");
+        chunks.push(chunk);
+      }
+      bundledBytes = Buffer.concat(chunks).toString("utf8");
+    } catch { throw new Error("authorized remote Codex catalog request failed; no files changed"); }
+  }
+  let router, bundled;
+  await onStage("catalog_decode");
+  try { router = JSON.parse(routerBytes); bundled = JSON.parse(bundledBytes); }
+  catch { throw new Error("router catalog or native export is invalid JSON"); }
+  // Remote descriptors already use inference slugs. An alias-only policy may
+  // omit its source descriptor; do not try to apply codexModel a second time.
+  await onStage("catalog_projection");
+  const projection = catalogMode === "remote" ? { ...router, providers: router.providers.map(provider => provider.id === providerId
+    ? { ...provider, models: provider.models.map(model => ({ ...model, codexModel: model.upstream })) } : provider) } : router;
+  const result = buildCodexCatalog(projection, bundled, providerId);
+  const baseUrl = new URL(result.nativeBasePath, origin);
+  if (baseUrl.origin !== origin.origin) throw new Error("native route must stay on the router origin");
+  const hash = (text) => createHash("sha256").update(text).digest("hex");
+  return { ...result, routerUrl: origin.origin, baseUrl: baseUrl.href,
+    ...(catalogUrl ? { catalogMode, catalogUrl: catalogUrl.href } : {}),
+    producer: version, bundledSha256: hash(bundledBytes), routerCatalogSha256: hash(routerBytes) };
 }
 
 async function main(args) {
@@ -52,27 +95,15 @@ async function main(args) {
     options[args[index]] = args[index + 1];
   }
   if (!options["--router-url"] || !options["--provider"] || !options["--output"]) throw new Error("--router-url, --provider, and --output are required");
-  const origin = new URL(options["--router-url"]);
-  if (origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/") throw new Error("--router-url must be the router origin without credentials, path, or query");
-  if (origin.protocol !== "https:" && !(origin.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname))) throw new Error("router URL must use HTTPS (except loopback fixtures)");
-  const key = process.env.CLAWROUTER_API_KEY;
-  if (!key) throw new Error("CLAWROUTER_API_KEY is required");
-  const response = await fetch(new URL("/v1/catalog", origin), { headers: { authorization: `Bearer ${key}` }, redirect: "error", signal: AbortSignal.timeout(30_000) });
-  if (!response.ok) throw new Error(`authorized router catalog returned HTTP ${response.status}`);
-  const routerBytes = await response.text();
-  const codex = options["--codex"] ?? "codex";
-  const nativeEnv = { ...process.env, CLAWROUTER_API_KEY: undefined };
-  const bundledBytes = execFileSync(codex, ["debug", "models", "--bundled"], { encoding: "utf8", env: nativeEnv, maxBuffer: 16 * 1024 * 1024, timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
-  const version = execFileSync(codex, ["--version"], { encoding: "utf8", env: nativeEnv, timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] }).trim();
-  const result = buildCodexCatalog(JSON.parse(routerBytes), JSON.parse(bundledBytes), options["--provider"]);
+  const result = await readCodexCatalog({ routerUrl: options["--router-url"], providerId: options["--provider"], codex: options["--codex"] });
   const output = resolve(options["--output"]), temporary = `${output}.${randomUUID()}.tmp`;
   await mkdir(dirname(output), { recursive: true });
   try {
     await writeFile(temporary, `${JSON.stringify(result.catalog)}\n`, { flag: "wx", mode: 0o600 });
     await rename(temporary, output);
   } finally { await rm(temporary, { force: true }); }
-  const hash = (text) => createHash("sha256").update(text).digest("hex");
-  process.stderr.write(`${JSON.stringify({ producer: version, bundledSha256: hash(bundledBytes), routerCatalogSha256: hash(routerBytes), baseUrl: new URL(result.nativeBasePath, origin).href, mappings: result.mappings, skipped: result.skipped })}\n`);
+  const { catalog, nativeBasePath, ...summary } = result;
+  process.stderr.write(`${JSON.stringify(summary)}\n`);
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

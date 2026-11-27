@@ -1,0 +1,215 @@
+# Paired retrieval experiment
+
+Status: approved pair completed 2026-10-23 07:57:15 UTC; result inconclusive.
+IANA returned expected content. FakeCo returned tool-level `Internal Error`, no
+fresh marker, and zero recorded requests/diagnostic GETs or HEADs in immediate
+and 15-second late snapshots. Exactly two direct search calls; no retry.
+Both owned sessions deleted; normal fixture restored and verified 2026-10-23T07:57:15.634Z.
+Current normal version `9ea3e336-0cf8-41e0-b44b-09e448fd70cb`, prefix route
+`dd2ae4273551492db92c3b5ffc367529`. Temporary robots route/service removed. Current ownership
+receipt: `paired-retrieval-receipt.json` (exclusive; do not replay). Cached/live
+semantics, fresh FakeCo retrieval and upstream billing remain unqualified. Further
+Cloudflare mutation batches and paid calls need separate approval. No PR or push.
+
+## Approved batch scope
+
+One temporary observation deployment, at most two direct search POSTs, owned
+session cleanup, then verified normal restoration. No inference, router policy/key
+or budget changes, new namespace, secret change, security relaxation or campaign
+teardown. Use the same `gpt-6.1-sol` model and experimental
+`https://api.openai.com/v1/alpha/search` endpoint as the previous probes.
+
+1. Refresh read-only preflight and require the prepared inventory less than ten
+   minutes old with unchanged normal fixture/infrastructure. Verify IANA public
+   HTTP content, non-creating diagnostic auth check, private/public absence,
+   robots baselines, Access challenge and BIC. No provider call or OpenAI key read.
+2. Deploy reviewed observation source `d3af38c` with the existing namespace/digest,
+   temporary `/robots.txt*` route and main-Worker service binding. Record actual
+   version and both route IDs immediately; retain independently available IDs if
+   another inventory read fails. Require three consecutive compatible Worker and
+   object readiness responses five seconds apart, bounded to 120 seconds/25 checks.
+   Require marked observation collection absence and diagnostic absence.
+3. Read the exact existing OpenAI key into memory and make one live-mode standalone
+   open of `https://www.iana.org/help/example-domains`. Require HTTP 200, nonempty
+   tool output without known tool/navigation errors, expected page title,
+   `example.com` and RFC 2606. Failure/timeout stops paid traffic; create no FakeCo
+   sessions. IANA content can be cached: this does not qualify a fresh IANA fetch.
+4. Only after IANA passes, create one fresh five-minute observation session and
+   one fresh five-minute diagnostic generation. Journal each owned ID on 201
+   before helper validation. Initial private counters must be zero. Require enough
+   TTL for the 90-second provider timeout and 15-second late window.
+5. Make one live-mode standalone open of the stable FakeCo diagnostic URL. Keep
+   its new marker out of the provider request. No operator public FakeCo request
+   or inventory helper that fetches public health while observation may be active.
+   Capture private snapshots immediately after response/failure and after 15
+   seconds; no provider retry or reference follow-up.
+6. Qualify fresh FakeCo retrieval only if tool output succeeds and contains the
+   exact new marker, with at least one successful diagnostic origin GET and
+   agreeing independent diagnostic/observation GET totals. HEAD alone, marker
+   alone, GET alone, mismatched counters, overflow/saturation, tool errors or
+   uncertain handler identity do not qualify. Zero counts remain inconclusive.
+7. In `finally`, attempt each owned session DELETE once, then verify owned-ID and
+   collection absence while the compatible observer is deployed. Verify public
+   diagnostic absence only after private cleared-state checks. No collection
+   DELETE, unowned deletion, mutation replay or TTL extension.
+8. After qualified cleanup and fresh ownership/infrastructure checks, remove only
+   the added robots route and redeploy normal config. Verify original normal code
+   bytes, exactly three bindings, temporary service/route absent, preserved
+   namespace/main/unrelated resources, robots baselines, Access and BIC. Record
+   the new normal version/prefix route IDs. Uncertainty stops restoration for
+   read-only reconciliation; retain the receipt/resource custody.
+
+## Pins and preparation artifacts
+
+| Resource | Required baseline |
+| --- | --- |
+| Account | OpenClaw `91b59577e757131d68d55a471fe32aca` |
+| Zone | `openclaw.ai`, `72b20df9e990ac41365dadace6499187` |
+| Fixture Worker | `clawrouter-search-semantics-fakeco` |
+| Pre-batch normal version (historical) | `f5e2791a-196f-4a8a-a990-590c9bd12891` |
+| Pre-batch prefix route (historical) | `e636ada557fd4550a4abb64edd03e3df` |
+| Prefix pattern | `https://clawrouter-fakeco.openclaw.ai/search-semantics/*` |
+| SQLite namespace/class | `148cbb6483b4421dbf8b25301a325865`, `SearchSemanticsObject` |
+| Main Worker/version | `clawrouter-edge-fakeco`, `3d669069-fb9e-45e0-a71b-bded66c5b7b2` |
+| Reviewed runtime | `d3af38ce0f182cd293571b0defbaa3c1237d7fc2` |
+| Instrumentation calibration | `request-observation-stability-calibration-receipt.json`, passed |
+
+Campaign artifact directory: `.artifacts/fakeco-codex-search-20261022/`.
+New operator: `run-paired-retrieval.mjs`, with explicit `--preflight-only` and
+`--deploy-approved` modes. New test: `paired-retrieval-runner.test.mjs`.
+Shared reviewed inventory/Cloudflare helpers remain unchanged. Operator execution
+uses an exclusive `paired-retrieval-receipt.json`; never replay it. Historical
+calibration runners/receipts must not be reused for this new batch.
+
+Credential metadata confirmed populated fields in Agent Secrets: existing
+Cloudflare token, FakeCo canary `ADMIN_TOKEN`, and OpenAI `OPENAI_API_KEY`. No
+`ACCESS_INSTRUCTIONS` field was present on those selected items. Execution must
+recheck item instructions before targeted reads. Preflight reads only the scoped
+Cloudflare token and derived fixture control credential. No credential value,
+raw request/output, hidden marker, provider error body or diagnostic HTML is
+written to receipts or logs. Save fixed booleans/counts, validated observation
+categories, session IDs/expiry, and qualified resource metadata only.
+
+## Qualification limits
+
+The [official web-search guide](https://developers.openai.com/api/docs/guides/tools-web-search)
+describes live/cache controls for Responses web search. The fetched guide and
+official search did not establish an `/v1/alpha/search` contract or its charges;
+this experiment preserves the previously observed request shape and tests it
+empirically. Published hosted-search prices are not used to qualify its billing.
+
+A passing pair establishes one observed fresh FakeCo retrieval under the tested
+endpoint/key/model/settings/time. It does not qualify cache-only mode, refresh,
+click/find behavior, all models, global propagation or upstream charges. A failed
+IANA control stops after one paid attempt. IANA success plus FakeCo failure
+isolates a narrower failure but does not establish its cause. The larger cached/
+live semantics matrix stays gated on a successful fresh FakeCo control.
+
+## Local verification
+
+Thirteen offline VM scenarios exercise the actual operator and fixture/probe
+helpers with simulated network/deployment: read-only isolation, successful pair,
+IANA failures, HEAD/marker/GET mismatches, tool/transport/non-JSON failures, late
+arrival, readiness reset/deadline, ambiguous creation/deletion/restoration,
+partial inventory, source/hash changes and exclusive-receipt replay refusal.
+All pass. Five focused standalone-probe tests also pass. No Worker/admin/provider
+source changes in this preparation; the previously calibrated runtime is pinned.
+
+
+## Historical preparation review and read-only preflight
+
+Frozen operator commit `0f45b1f259e217aa803d92a2082c29b083ca1214` reviewed scoped-clean through
+P2. Status: `/Users/joshavant/.codex/review-results/paired-retrieval-20261023/status.json`. Actual ignored source/test bytes match the frozen
+commit and hash manifest `paired-retrieval-runner-review.json`. No runtime change.
+
+Read-only preflight passed 2026-10-23T07:54:45.783Z. Normal version/prefix route above
+match the previous successful calibration's restoration snapshot. Exactly three
+normal bindings; temporary robots route/service absent. Namespace, main Worker,
+runtime/base settings, unrelated routes/domains/namespaces, Access and BIC match
+baseline. Private/public absence, non-creating auth check (400), four robots
+baselines and dashboard Access challenge verified. IANA public HTTP returned 200
+with all three expected content checks true. Browser rules were not refreshed;
+no denied-endpoint retry or authentication fallback.
+
+Preparation receipt: `paired-retrieval-preparation-receipt.json`. Fresh inventory:
+`paired-retrieval-preflight.json`, with a separate timestamped copy. No Cloudflare
+management writes, session creations/DELETEs or paid search calls. Runner did not
+read the OpenAI key; item metadata confirms the selected field is populated,
+not current provider entitlement. At that preparation stage the execution receipt was absent and deployment/paid
+approvals were null. The approved execution below supersedes that status. No PR
+or push.
+
+The subsequent approval covered one batch containing steps 1–8 above, with at most two direct
+Sol search calls, IANA first and FakeCo conditional on IANA success. Source and
+operator hashes must still match; refresh preflight again if older than ten
+minutes. Other resources and the larger semantics matrix remain outside scope.
+
+
+## Approved execution and inconclusive result
+
+User approved the reviewed complete batch; approval recorded in
+`paired-retrieval-authorization.json`. Runtime `d3af38c`, frozen operator
+`0f45b1f`; source/hash/review gates matched. Fresh read-only preflight passed,
+then batch ran 2026-10-23 07:56:17–07:57:15 UTC. Temporary wrapper version
+`5740ac01-80a5-49a0-94fc-9a3dc717646e`, prefix route
+`1f3b5b02fe294a549f2b08fcff93576a`, robots route
+`8dc4ffa9fd2a48049371bd7704844462`. Three readiness samples at 07:56:31.131,
+07:56:36.353 and 07:56:41.624 UTC had both expected identities and exact v2 body.
+Marked empty observation collection and absent diagnostic verified before probes.
+
+| Direct Sol call | Dispatch UTC | HTTP | Result |
+| --- | --- | --- | --- |
+| IANA example-domains | 07:56:43.840 | 200 | Expected title, example.com and RFC 2606; no known tool error |
+| FakeCo diagnostic | 07:56:45.482 | 200 | Tool-level Internal Error; no new marker |
+
+IANA request `req_0480b915f75643aab613c378129f4cf1`, output character count 1963.
+FakeCo request `req_392854e7557449fab6bfd6a1b4a2050e`, output character count 281.
+Both exposed encrypted output but no usage. Raw output, encrypted payload,
+provider error bodies, hidden marker and credentials were not persisted.
+No inference, router application write, provider retry or reference follow-up.
+
+Only after IANA passed, observation `f0f9b860-d507-4b2a-bce9-2e62e1b649ae` and
+diagnostic `50ce1cda-5ed7-4167-8fb6-4d969965a4ac` were created with five-minute
+TTLs. No operator public FakeCo request while sessions were active. Initial
+07:56:45.481, immediate 07:56:46.459 and late 07:57:01.851 UTC snapshots all had
+empty observation counters, zero overflow, no saturation, diagnostic GET/HEAD
+0/0 and null last-access times. No robots, rejected variant or health activity
+was recorded either. Snapshots retained the same IDs/expiries. All active-period
+observation controls and cleanup responses carried both expected v2 identities.
+Sampled isolate-local diagnostics had zero rejected captures/transport failures;
+they do not establish deployment-wide capture reliability.
+
+Each owned session DELETE returned 200 exactly once; owned-ID and collection
+absence verified, including marked observation absence. Public diagnostic GET/
+HEAD then absent. State cleanup verified 07:57:03.584 UTC. Only the added robots
+route was deleted, normal config redeployed, and restoration verified
+07:57:15.634 UTC. Current version/route at top, namespace
+`148cbb6483b4421dbf8b25301a325865` unchanged. Normal code bytes match pre-batch
+normal fixture; exactly three normal bindings, temporary service/route absent.
+Main version `3d669069-fb9e-45e0-a71b-bded66c5b7b2`, base runtime/settings,
+unrelated routes/domains/namespaces, Access and BIC preserved; dashboard challenge
+intact. No new namespace, secret change, security relaxation or broader teardown.
+No pending owned session cleanup; fixed object allocation remains for later
+separately approved class-deletion cleanup.
+
+The first post-deploy normal control check still returned both v2 headers with
+404 after normal configuration became active. Additional read-only inventory and
+five private GETs subsequently verified unchanged restored configuration and
+normal unmarked 404s for readiness, both collections and both owned IDs. This
+samples propagation settling; it is not a global consistency guarantee. Proof:
+`paired-retrieval-postrestore-readonly-receipt.json`, completed at 2026-10-23T07:58:10.932Z.
+This follow-up made no management/session writes or paid call.
+
+The endpoint/key/model could return known IANA content but did not return the
+fresh FakeCo marker. IANA may be cached; its success does not establish fresh
+external fetch capability. Zero calibrated best-effort counts do not prove no
+network attempt, no pre-Worker rejection, or a provider-specific/hostname-specific
+cause. Fresh fetch eligibility, upstream tool failure and other network paths
+remain unresolved. No cached/live semantic or billing qualification. The larger
+matrix remains gated; no repeated paid experiment under this authorization.
+
+Current ownership/full safe evidence: `paired-retrieval-receipt.json`. Compact
+outcome: `paired-retrieval-batch-summary.json`. The runner has an exclusive
+execution receipt and must not be replayed. Earlier stability/preparation receipts
+and pre-batch version/route IDs are historical. Any future approved mutation batch
+needs newly pinned operators and fresh read-only inventory.

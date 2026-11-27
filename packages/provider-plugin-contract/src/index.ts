@@ -1,0 +1,21 @@
+/** Packaging metadata only. Execution remains governed by the provider manifest. */
+export { PROVIDER_CONFORMANCE_SCHEMA, PROVIDER_CONFORMANCE_VALIDATION_SCHEMA, PROVIDER_CONFORMANCE_EXECUTION_SCHEMA, ProviderConformanceContractError, parseProviderConformanceScenario } from "./conformance.ts";
+export type { ProviderConformanceScenario, ProviderConformanceValidation, ProviderConformanceExecution, ProviderFixtureJson, ProviderFixtureRequest, ProviderFixtureResponse } from "./conformance.ts";
+export { transportForGrant, bindingSupportsOperation, productSupportsBinding, bindingCompatibilityIssue, productBindingCompatibilityIssue } from "./bindings.ts";
+export type { ProviderBindingGrant, ProviderBindingRequirement, ProviderBindingIssue } from "./bindings.ts";
+export type { ProviderPackageIndex, ProviderPackageResource } from "./package-index.ts";
+export type { ProviderAuthenticationMethod, ProviderCommercialModel, ProviderProductSummary } from "./product-metadata.ts";
+export type { ProviderGrantKind, ProviderProductBinding, ProviderProductOffer, ProviderOfferDefinition, ProviderOfferReference, ProviderProduct } from "./products.ts";
+export type { AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport } from "./auth.ts";
+export type { TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPriceModifiers, TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing, SuccessfulRequestPricing, OutcomeRequestPricing, ImageRequestPricing, DeepSeekSearchRequestPricing, RequestPricing } from "./pricing.ts";
+export type { ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, CompiledEndpoint } from "./endpoints.ts";
+export type { GrantQuotaKind, CompiledQuotaWindow, CompiledQuotaProbeWindow, CompiledQuotaProbe, CompiledQuotaConfig } from "./quota.ts";
+export type { GrantAccount, GrantExtraUsage } from "./observations.ts";
+export type { ProviderModelDefinition, ProviderModelCatalogRef } from "./models.ts";
+export type { ModelAvailability } from "./model-availability.ts";
+export type { ProviderReasoningEffort, ParameterSupport, ModelRequestParameters } from "./model-request-parameters.ts";
+export { isPublishedMusicInputSupport } from "./native-capabilities.ts";
+export type { OpenAiDecisionCapabilities, BasetenSystemOneDecisionCapabilities, SageDecisionCapabilities, NativeDecisionCapabilities, OpaquePcmSpeechProfile, InlineMusicReferenceImage, PublishedMusicInputSupport, NativeEndpointCapabilities, NativeModelCapabilities } from "./native-capabilities.ts";
+export type { ProviderSnapshot, CompiledProvider, CompiledModel } from "./snapshot.ts";
+export { PROVIDER_PLUGIN_SCHEMA, PROVIDER_MANIFEST_SCHEMA, ProviderPluginContractError, providerPluginPath, parseProviderPluginDescriptor, providerPluginFiles } from "./plugin-descriptor.ts";
+export type { ProviderPluginDescriptor } from "./plugin-descriptor.ts";

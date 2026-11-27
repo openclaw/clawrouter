@@ -131,9 +131,16 @@ ambiguity:
   binding fails with instructions to use `upload`; secret values are never
   returned, logged, or placed in process arguments.
 
+Dispatch with the required `expected_sha` input set to the reviewed full
+40-character commit SHA of the selected branch or tag. Existing dispatch
+callers must add this field; it verifies the event and checkout, without
+changing checkout selection. See [deployment source checks](deploy-cloudflare.md#provision).
+
 The workflow's fail-closed order is:
 
-1. Run the non-mutating required-input and locked-KV preflight.
+1. Validate `expected_sha` against the dispatch event before checkout, then
+   verify actual `HEAD` before dependency setup or execution. Run the
+   non-mutating required-input and locked-KV preflight.
 2. Converge the FakeCo Access app and its required service-token policy.
 3. Run the normal Worker/KV permission preflight, provision content storage,
    render the locked config, and perform the initial Worker deploy.
@@ -174,15 +181,33 @@ pnpm cf:teardown -- --execute
 
 Execution re-resolves the KV id to `clawrouter-policy-fakeco`, requires the
 Access app name and complete destination set to match the locked FakeCo profile,
-then deletes only that Worker and its associated resources (including Durable
-Object storage), usage queue, DLQ, and finally the Access app. The confirmation
-text names the Durable Object deletion explicitly. The Access gate stays in
-place if a Worker or queue deletion fails. The command never uses Wrangler
+then preflights both managed queues before any mutation. Queue details must
+match the inventory, dependency arrays must be complete when counts are supplied,
+and both backlog count and bytes must be zero. The usage queue may have only the
+FakeCo Worker producer and one FakeCo Worker consumer using the managed DLQ; the
+DLQ must have no explicit producers or consumers. Foreign or unknown dependencies
+cause refusal. The consumer is verified by its direct API identity, disconnected
+by exact ID, and confirmed absent both directly and in fresh queue metadata before
+Worker deletion. Backlogs are rechecked after disconnection and before queue
+deletion; a nonempty queue is never purged automatically.
+
+The command then deletes that Worker and its associated resources (including
+Durable Object storage), usage queue, DLQ, and finally the Access app. The
+confirmation text names the Durable Object deletion explicitly. The Access gate
+stays in place if any preflight, consumer operation, Worker deletion or queue
+deletion fails. API failures and malformed acknowledgements stop execution;
+deletions are not automatically retried. The command never uses Wrangler
 deletion commands. Worker deletion uses the Cloudflare API explicitly with
 `force=true` only after both teardown confirmations name the irreversible Durable
 Object storage loss. Queue deletion uses exact API-listed ids, so ambiguous
 resources cause refusal. Repeated execution tolerates only exactly absent managed
-targets.
+targets. Stop traffic and automation and independently check for references from
+other resources before execution; these queue checks do not replace the complete
+ownership audit. Queue metrics and control-plane reads are observations, not an
+atomic drain or a guarantee against concurrent writers. Refresh resource absence
+and preservation checks after execution. The completed 2026-10-23 campaign is
+recorded in the [final cleanup handoff](codex-search-cleanup-20261023.md); do not
+replay its completed operations to validate this helper.
 
 The KV namespace and its policies/credentials, R2 bucket and archived content,
 Cloudflare Access service-token resources, GitHub Environment secrets/variables,
@@ -211,9 +236,9 @@ The integration contract is:
 | --- | --- | --- |
 | `GET /v1/health` | none | Process liveness, environment identity, and observability mode. It is not upstream readiness. |
 | `GET /v1/catalog` | FakeCo credential | Authoritative allowed provider/model catalog. Require `provider.executable=true`; inspect `provider.readiness.status`, `verified`, and `reasons`. |
-| `GET /v1/models` | FakeCo credential | OpenAI model-list view containing currently executable models. |
+| `GET /v1/models` | FakeCo credential | Scoped OpenAI model-list view; configured identity survives known temporary grant cooldowns, not authorization or configuration removal. |
 | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings` | FakeCo credential | OpenAI-compatible inference. Model ids retain the provider namespace, such as `openai/gpt-4.1-mini`. |
-| `GET /v1/usage` | FakeCo credential | Policy or principal budget status, shared policy request/error/token/spend/provider/daily totals, and caller-owned recent-event metadata. |
+| `GET /v1/usage` | FakeCo credential | Policy or principal budget status, shared policy request/error/token/spend/provider/daily totals, the same totals for the caller alone under `usage.personal`, and caller-owned recent-event metadata. |
 
 Expected FakeCo health fields include:
 

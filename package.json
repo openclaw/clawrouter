@@ -1,14 +1,17 @@
 {
   "name": "clawrouter-workspace",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "loadtest": "node scripts/loadtest.mjs",
+    "loadtest:local": "node scripts/loadtest-local.mjs",
     "check": "pnpm worker:check && pnpm --dir admin check && pnpm --dir admin test && pnpm test:scripts",
     "build": "pnpm provider:compile -- --output worker/generated/provider-snapshot.json && pnpm --dir admin build && pnpm worker:check",
     "worker:check": "tsc -p worker/tsconfig.json --noEmit && node --test worker/test/*.test.mjs",
-    "worker:e2e": "node scripts/smoke-local-worker.mjs && node scripts/smoke-websocket-worker.mjs",
+    "worker:e2e": "node scripts/smoke-local-worker.mjs && node scripts/smoke-websocket-worker.mjs && node scripts/smoke-content-cleanup.mjs",
     "test:scripts": "node --test test/*.test.mjs",
+    "diagnostic:http-idle-disconnect": "node --test test/diagnostics/http-idle-disconnect.test.mjs",
     "provider:compile": "node scripts/compile-providers.mjs providers/*.provider.yaml",
     "provider:icons": "node scripts/sync-provider-icons.mjs",
     "provider:smoke-plan": "node scripts/provider-smoke-plan.mjs --strict",
@@ -22,23 +25,34 @@
     "cf:secrets": "node scripts/put-provider-secrets.mjs",
     "cf:bootstrap": "node scripts/bootstrap-fakeco.mjs",
     "cf:teardown": "node scripts/teardown-fakeco.mjs",
-    "cf:deploy": "pnpm cf:target -- --deploy && pnpm provider:compile -- --output worker/generated/provider-snapshot.json && pnpm --dir admin build && pnpm cf:content:provision && pnpm cf:config && wrangler deploy --config .wrangler.generated.toml",
+    "cf:deploy": "node scripts/deploy-action.mjs",
     "cf:key:put": "node scripts/key-put.mjs",
     "cf:key:revoke": "node scripts/key-revoke.mjs",
     "cf:oauth:put": "node scripts/oauth-put.mjs",
     "cf:oauth:revoke": "node scripts/oauth-revoke.mjs",
     "pool:ticket": "node scripts/pool-ticket.mjs",
     "pool:contribute": "node scripts/pool-contribute.mjs",
-    "cf:smoke": "node scripts/smoke-deployed.mjs"
+    "codex:connect": "node scripts/codex-connect.mjs",
+    "cf:smoke": "node scripts/smoke-deployed.mjs",
+    "cf:members": "node scripts/provision-member-access.mjs",
+    "cf:budget-mode": "node scripts/policy-budget-mode.mjs",
+    "cf:health-report": "node scripts/cf-health-report.mjs",
+    "cf:large-http:provision": "node scripts/provision-large-http.mjs",
+    "cf:large-http:release": "node scripts/prepare-large-http-release.mjs"
+  },
+  "dependencies": {
+    "stream-chain": "4.4.1",
+    "stream-json": "3.8.0"
   },
   "devDependencies": {
-    "@cfworker/json-schema": "^4.1.1",
-    "@cloudflare/workers-types": "^5.20260920.1",
+    "@cfworker/json-schema": "^4.1.4",
+    "@cloudflare/workers-types": "^5.20261101.1",
+    "toml-eslint-parser": "^1.0.3",
     "typescript": "^7.0.2",
-    "wrangler": "^4.135.0",
+    "wrangler": "^4.156.0",
     "yaml": "^2.9.1"
   },
-  "packageManager": "pnpm@11.27.0",
+  "packageManager": "pnpm@11.28.4",
   "engines": {
     "node": ">=24"
   }

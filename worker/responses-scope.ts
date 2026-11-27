@@ -1,0 +1,309 @@
+import { inputUnavailable, managedInputState, type ManagedInputAllocation, type ManagedInputBinding } from "./managed-input-receipt.ts";
+import { markBudgetDispatched, reserveLedgerIntent } from "./accounting.ts";
+import { collectBackground } from "./background-collection.ts";
+import { BackgroundStore } from "./background-store.ts";
+import { liveBackground, type BackgroundAdmission, type ManagedAdmission, type BackgroundJob, type SettlementDisposition } from "./background-record.ts";
+import { HttpContinuationStore, type ContinuationInput } from "./continuation-store.ts";
+import { HttpOperation } from "./http-operation.ts";
+import { identityKey } from "./http-continuation.ts";
+import { managedJobKey } from "./managed-prediction-identity.ts";
+import { responseIdentity } from "./response-identities.ts";
+import { BudgetSettlementError, ingestUsage, settleLedger } from "./ledgers.ts";
+import type { ManagedFileDescriptor, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
+import type { AccountingOutcome } from "./proxy-accounting.ts";
+import type { ResponsesObservation } from "./token-usage.ts";
+import type { Env } from "./types.ts";
+import { json, readJson, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
+import { assertPublishedVerifier, samePublishedInput, publishedInputUnavailable, type PublishedInputBinding,
+  type PublishedInputObject, type PublishedInputAttempt } from "./published-input-receipt.ts";
+
+type PublishedInputAction = { action: "asset_allocate" | "asset_claim_publish" | "asset_bind_publish" | "asset_claim_forward";
+  binding: PublishedInputBinding; object?: PublishedInputObject; attempt?: PublishedInputAttempt }
+  | { action: "asset_get"; id: string; verifierDigest: string };
+
+type Input = { summary?: true; input?: ManagedInputAllocation; binding?: ManagedInputBinding; imageId?: string; action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay" | "managed_admit" | "managed_bind" | "managed_observe" | "managed_lookup" | "managed_files" | "input_allocate" | "input_get" | "input_claim_upload" | "input_bind_upload" | "input_claim_create"; files?: readonly ManagedFileDescriptor[]; managed?: ManagedAdmission; policyGeneration?: string; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number; predictionStatus?: string; observationUnavailable?: ManagedObservationLoss };
+
+// Continuation cleanup, collection and financial recovery share the object's
+// only alarm and serialized mutation tail. Network waits never hold that tail.
+export class ResponsesScopeStore {
+  private readonly storage: DurableObjectStorage;
+  private readonly env: Env;
+  private readonly continuations: HttpContinuationStore;
+  private readonly jobs: BackgroundStore;
+  private tail: Promise<void> = Promise.resolve();
+
+  constructor(storage: DurableObjectStorage, env: Env) {
+    this.storage = storage; this.env = env;
+    this.continuations = new HttpContinuationStore(storage);
+    this.jobs = new BackgroundStore(storage.sql, id => this.continuations.closeBackground(id));
+  }
+
+  async continuation(request: Request): Promise<Response> {
+    const input = await readJson<ContinuationInput>(request);
+    const response = input.backgroundJobId ? responseIdentity("response", input.backgroundResponseId) : null;
+    if (input.backgroundJobId && (!response || await identityKey(response) !== input.responseClaim?.key)) {
+      throw new HttpError(400, "background_identity_invalid", "background publication must carry its exact response identity claim");
+    }
+    return this.serial(() => {
+      const job = input.backgroundJobId ? this.jobs.get(input.backgroundJobId) : null;
+      if (job?.managed) throw new HttpError(409, "background_protocol_conflict", "predictions cannot publish Responses identities");
+      if (input.backgroundJobId && (!job || liveBackground(job) && JSON.stringify(job.owner) !== JSON.stringify(input.owner))) {
+        throw new HttpError(409, "background_owner_conflict", "response publication does not belong to this admitted job");
+      }
+      // The binding and temporary collector ID commit together before the
+      // publisher exposes identity bytes or terminal accounting can compact it.
+      return this.continuations.handle(input, !!job && (!liveBackground(job) || !!job.event), !!job && !liveBackground(job), !!job && liveBackground(job) && job.stream,
+        job && liveBackground(job) && response ? () => this.jobs.identity(job.id, response.value) : undefined);
+    }, input.action !== "resolve");
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const value = await readJson<Input | PublishedInputAction>(request);
+    if (typeof value?.action === "string" && value.action.startsWith("asset_")) {
+      const input = value as PublishedInputAction;
+      if (input.action === "asset_get") {
+        if (Object.keys(input).sort().join(",") !== "action,id,verifierDigest") publishedInputUnavailable();
+        return this.serial(() => {
+          const receipt = this.jobs.publishedInput(input.id);
+          assertPublishedVerifier(receipt, input.verifierDigest);
+          return json(receipt);
+        }, false);
+      }
+      const field = input.action === "asset_bind_publish" ? "object" : input.action === "asset_claim_forward" ? "attempt" : undefined;
+      if (Object.keys(input).sort().join(",") !== ["action", "binding", ...(field ? [field] : [])].sort().join(",")) publishedInputUnavailable();
+      // No external awaits, ledger ACKs, alarms or callback into a held grant
+      // owner. Publication/forwarding owners perform their own final checks.
+      return this.serial(() => this.storage.transactionSync(() => {
+        const receipt = input.action === "asset_allocate" ? this.jobs.allocatePublishedInput(input.binding)
+          : input.action === "asset_claim_publish" ? this.jobs.claimPublishedInputPublication(input.binding)
+          : input.action === "asset_bind_publish" && input.object ? this.jobs.bindPublishedInputObject(input.binding, input.object)
+          : input.action === "asset_claim_forward" && input.attempt ? this.jobs.claimPublishedInputForward(input.binding, input.attempt)
+          : publishedInputUnavailable();
+        if (!samePublishedInput(receipt.binding, input.binding)) publishedInputUnavailable();
+        return json({ acknowledged: true, receipt });
+      }), false);
+    }
+    const input = value as Input;
+    if (input.summary !== undefined && (input.summary !== true || !input.action.startsWith("input_"))) inputUnavailable();
+    if (input.action === "input_allocate" && input.input) {
+      const job = await this.mutate(() => this.jobs.allocateInput(input.input!));
+      await this.reserve(job);
+      await this.reserve(job, true);
+      return json({ allocated: true, receipt: await this.serial(() => input.summary ? managedInputState(this.jobs.get(input.input!.binding.jobId), input.input!.binding) : this.jobs.getInput(input.input!.binding), false) });
+    }
+    if (input.action.startsWith("input_")) {
+      if (!input.binding) inputUnavailable();
+      const binding = input.binding;
+      const receipt = () => input.summary ? managedInputState(this.jobs.get(binding.jobId), binding) : this.jobs.getInput(binding);
+      if (input.action === "input_get") return this.serial(() => json(receipt()), false);
+      if (input.action === "input_bind_upload" && typeof input.imageId === "string")
+        return this.mutate(() => { this.jobs.bindInputUpload(binding, input.imageId!); return json({ bound: true, receipt: receipt() }); });
+      if (input.action === "input_claim_upload" || input.action === "input_claim_create") {
+        const upload = input.action === "input_claim_upload";
+        const operation = await this.mutate(() => upload ? this.jobs.claimInputUpload(binding) : this.jobs.claimInputCreate(binding));
+        // The durable uncertainty/attempt claim precedes ledger acknowledgments.
+        // A missing ACK never permits another upload or a replacement img_id.
+        for (let index = 0; index < operation.legs.length; index++) {
+          const leg = operation.legs[index];
+          await bounded(signal => markBudgetDispatched(this.env, { reservedMicros: operation.reservedMicros,
+            reservations: [{ objectName: leg.intent.objectName, reservationId: leg.intent.request.reservationId }] }, signal));
+          await this.mutate(() => this.jobs.dispatched(binding.jobId, index, upload));
+        }
+        if (!upload) await this.mutate(() => this.jobs.beginEgress(binding.jobId));
+        return this.serial(() => json({ claimed: true, receipt: receipt() }), false);
+      }
+      inputUnavailable();
+    }
+    if (input.action === "get") return this.serial(() => json(this.jobs.get(input.id)), false);
+    if (input.action === "list") return this.serial(() => json({ records: this.jobs.list(input.after) }), false);
+    if (input.action === "admit" && input.admission && !input.admission.managed) return json(await this.admit(input.admission));
+    if (input.action === "managed_lookup" && input.managed && typeof input.policyGeneration === "string") return this.serial(() => json(this.jobs.managedRetry(input.managed!, input.policyGeneration!)), false);
+    if (input.action === "managed_admit" && input.admission) {
+      const result = await this.mutate(() => this.jobs.admitManaged(input.admission!));
+      if (result.created) await this.reserve(result.job as BackgroundJob);
+      return json({ admitted: true, created: result.created, job: await this.serial(() => this.jobs.get(result.job.id), false) });
+    }
+    if (input.action === "managed_bind" && typeof input.responseId === "string") return this.bindManaged(input.id, input.responseId);
+    if (input.action === "managed_files" && typeof input.responseId === "string" && input.files !== undefined) {
+      return this.mutate(() => json({ files: this.jobs.bindManagedFiles(input.id, input.responseId!, input.files!) }));
+    }
+    if (input.action === "managed_observe" && typeof input.responseId === "string" && typeof input.predictionStatus === "string") {
+      return this.mutate(() => {
+        this.jobs.observeManaged(input.id, input.responseId!, input.predictionStatus!, input.statusCode!, undefined, input.observationUnavailable);
+        if (input.files !== undefined) this.jobs.bindManagedFiles(input.id, input.responseId!, input.files);
+        return json({ observed: true });
+      });
+    }
+    if (input.action === "dispatch") { await this.dispatch(input.id, input.contentRef ?? null); return json({ dispatched: true }); }
+    if (input.action === "observe" && input.fact && Number.isInteger(input.statusCode)) {
+      await this.observe(input.id, input.fact, input.statusCode!); return json({ observed: true });
+    }
+    if (input.action === "replay") {
+      const work = await this.mutate(() => this.jobs.claim(Date.now(), input.id));
+      await Promise.all(work.map(job => this.process(job, false)));
+      return json(await this.mutate(() => this.jobs.get(input.id)));
+    }
+    return this.mutate(() => {
+      if (input.action === "identity" && typeof input.responseId === "string") {
+        if (this.jobs.get(input.id)?.managed) throw new HttpError(409, "background_protocol_conflict", "managed identity requires an atomic ownership binding");
+        this.jobs.identity(input.id, input.responseId); return json({ stored: true });
+      }
+      if (input.action === "freeze" && input.outcome) return json(this.freeze(input.id, input.outcome));
+      throw new HttpError(400, "background_request_invalid", "invalid background owner action");
+    });
+  }
+
+  async alarm(): Promise<void> {
+    const work = await this.mutate(() => {
+      const now = Date.now();
+      this.continuations.expire(now);
+      const jobs = this.jobs.claim(now);
+      return jobs;
+    }, true);
+    await Promise.all(work.map(job => this.process(job)));
+  }
+
+  private async admit(input: BackgroundAdmission): Promise<{ admitted: true }> {
+    const job = await this.mutate(() => this.jobs.admit(input));
+    await this.reserve(job);
+    return { admitted: true };
+  }
+
+  private async reserve(job: BackgroundJob, upload = false): Promise<void> {
+    const operation = upload ? job.inputReceipt!.upload as BackgroundJob : job;
+    for (let index = 0; index < operation.legs.length; index++) {
+      const intent = await this.mutate(() => this.jobs.beginReserve(job.id, index, upload));
+      try {
+        await bounded(signal => reserveLedgerIntent(this.env, intent, signal));
+        await this.mutate(() => this.jobs.reserved(job.id, index, true, upload));
+      } catch (error) {
+        await this.mutate(() => {
+          if (error instanceof HttpError && error.status === 402) this.jobs.reserved(job.id, index, false, upload);
+          this.freeze(job.id, { occurredAtMs: Date.now(), statusCode: error instanceof HttpError ? error.status : 503, status: error instanceof HttpError && error.status === 402 ? "denied" : "provider_error", billable: false, tokens: null, contentRef: null });
+        });
+        throw error instanceof HttpError ? error : new HttpError(503, "accounting_unavailable", "background admission could not confirm budget ownership; recovery remains pending");
+      }
+    }
+  }
+
+  private async bindManaged(id: string, upstreamId: string): Promise<Response> {
+    const original = await this.serial(() => this.jobs.get(id), false);
+    if (!original?.managed || !liveBackground(original)) throw new HttpError(409, "background_binding_unavailable", "the admitted job is unavailable");
+    const key = await managedJobKey(original.managed.protocol, original.owner.providerId, upstreamId), producerId = await sha256Hex(id);
+    const response = await this.serial(() => {
+      const job = this.jobs.get(id);
+      if (!job?.managed || !liveBackground(job) || job.event || job.phase !== "observing" || Date.now() >= job.observeUntil) {
+        throw new HttpError(409, "background_binding_unavailable", "the admitted prediction cannot publish a new identity");
+      }
+      return this.continuations.handle({ action: "register", keys: [key], owner: job.owner,
+        responseClaim: { key, producerId }, backgroundJobId: id }, false, false, false,
+        () => this.jobs.identity(id, upstreamId));
+    });
+    const receipt = await response.json<{ outcome: string }>();
+    if (receipt.outcome !== "stored") throw new HttpError(409, "background_binding_conflict", "prediction ownership could not be committed");
+    return json({ bound: true });
+  }
+
+  private async dispatch(id: string, contentRef: string | null): Promise<void> {
+    // A duplicate loses before any RPC or rollback handler. It must not turn
+    // another caller's already authorized generation into a known-unsent refund.
+    const job = await this.mutate(() => this.jobs.beginDispatch(id, contentRef));
+    try {
+      for (let index = 0; index < job.legs.length; index++) {
+        const leg = job.legs[index];
+        await bounded(signal => markBudgetDispatched(this.env, { reservedMicros: job.reservedMicros, reservations: [{ objectName: leg.intent.objectName, reservationId: leg.intent.request.reservationId }] }, signal));
+        await this.mutate(() => this.jobs.dispatched(id, index));
+      }
+      await this.mutate(() => this.jobs.beginEgress(id));
+    } catch (error) {
+      await this.mutate(() => this.freeze(id, { occurredAtMs: Date.now(), statusCode: 503, status: "provider_error", billable: false, tokens: null, contentRef }));
+      throw error;
+    }
+  }
+
+  private freeze(id: string, outcome: Omit<AccountingOutcome, "reservation">) {
+    return this.jobs.freeze(id, outcome);
+  }
+
+  private async observe(id: string, fact: ResponsesObservation, status: number, attempt?: number): Promise<void> {
+    await this.mutate(() => {
+      const current = this.jobs.get(id);
+      if (!current || !liveBackground(current) || current.event || attempt !== undefined && current.attempts !== attempt || Date.now() >= current.observeUntil) return;
+      if (current.managed) throw new HttpError(409, "background_protocol_conflict", "predictions require their own terminal observation");
+      this.jobs.identity(id, fact.id);
+      if (fact.terminal) this.freeze(id, { occurredAtMs: Date.now(), statusCode: status, status: fact.status === "completed" || fact.status === "incomplete" ? "success" : "provider_error", billable: true, tokens: fact.tokens, contentRef: current.contentRef });
+    });
+  }
+
+  private async process(claimed: BackgroundJob, automatic = true): Promise<void> {
+    const until = automatic ? Math.min(claimed.autoRetryUntil, claimed.replayUntil) : claimed.replayUntil;
+    if (Date.now() >= until) return;
+    try {
+      const upload = claimed.inputReceipt?.upload;
+      if (upload && liveBackground(upload) && upload.event) await this.settleOperation(upload, true, until);
+      if (!claimed.event) {
+        if (claimed.managed) {
+          const { collectManagedPrediction } = await import("./managed-predictions.ts");
+          await collectManagedPrediction(this.env, claimed, (id, status, statusCode, loss, files) => this.mutate(() => {
+            this.jobs.observeManaged(claimed.id, id, status, statusCode, claimed.attempts, loss);
+            if (files !== undefined) this.jobs.bindManagedFiles(claimed.id, id, files);
+          }));
+        } else await collectBackground(this.env, claimed, (fact, status) => this.observe(claimed.id, fact, status, claimed.attempts));
+      }
+      const current = await this.mutate(() => this.jobs.get(claimed.id));
+      if (!current || !liveBackground(current) || current.attempts !== claimed.attempts || Date.now() >= current.replayUntil) return;
+      if (!current.event) { await this.mutate(() => this.jobs.retry(current.id, null, claimed.attempts)); return; }
+      await this.settleOperation(current, false, until);
+      await this.mutate(() => this.jobs.retry(current.id, "accounting_unavailable", claimed.attempts));
+    } catch {
+      await this.mutate(() => this.jobs.retry(claimed.id, "observation_unavailable", claimed.attempts));
+    }
+  }
+
+  private async settleOperation(current: BackgroundJob, upload: boolean, until: number): Promise<void> {
+    const event = current.event!;
+      await Promise.all([
+        ...current.legs.map(async (leg, index) => {
+          if (leg.settlement === "settled") return;
+          let disposition: SettlementDisposition = "settled";
+          try { await bounded(signal => settleLedger(this.env, leg.intent.objectName, { reservationId: leg.intent.request.reservationId, actualCostMicros: event.actual_cost_micros }, signal), until); }
+          catch (error) { disposition = error instanceof BudgetSettlementError ? error.disposition : "unavailable"; }
+          await this.mutate(() => this.jobs.acknowledge(current.id, event.id, index, disposition, upload));
+        }),
+        (async () => {
+          if (["stored", "duplicate", "expired_by_retention"].includes(current.usage)) return;
+          let disposition: "stored" | "duplicate" | "expired_by_retention" | "unavailable";
+          try { disposition = (await bounded(signal => ingestUsage(this.env, event, signal), until)).outcome; }
+          catch { disposition = "unavailable"; }
+          await this.mutate(() => this.jobs.acknowledge(current.id, event.id, "usage", disposition, upload));
+        })(),
+      ]);
+  }
+
+  private mutate<T>(operation: () => T, alarm = false): Promise<T> { return this.serial(() => this.storage.transactionSync(operation), true, alarm); }
+  private serial<T>(operation: () => T | Promise<T>, schedule = true, alarm = false): Promise<T> {
+    const result = this.tail.then(async () => {
+      try { return await operation(); }
+      finally {
+        if (schedule) {
+          const deadlines = [this.continuations.nextDeadline(), this.jobs.nextDeadline()].filter((value): value is number => value !== undefined);
+          if (deadlines.length) {
+            const next = Math.max(Date.now() + 1_000, Math.min(...deadlines)), current = alarm ? null : await this.storage.getAlarm();
+            if (current === null || current > next) await this.storage.setAlarm(next);
+          }
+          else await this.storage.deleteAlarm();
+        }
+      }
+    });
+    this.tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+}
+
+async function bounded<T>(operation: (signal: AbortSignal) => Promise<T>, until = Date.now() + 10_000): Promise<T> {
+  if (Date.now() >= until) throw new Error("background operation deadline passed");
+  const lifetime = new HttpOperation(undefined, Math.min(10_000, until - Date.now()));
+  try { return await lifetime.wait(operation(lifetime.signal)); }
+  finally { lifetime.stop("complete"); }
+}

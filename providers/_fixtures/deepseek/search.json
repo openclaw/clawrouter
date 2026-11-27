@@ -1,0 +1,35 @@
+{
+  "synthetic": true,
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/deepseek/web-search-provider.runtime.ts",
+  "request": {
+    "path": "/v1/tools/search",
+    "body": { "query": "site:example.com synthetic search", "count": 5, "need_content": false }
+  },
+  "response": {
+    "results": [{
+      "rerank_score": 2.4,
+      "title": "Synthetic result",
+      "url": "https://example.com/result",
+      "snippet": "Short synthetic snippet.",
+      "summary": "Synthetic model-oriented summary.",
+      "content": "",
+      "site_name": "Example",
+      "site_icon": "https://example.com/icon.png",
+      "date": "2026-11-01T00:00:00Z",
+      "authority": 3
+    }]
+  },
+  "empty": { "results": [] },
+  "filtered": { "results": [{ "title": "Unusable destination", "url": "javascript:void(0)", "summary": "Synthetic prose." }] },
+  "billing": {
+    "source": "https://api-docs.deepseek.com/guides/search/",
+    "checkedAt": "2026-11-03",
+    "effectiveAt": "2026-11-01T00:00:00+08:00",
+    "nativeNonemptyRequestMicrousd": 750,
+    "completeEmptyRequestMicrousd": 0,
+    "partialDeliveryCostMicrousd": null,
+    "clientFilteringChangesCharge": false,
+    "policyFixedIsUpstreamPrice": false
+  }
+}

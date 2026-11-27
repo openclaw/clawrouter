@@ -1,0 +1,72 @@
+{
+  "qualification": {
+    "live": false,
+    "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+    "origin": "https://api.kie.ai",
+    "authorizationScheme": "Bearer",
+    "upstreamCostMicros": null
+  },
+  "text": {
+    "model": "grok-imagine/text-to-video",
+    "input": {
+      "prompt": "A paper fox sailing across a pond",
+      "duration": 6,
+      "resolution": "720p",
+      "aspect_ratio": "16:9"
+    }
+  },
+  "image": {
+    "model": "grok-imagine/image-to-video",
+    "input": {
+      "prompt": "The paper fox unfolds its sail",
+      "duration": "30",
+      "resolution": "1080p",
+      "image_urls": [
+        "https://assets.example/paper-fox.png"
+      ]
+    }
+  },
+  "imageActivation": {
+    "enabled": false,
+    "requires": "durable original-caller and credential asset binding",
+    "uploadOrigin": "https://kieai.redpandaai.co",
+    "uploadPath": "/api/file-base64-upload"
+  },
+  "taskId": "synthetic_kie_grok_job",
+  "submission": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_grok_job"
+    }
+  },
+  "partial": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_grok_job",
+      "state": "generating",
+      "resultJson": "{\"resultUrls\":[\"https://assets.example/partial.mp4\"]}"
+    }
+  },
+  "completed": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_grok_job",
+      "state": "success",
+      "creditsConsumed": 1,
+      "resultJson": "{\"resultUrls\":[\"https://assets.example/paper-fox.mp4\"]}"
+    }
+  },
+  "failed": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_grok_job",
+      "state": "fail",
+      "failCode": "synthetic",
+      "failMsg": "Synthetic failure"
+    }
+  },
+  "observationLost": {
+    "code": 404,
+    "msg": "Synthetic unavailable task"
+  }
+}

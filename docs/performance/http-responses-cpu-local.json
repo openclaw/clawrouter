@@ -1,0 +1,3868 @@
+{
+  "measuredAt": "2026-10-25",
+  "baseline": "f8faad42d00fa70c680418b369e043424e19b30a",
+  "optimizations": [
+    "422d4ef",
+    "d87b694"
+  ],
+  "model": "gpt-5.6",
+  "note": "Synthetic Node process CPU, not edge invocation CPU. Timing excludes fixture creation and request construction, includes delivery and background accounting/retention. See hot-path-performance.md for limits.",
+  "before": {
+    "node": "v26.12.1",
+    "warmups": 30,
+    "results": [
+      {
+        "label": "unified-0.5MiB-retention-off",
+        "requestBytes": 524257,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 65.855,
+        "headersCpuMs": 4.4366666666666665,
+        "samples": [
+          {
+            "cpuMs": 73.587,
+            "headersCpuMs": 3.731,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.254,
+            "headersCpuMs": 3.655,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.58,
+            "headersCpuMs": 3.337,
+            "warm": true
+          },
+          {
+            "cpuMs": 57.803,
+            "headersCpuMs": 3.318,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.773,
+            "headersCpuMs": 3.401,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.894,
+            "headersCpuMs": 3.154,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.546,
+            "headersCpuMs": 3.501,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.25,
+            "headersCpuMs": 3.445,
+            "warm": true
+          },
+          {
+            "cpuMs": 57.431,
+            "headersCpuMs": 3.432,
+            "warm": true
+          },
+          {
+            "cpuMs": 61.844,
+            "headersCpuMs": 3.567,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.843,
+            "headersCpuMs": 4.676,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.693,
+            "headersCpuMs": 16.143,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.789,
+            "headersCpuMs": 3.699,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.922,
+            "headersCpuMs": 3.447,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.301,
+            "headersCpuMs": 3.286,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.574,
+            "headersCpuMs": 3.772,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.931,
+            "headersCpuMs": 3.228,
+            "warm": true
+          },
+          {
+            "cpuMs": 57.34,
+            "headersCpuMs": 3.151,
+            "warm": true
+          },
+          {
+            "cpuMs": 54.871,
+            "headersCpuMs": 3.464,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.5,
+            "headersCpuMs": 3.461,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.978,
+            "headersCpuMs": 7.676,
+            "warm": true
+          },
+          {
+            "cpuMs": 61.249,
+            "headersCpuMs": 6.412,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.685,
+            "headersCpuMs": 3.759,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.573,
+            "headersCpuMs": 3.065,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.156,
+            "headersCpuMs": 5.344,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.268,
+            "headersCpuMs": 3.563,
+            "warm": true
+          },
+          {
+            "cpuMs": 82.839,
+            "headersCpuMs": 5.167,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.571,
+            "headersCpuMs": 5.597,
+            "warm": true
+          },
+          {
+            "cpuMs": 113.543,
+            "headersCpuMs": 6.258,
+            "warm": true
+          },
+          {
+            "cpuMs": 72.062,
+            "headersCpuMs": 3.391,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "unified-2MiB-retention-off",
+        "requestBytes": 2097121,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 79.23683333333332,
+        "headersCpuMs": 12.53033333333333,
+        "samples": [
+          {
+            "cpuMs": 72.32,
+            "headersCpuMs": 11.787,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.431,
+            "headersCpuMs": 9.788,
+            "warm": true
+          },
+          {
+            "cpuMs": 100.991,
+            "headersCpuMs": 17.892,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.79,
+            "headersCpuMs": 9.609,
+            "warm": true
+          },
+          {
+            "cpuMs": 74.218,
+            "headersCpuMs": 10.54,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.305,
+            "headersCpuMs": 9.634,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.919,
+            "headersCpuMs": 9.545,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.767,
+            "headersCpuMs": 12.645,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.887,
+            "headersCpuMs": 12.895,
+            "warm": true
+          },
+          {
+            "cpuMs": 179.485,
+            "headersCpuMs": 33.011,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.293,
+            "headersCpuMs": 9.006,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.572,
+            "headersCpuMs": 14.047,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.353,
+            "headersCpuMs": 12.31,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.032,
+            "headersCpuMs": 9.999,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.679,
+            "headersCpuMs": 9.079,
+            "warm": true
+          },
+          {
+            "cpuMs": 68.352,
+            "headersCpuMs": 10.521,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.905,
+            "headersCpuMs": 9.823,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.426,
+            "headersCpuMs": 8.896,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.494,
+            "headersCpuMs": 12.088,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.766,
+            "headersCpuMs": 10.268,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.248,
+            "headersCpuMs": 9.961,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.567,
+            "headersCpuMs": 10.917,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.445,
+            "headersCpuMs": 15.114,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.244,
+            "headersCpuMs": 9.269,
+            "warm": true
+          },
+          {
+            "cpuMs": 61.932,
+            "headersCpuMs": 8.705,
+            "warm": true
+          },
+          {
+            "cpuMs": 181.507,
+            "headersCpuMs": 30.316,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.982,
+            "headersCpuMs": 10.305,
+            "warm": true
+          },
+          {
+            "cpuMs": 78.942,
+            "headersCpuMs": 15.289,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.997,
+            "headersCpuMs": 10.956,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.256,
+            "headersCpuMs": 11.695,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "unified-5MiB-retention-off",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 98.47930000000002,
+        "headersCpuMs": 25.49973333333333,
+        "samples": [
+          {
+            "cpuMs": 79.795,
+            "headersCpuMs": 20.929,
+            "warm": true
+          },
+          {
+            "cpuMs": 102.656,
+            "headersCpuMs": 25.234,
+            "warm": true
+          },
+          {
+            "cpuMs": 126.292,
+            "headersCpuMs": 32.325,
+            "warm": true
+          },
+          {
+            "cpuMs": 141.457,
+            "headersCpuMs": 35.618,
+            "warm": true
+          },
+          {
+            "cpuMs": 118.138,
+            "headersCpuMs": 29.506,
+            "warm": true
+          },
+          {
+            "cpuMs": 97.44,
+            "headersCpuMs": 21.528,
+            "warm": true
+          },
+          {
+            "cpuMs": 118.109,
+            "headersCpuMs": 39.901,
+            "warm": true
+          },
+          {
+            "cpuMs": 93.794,
+            "headersCpuMs": 21.523,
+            "warm": true
+          },
+          {
+            "cpuMs": 82.496,
+            "headersCpuMs": 20.611,
+            "warm": true
+          },
+          {
+            "cpuMs": 135.654,
+            "headersCpuMs": 39.587,
+            "warm": true
+          },
+          {
+            "cpuMs": 95.062,
+            "headersCpuMs": 27.814,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.228,
+            "headersCpuMs": 21.438,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.055,
+            "headersCpuMs": 24.985,
+            "warm": true
+          },
+          {
+            "cpuMs": 92.622,
+            "headersCpuMs": 20.49,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.256,
+            "headersCpuMs": 20.896,
+            "warm": true
+          },
+          {
+            "cpuMs": 124.511,
+            "headersCpuMs": 30.306,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.373,
+            "headersCpuMs": 21.211,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.622,
+            "headersCpuMs": 21.478,
+            "warm": true
+          },
+          {
+            "cpuMs": 81.55,
+            "headersCpuMs": 23.546,
+            "warm": true
+          },
+          {
+            "cpuMs": 92.139,
+            "headersCpuMs": 30.049,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.447,
+            "headersCpuMs": 22.329,
+            "warm": true
+          },
+          {
+            "cpuMs": 126.791,
+            "headersCpuMs": 25.288,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.381,
+            "headersCpuMs": 21.844,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.005,
+            "headersCpuMs": 21.473,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.967,
+            "headersCpuMs": 21.492,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.132,
+            "headersCpuMs": 26.667,
+            "warm": true
+          },
+          {
+            "cpuMs": 91.862,
+            "headersCpuMs": 24.278,
+            "warm": true
+          },
+          {
+            "cpuMs": 129.824,
+            "headersCpuMs": 29.705,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.266,
+            "headersCpuMs": 21.786,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.455,
+            "headersCpuMs": 21.155,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "unified-5MiB-retention-on",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 97.02366666666666,
+        "headersCpuMs": 23.742300000000004,
+        "samples": [
+          {
+            "cpuMs": 91.748,
+            "headersCpuMs": 21.424,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.732,
+            "headersCpuMs": 20.91,
+            "warm": true
+          },
+          {
+            "cpuMs": 102.005,
+            "headersCpuMs": 33.462,
+            "warm": true
+          },
+          {
+            "cpuMs": 96.461,
+            "headersCpuMs": 24.222,
+            "warm": true
+          },
+          {
+            "cpuMs": 121.335,
+            "headersCpuMs": 28.884,
+            "warm": true
+          },
+          {
+            "cpuMs": 103.598,
+            "headersCpuMs": 24.855,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.71,
+            "headersCpuMs": 22.916,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.763,
+            "headersCpuMs": 26.018,
+            "warm": true
+          },
+          {
+            "cpuMs": 110.145,
+            "headersCpuMs": 23.376,
+            "warm": true
+          },
+          {
+            "cpuMs": 95.686,
+            "headersCpuMs": 20.92,
+            "warm": true
+          },
+          {
+            "cpuMs": 143.737,
+            "headersCpuMs": 26.907,
+            "warm": true
+          },
+          {
+            "cpuMs": 97.308,
+            "headersCpuMs": 21.792,
+            "warm": true
+          },
+          {
+            "cpuMs": 91.284,
+            "headersCpuMs": 20.995,
+            "warm": true
+          },
+          {
+            "cpuMs": 92.732,
+            "headersCpuMs": 23.996,
+            "warm": true
+          },
+          {
+            "cpuMs": 91.848,
+            "headersCpuMs": 26.145,
+            "warm": true
+          },
+          {
+            "cpuMs": 113.744,
+            "headersCpuMs": 23.427,
+            "warm": true
+          },
+          {
+            "cpuMs": 105.293,
+            "headersCpuMs": 24.603,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.737,
+            "headersCpuMs": 21.939,
+            "warm": true
+          },
+          {
+            "cpuMs": 93.426,
+            "headersCpuMs": 21.539,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.626,
+            "headersCpuMs": 25.255,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.881,
+            "headersCpuMs": 21.509,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.342,
+            "headersCpuMs": 21.695,
+            "warm": true
+          },
+          {
+            "cpuMs": 108.482,
+            "headersCpuMs": 27.041,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.636,
+            "headersCpuMs": 21.895,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.017,
+            "headersCpuMs": 21.219,
+            "warm": true
+          },
+          {
+            "cpuMs": 93.198,
+            "headersCpuMs": 26.187,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.252,
+            "headersCpuMs": 21.259,
+            "warm": true
+          },
+          {
+            "cpuMs": 94.41,
+            "headersCpuMs": 21.461,
+            "warm": true
+          },
+          {
+            "cpuMs": 107.226,
+            "headersCpuMs": 24.864,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.348,
+            "headersCpuMs": 21.554,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-0.5MiB-retention-off",
+        "requestBytes": 524257,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 61.39866666666667,
+        "headersCpuMs": 4.192366666666667,
+        "samples": [
+          {
+            "cpuMs": 56.699,
+            "headersCpuMs": 3.526,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.184,
+            "headersCpuMs": 7.472,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.466,
+            "headersCpuMs": 5.349,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.307,
+            "headersCpuMs": 3.416,
+            "warm": true
+          },
+          {
+            "cpuMs": 72.777,
+            "headersCpuMs": 3.624,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.126,
+            "headersCpuMs": 4.156,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.159,
+            "headersCpuMs": 3.754,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.527,
+            "headersCpuMs": 3.477,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.612,
+            "headersCpuMs": 3.429,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.896,
+            "headersCpuMs": 3.395,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.341,
+            "headersCpuMs": 3.364,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.155,
+            "headersCpuMs": 3.382,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.589,
+            "headersCpuMs": 3.411,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.165,
+            "headersCpuMs": 4.13,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.732,
+            "headersCpuMs": 3.284,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.314,
+            "headersCpuMs": 4.885,
+            "warm": true
+          },
+          {
+            "cpuMs": 55.823,
+            "headersCpuMs": 3.145,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.61,
+            "headersCpuMs": 4.193,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.688,
+            "headersCpuMs": 3.882,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.709,
+            "headersCpuMs": 9.255,
+            "warm": true
+          },
+          {
+            "cpuMs": 55.683,
+            "headersCpuMs": 3.653,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.608,
+            "headersCpuMs": 3.561,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.943,
+            "headersCpuMs": 3.39,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.431,
+            "headersCpuMs": 3.402,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.393,
+            "headersCpuMs": 3.81,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.325,
+            "headersCpuMs": 3.788,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.451,
+            "headersCpuMs": 4.193,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.165,
+            "headersCpuMs": 4.326,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.671,
+            "headersCpuMs": 7.511,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.411,
+            "headersCpuMs": 3.608,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-2MiB-retention-off",
+        "requestBytes": 2097121,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 75.5679,
+        "headersCpuMs": 11.384133333333336,
+        "samples": [
+          {
+            "cpuMs": 73.226,
+            "headersCpuMs": 16.502,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.767,
+            "headersCpuMs": 12.19,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.966,
+            "headersCpuMs": 9.726,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.617,
+            "headersCpuMs": 9.302,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.5,
+            "headersCpuMs": 12.078,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.813,
+            "headersCpuMs": 11.958,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.799,
+            "headersCpuMs": 9.236,
+            "warm": true
+          },
+          {
+            "cpuMs": 81.11,
+            "headersCpuMs": 12.908,
+            "warm": true
+          },
+          {
+            "cpuMs": 72.098,
+            "headersCpuMs": 9.437,
+            "warm": true
+          },
+          {
+            "cpuMs": 72.654,
+            "headersCpuMs": 9.646,
+            "warm": true
+          },
+          {
+            "cpuMs": 76.039,
+            "headersCpuMs": 10.049,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.385,
+            "headersCpuMs": 9.408,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.699,
+            "headersCpuMs": 10.08,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.518,
+            "headersCpuMs": 9.912,
+            "warm": true
+          },
+          {
+            "cpuMs": 189.982,
+            "headersCpuMs": 35.715,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.919,
+            "headersCpuMs": 9.46,
+            "warm": true
+          },
+          {
+            "cpuMs": 74.975,
+            "headersCpuMs": 12.942,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.326,
+            "headersCpuMs": 9.146,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.757,
+            "headersCpuMs": 9.688,
+            "warm": true
+          },
+          {
+            "cpuMs": 68.949,
+            "headersCpuMs": 9.655,
+            "warm": true
+          },
+          {
+            "cpuMs": 68.912,
+            "headersCpuMs": 9.907,
+            "warm": true
+          },
+          {
+            "cpuMs": 72.318,
+            "headersCpuMs": 9.377,
+            "warm": true
+          },
+          {
+            "cpuMs": 75.177,
+            "headersCpuMs": 10.551,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.388,
+            "headersCpuMs": 12.913,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.751,
+            "headersCpuMs": 9.721,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.054,
+            "headersCpuMs": 9.617,
+            "warm": true
+          },
+          {
+            "cpuMs": 75.02,
+            "headersCpuMs": 9.639,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.823,
+            "headersCpuMs": 10.043,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.834,
+            "headersCpuMs": 9.213,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.661,
+            "headersCpuMs": 11.505,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-5MiB-retention-off",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 97.44710000000002,
+        "headersCpuMs": 25.78263333333333,
+        "samples": [
+          {
+            "cpuMs": 97.571,
+            "headersCpuMs": 32.83,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.762,
+            "headersCpuMs": 21.277,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.515,
+            "headersCpuMs": 21.811,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.406,
+            "headersCpuMs": 22.431,
+            "warm": true
+          },
+          {
+            "cpuMs": 82.825,
+            "headersCpuMs": 20.915,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.839,
+            "headersCpuMs": 27.816,
+            "warm": true
+          },
+          {
+            "cpuMs": 217.896,
+            "headersCpuMs": 51.229,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.873,
+            "headersCpuMs": 22.821,
+            "warm": true
+          },
+          {
+            "cpuMs": 99.146,
+            "headersCpuMs": 24.381,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.522,
+            "headersCpuMs": 23.042,
+            "warm": true
+          },
+          {
+            "cpuMs": 81.062,
+            "headersCpuMs": 25.235,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.745,
+            "headersCpuMs": 24.701,
+            "warm": true
+          },
+          {
+            "cpuMs": 111.122,
+            "headersCpuMs": 38.276,
+            "warm": true
+          },
+          {
+            "cpuMs": 94.567,
+            "headersCpuMs": 23.525,
+            "warm": true
+          },
+          {
+            "cpuMs": 78.357,
+            "headersCpuMs": 21.557,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.89,
+            "headersCpuMs": 25.517,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.144,
+            "headersCpuMs": 21.498,
+            "warm": true
+          },
+          {
+            "cpuMs": 108.022,
+            "headersCpuMs": 27.181,
+            "warm": true
+          },
+          {
+            "cpuMs": 133.183,
+            "headersCpuMs": 30.191,
+            "warm": true
+          },
+          {
+            "cpuMs": 100.831,
+            "headersCpuMs": 23.212,
+            "warm": true
+          },
+          {
+            "cpuMs": 100.443,
+            "headersCpuMs": 24.406,
+            "warm": true
+          },
+          {
+            "cpuMs": 93.074,
+            "headersCpuMs": 29.883,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.984,
+            "headersCpuMs": 21.733,
+            "warm": true
+          },
+          {
+            "cpuMs": 101.891,
+            "headersCpuMs": 22.335,
+            "warm": true
+          },
+          {
+            "cpuMs": 116.362,
+            "headersCpuMs": 26.439,
+            "warm": true
+          },
+          {
+            "cpuMs": 90.431,
+            "headersCpuMs": 22.936,
+            "warm": true
+          },
+          {
+            "cpuMs": 96.766,
+            "headersCpuMs": 25.385,
+            "warm": true
+          },
+          {
+            "cpuMs": 92.283,
+            "headersCpuMs": 26.766,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.972,
+            "headersCpuMs": 22.467,
+            "warm": true
+          },
+          {
+            "cpuMs": 81.929,
+            "headersCpuMs": 21.683,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-5MiB-retention-on",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 102.59486666666665,
+        "headersCpuMs": 25.67636666666667,
+        "samples": [
+          {
+            "cpuMs": 122.742,
+            "headersCpuMs": 28.59,
+            "warm": true
+          },
+          {
+            "cpuMs": 98.403,
+            "headersCpuMs": 24.224,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.833,
+            "headersCpuMs": 23.966,
+            "warm": true
+          },
+          {
+            "cpuMs": 90.27,
+            "headersCpuMs": 26.265,
+            "warm": true
+          },
+          {
+            "cpuMs": 91.754,
+            "headersCpuMs": 21.987,
+            "warm": true
+          },
+          {
+            "cpuMs": 104.371,
+            "headersCpuMs": 29.011,
+            "warm": true
+          },
+          {
+            "cpuMs": 119.501,
+            "headersCpuMs": 28.236,
+            "warm": true
+          },
+          {
+            "cpuMs": 106.236,
+            "headersCpuMs": 22.802,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.235,
+            "headersCpuMs": 21.185,
+            "warm": true
+          },
+          {
+            "cpuMs": 101.024,
+            "headersCpuMs": 28.192,
+            "warm": true
+          },
+          {
+            "cpuMs": 91.506,
+            "headersCpuMs": 21.266,
+            "warm": true
+          },
+          {
+            "cpuMs": 93.817,
+            "headersCpuMs": 21.413,
+            "warm": true
+          },
+          {
+            "cpuMs": 126.091,
+            "headersCpuMs": 31.129,
+            "warm": true
+          },
+          {
+            "cpuMs": 107.033,
+            "headersCpuMs": 28.672,
+            "warm": true
+          },
+          {
+            "cpuMs": 97.242,
+            "headersCpuMs": 22.023,
+            "warm": true
+          },
+          {
+            "cpuMs": 103.949,
+            "headersCpuMs": 35.384,
+            "warm": true
+          },
+          {
+            "cpuMs": 94.912,
+            "headersCpuMs": 21.324,
+            "warm": true
+          },
+          {
+            "cpuMs": 95.69,
+            "headersCpuMs": 23.605,
+            "warm": true
+          },
+          {
+            "cpuMs": 117.654,
+            "headersCpuMs": 31.642,
+            "warm": true
+          },
+          {
+            "cpuMs": 116.272,
+            "headersCpuMs": 23.675,
+            "warm": true
+          },
+          {
+            "cpuMs": 94.042,
+            "headersCpuMs": 22.896,
+            "warm": true
+          },
+          {
+            "cpuMs": 107.324,
+            "headersCpuMs": 26.032,
+            "warm": true
+          },
+          {
+            "cpuMs": 102.129,
+            "headersCpuMs": 25.632,
+            "warm": true
+          },
+          {
+            "cpuMs": 103.923,
+            "headersCpuMs": 29.693,
+            "warm": true
+          },
+          {
+            "cpuMs": 124.567,
+            "headersCpuMs": 30.442,
+            "warm": true
+          },
+          {
+            "cpuMs": 108.542,
+            "headersCpuMs": 23.219,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.704,
+            "headersCpuMs": 21.616,
+            "warm": true
+          },
+          {
+            "cpuMs": 99.195,
+            "headersCpuMs": 27.521,
+            "warm": true
+          },
+          {
+            "cpuMs": 93.256,
+            "headersCpuMs": 24.28,
+            "warm": true
+          },
+          {
+            "cpuMs": 99.629,
+            "headersCpuMs": 24.369,
+            "warm": true
+          }
+        ]
+      }
+    ]
+  },
+  "pricingOnly": {
+    "node": "v26.12.1",
+    "warmups": 30,
+    "results": [
+      {
+        "label": "unified-0.5MiB-retention-off",
+        "requestBytes": 524257,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 70.1133,
+        "headersCpuMs": 4.442200000000001,
+        "samples": [
+          {
+            "cpuMs": 84.613,
+            "headersCpuMs": 4.225,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.199,
+            "headersCpuMs": 4.665,
+            "warm": true
+          },
+          {
+            "cpuMs": 68.089,
+            "headersCpuMs": 3.663,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.469,
+            "headersCpuMs": 3.419,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.268,
+            "headersCpuMs": 3.248,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.635,
+            "headersCpuMs": 14.272,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.846,
+            "headersCpuMs": 2.842,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.92,
+            "headersCpuMs": 2.873,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.601,
+            "headersCpuMs": 2.88,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.964,
+            "headersCpuMs": 3.957,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.217,
+            "headersCpuMs": 4.266,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.66,
+            "headersCpuMs": 5.083,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.616,
+            "headersCpuMs": 3.329,
+            "warm": true
+          },
+          {
+            "cpuMs": 55.661,
+            "headersCpuMs": 2.707,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.968,
+            "headersCpuMs": 11.021,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.956,
+            "headersCpuMs": 3.953,
+            "warm": true
+          },
+          {
+            "cpuMs": 57.125,
+            "headersCpuMs": 3.632,
+            "warm": true
+          },
+          {
+            "cpuMs": 57.702,
+            "headersCpuMs": 3.566,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.846,
+            "headersCpuMs": 3.437,
+            "warm": true
+          },
+          {
+            "cpuMs": 61.519,
+            "headersCpuMs": 3.571,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.816,
+            "headersCpuMs": 4.64,
+            "warm": true
+          },
+          {
+            "cpuMs": 100.935,
+            "headersCpuMs": 7.735,
+            "warm": true
+          },
+          {
+            "cpuMs": 61.5,
+            "headersCpuMs": 3.519,
+            "warm": true
+          },
+          {
+            "cpuMs": 90.885,
+            "headersCpuMs": 3.32,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.833,
+            "headersCpuMs": 2.633,
+            "warm": true
+          },
+          {
+            "cpuMs": 76.132,
+            "headersCpuMs": 3.849,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.466,
+            "headersCpuMs": 3.387,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.428,
+            "headersCpuMs": 4.333,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.052,
+            "headersCpuMs": 4.859,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.478,
+            "headersCpuMs": 4.382,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "unified-2MiB-retention-off",
+        "requestBytes": 2097121,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 80.01423333333332,
+        "headersCpuMs": 9.85333333333333,
+        "samples": [
+          {
+            "cpuMs": 78.711,
+            "headersCpuMs": 6.867,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.876,
+            "headersCpuMs": 7.762,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.828,
+            "headersCpuMs": 8.109,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.06,
+            "headersCpuMs": 10.941,
+            "warm": true
+          },
+          {
+            "cpuMs": 75.961,
+            "headersCpuMs": 8.817,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.225,
+            "headersCpuMs": 7.091,
+            "warm": true
+          },
+          {
+            "cpuMs": 75.863,
+            "headersCpuMs": 7.462,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.307,
+            "headersCpuMs": 7.967,
+            "warm": true
+          },
+          {
+            "cpuMs": 78.451,
+            "headersCpuMs": 12.315,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.809,
+            "headersCpuMs": 7.758,
+            "warm": true
+          },
+          {
+            "cpuMs": 182.902,
+            "headersCpuMs": 31.143,
+            "warm": true
+          },
+          {
+            "cpuMs": 74.692,
+            "headersCpuMs": 8.952,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.443,
+            "headersCpuMs": 13.064,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.741,
+            "headersCpuMs": 7.748,
+            "warm": true
+          },
+          {
+            "cpuMs": 78.368,
+            "headersCpuMs": 7.472,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.246,
+            "headersCpuMs": 7.493,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.026,
+            "headersCpuMs": 6.371,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.938,
+            "headersCpuMs": 7.347,
+            "warm": true
+          },
+          {
+            "cpuMs": 76.831,
+            "headersCpuMs": 8.278,
+            "warm": true
+          },
+          {
+            "cpuMs": 76.801,
+            "headersCpuMs": 11.354,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.409,
+            "headersCpuMs": 6.874,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.566,
+            "headersCpuMs": 7.987,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.762,
+            "headersCpuMs": 8.926,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.058,
+            "headersCpuMs": 7.277,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.466,
+            "headersCpuMs": 8.018,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.471,
+            "headersCpuMs": 7.689,
+            "warm": true
+          },
+          {
+            "cpuMs": 168.385,
+            "headersCpuMs": 29.534,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.381,
+            "headersCpuMs": 7.363,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.086,
+            "headersCpuMs": 10.883,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.764,
+            "headersCpuMs": 6.738,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "unified-5MiB-retention-off",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 98.43103333333335,
+        "headersCpuMs": 20.228533333333335,
+        "samples": [
+          {
+            "cpuMs": 77.927,
+            "headersCpuMs": 17.149,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.537,
+            "headersCpuMs": 19.538,
+            "warm": true
+          },
+          {
+            "cpuMs": 206.516,
+            "headersCpuMs": 39.89,
+            "warm": true
+          },
+          {
+            "cpuMs": 91.01,
+            "headersCpuMs": 18.467,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.093,
+            "headersCpuMs": 17.022,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.188,
+            "headersCpuMs": 18.714,
+            "warm": true
+          },
+          {
+            "cpuMs": 102.898,
+            "headersCpuMs": 19.675,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.79,
+            "headersCpuMs": 17.51,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.826,
+            "headersCpuMs": 18.069,
+            "warm": true
+          },
+          {
+            "cpuMs": 207.234,
+            "headersCpuMs": 41.285,
+            "warm": true
+          },
+          {
+            "cpuMs": 96.805,
+            "headersCpuMs": 14.844,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.648,
+            "headersCpuMs": 17.315,
+            "warm": true
+          },
+          {
+            "cpuMs": 76.819,
+            "headersCpuMs": 14.479,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.323,
+            "headersCpuMs": 15.405,
+            "warm": true
+          },
+          {
+            "cpuMs": 90.841,
+            "headersCpuMs": 19.548,
+            "warm": true
+          },
+          {
+            "cpuMs": 82.078,
+            "headersCpuMs": 22.079,
+            "warm": true
+          },
+          {
+            "cpuMs": 179.25,
+            "headersCpuMs": 35.178,
+            "warm": true
+          },
+          {
+            "cpuMs": 82.208,
+            "headersCpuMs": 15.31,
+            "warm": true
+          },
+          {
+            "cpuMs": 78.236,
+            "headersCpuMs": 15.344,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.974,
+            "headersCpuMs": 15.057,
+            "warm": true
+          },
+          {
+            "cpuMs": 82.138,
+            "headersCpuMs": 20.286,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.94,
+            "headersCpuMs": 15.261,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.511,
+            "headersCpuMs": 15.115,
+            "warm": true
+          },
+          {
+            "cpuMs": 197.952,
+            "headersCpuMs": 40.365,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.771,
+            "headersCpuMs": 15.316,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.62,
+            "headersCpuMs": 16.546,
+            "warm": true
+          },
+          {
+            "cpuMs": 72.386,
+            "headersCpuMs": 16.527,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.043,
+            "headersCpuMs": 20.544,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.61,
+            "headersCpuMs": 20.189,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.759,
+            "headersCpuMs": 14.829,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "unified-5MiB-retention-on",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 105.63343333333333,
+        "headersCpuMs": 20.22716666666667,
+        "samples": [
+          {
+            "cpuMs": 90.092,
+            "headersCpuMs": 15.069,
+            "warm": true
+          },
+          {
+            "cpuMs": 119.561,
+            "headersCpuMs": 17.082,
+            "warm": true
+          },
+          {
+            "cpuMs": 232.962,
+            "headersCpuMs": 42.439,
+            "warm": true
+          },
+          {
+            "cpuMs": 94.566,
+            "headersCpuMs": 15.819,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.726,
+            "headersCpuMs": 15.643,
+            "warm": true
+          },
+          {
+            "cpuMs": 82.508,
+            "headersCpuMs": 15.895,
+            "warm": true
+          },
+          {
+            "cpuMs": 94.011,
+            "headersCpuMs": 21.174,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.907,
+            "headersCpuMs": 18.888,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.657,
+            "headersCpuMs": 15.151,
+            "warm": true
+          },
+          {
+            "cpuMs": 193.257,
+            "headersCpuMs": 36.932,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.605,
+            "headersCpuMs": 15.187,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.185,
+            "headersCpuMs": 15.703,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.674,
+            "headersCpuMs": 16.181,
+            "warm": true
+          },
+          {
+            "cpuMs": 100.157,
+            "headersCpuMs": 20.013,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.158,
+            "headersCpuMs": 16.328,
+            "warm": true
+          },
+          {
+            "cpuMs": 91.939,
+            "headersCpuMs": 16.528,
+            "warm": true
+          },
+          {
+            "cpuMs": 198.715,
+            "headersCpuMs": 43.889,
+            "warm": true
+          },
+          {
+            "cpuMs": 94.965,
+            "headersCpuMs": 19.111,
+            "warm": true
+          },
+          {
+            "cpuMs": 100.662,
+            "headersCpuMs": 16.277,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.489,
+            "headersCpuMs": 16.144,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.314,
+            "headersCpuMs": 19.053,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.603,
+            "headersCpuMs": 19.837,
+            "warm": true
+          },
+          {
+            "cpuMs": 97.131,
+            "headersCpuMs": 17.604,
+            "warm": true
+          },
+          {
+            "cpuMs": 200.956,
+            "headersCpuMs": 44.491,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.836,
+            "headersCpuMs": 14.712,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.464,
+            "headersCpuMs": 16.225,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.94,
+            "headersCpuMs": 15.01,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.027,
+            "headersCpuMs": 19.411,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.806,
+            "headersCpuMs": 16.319,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.13,
+            "headersCpuMs": 14.7,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-0.5MiB-retention-off",
+        "requestBytes": 524257,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 64.51403333333333,
+        "headersCpuMs": 3.4057333333333326,
+        "samples": [
+          {
+            "cpuMs": 59.694,
+            "headersCpuMs": 3.122,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.742,
+            "headersCpuMs": 3.721,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.473,
+            "headersCpuMs": 3.049,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.91,
+            "headersCpuMs": 3.109,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.281,
+            "headersCpuMs": 3.824,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.558,
+            "headersCpuMs": 2.725,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.16,
+            "headersCpuMs": 3.737,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.264,
+            "headersCpuMs": 3.128,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.386,
+            "headersCpuMs": 2.778,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.064,
+            "headersCpuMs": 2.625,
+            "warm": true
+          },
+          {
+            "cpuMs": 61.175,
+            "headersCpuMs": 3.364,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.55,
+            "headersCpuMs": 4.598,
+            "warm": true
+          },
+          {
+            "cpuMs": 61.427,
+            "headersCpuMs": 2.735,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.482,
+            "headersCpuMs": 2.537,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.159,
+            "headersCpuMs": 4.174,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.87,
+            "headersCpuMs": 4.153,
+            "warm": true
+          },
+          {
+            "cpuMs": 57.862,
+            "headersCpuMs": 4.165,
+            "warm": true
+          },
+          {
+            "cpuMs": 76.879,
+            "headersCpuMs": 3.464,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.463,
+            "headersCpuMs": 3.161,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.023,
+            "headersCpuMs": 2.799,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.604,
+            "headersCpuMs": 3.065,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.016,
+            "headersCpuMs": 3.019,
+            "warm": true
+          },
+          {
+            "cpuMs": 61.179,
+            "headersCpuMs": 3.681,
+            "warm": true
+          },
+          {
+            "cpuMs": 53.818,
+            "headersCpuMs": 3.422,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.833,
+            "headersCpuMs": 3.198,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.134,
+            "headersCpuMs": 3.41,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.741,
+            "headersCpuMs": 4.108,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.592,
+            "headersCpuMs": 4.221,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.547,
+            "headersCpuMs": 4.161,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.535,
+            "headersCpuMs": 2.919,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-2MiB-retention-off",
+        "requestBytes": 2097121,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 82.12426666666667,
+        "headersCpuMs": 10.193766666666669,
+        "samples": [
+          {
+            "cpuMs": 75.946,
+            "headersCpuMs": 7.485,
+            "warm": true
+          },
+          {
+            "cpuMs": 186.637,
+            "headersCpuMs": 31.243,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.517,
+            "headersCpuMs": 7.259,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.134,
+            "headersCpuMs": 9.971,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.599,
+            "headersCpuMs": 7.667,
+            "warm": true
+          },
+          {
+            "cpuMs": 74.427,
+            "headersCpuMs": 9.643,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.164,
+            "headersCpuMs": 6.7,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.37,
+            "headersCpuMs": 7.929,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.132,
+            "headersCpuMs": 7.667,
+            "warm": true
+          },
+          {
+            "cpuMs": 68.944,
+            "headersCpuMs": 7.184,
+            "warm": true
+          },
+          {
+            "cpuMs": 92.557,
+            "headersCpuMs": 10.605,
+            "warm": true
+          },
+          {
+            "cpuMs": 113.532,
+            "headersCpuMs": 11.309,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.064,
+            "headersCpuMs": 7.934,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.597,
+            "headersCpuMs": 8.28,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.4,
+            "headersCpuMs": 8.052,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.985,
+            "headersCpuMs": 10.739,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.083,
+            "headersCpuMs": 11.338,
+            "warm": true
+          },
+          {
+            "cpuMs": 213.611,
+            "headersCpuMs": 33.089,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.894,
+            "headersCpuMs": 8.935,
+            "warm": true
+          },
+          {
+            "cpuMs": 72.192,
+            "headersCpuMs": 10.82,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.375,
+            "headersCpuMs": 10.174,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.029,
+            "headersCpuMs": 8.061,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.936,
+            "headersCpuMs": 7.325,
+            "warm": true
+          },
+          {
+            "cpuMs": 75.784,
+            "headersCpuMs": 8.588,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.464,
+            "headersCpuMs": 7.957,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.422,
+            "headersCpuMs": 8.452,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.546,
+            "headersCpuMs": 9.583,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.622,
+            "headersCpuMs": 7.265,
+            "warm": true
+          },
+          {
+            "cpuMs": 76.552,
+            "headersCpuMs": 7.358,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.213,
+            "headersCpuMs": 7.201,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-5MiB-retention-off",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 97.70789999999998,
+        "headersCpuMs": 20.392933333333335,
+        "samples": [
+          {
+            "cpuMs": 81.597,
+            "headersCpuMs": 18.092,
+            "warm": true
+          },
+          {
+            "cpuMs": 72.44,
+            "headersCpuMs": 15.553,
+            "warm": true
+          },
+          {
+            "cpuMs": 75.824,
+            "headersCpuMs": 15.637,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.413,
+            "headersCpuMs": 17.999,
+            "warm": true
+          },
+          {
+            "cpuMs": 75.469,
+            "headersCpuMs": 14.318,
+            "warm": true
+          },
+          {
+            "cpuMs": 202.146,
+            "headersCpuMs": 39.663,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.41,
+            "headersCpuMs": 16.397,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.636,
+            "headersCpuMs": 16.885,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.187,
+            "headersCpuMs": 14.185,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.413,
+            "headersCpuMs": 22.403,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.405,
+            "headersCpuMs": 17.796,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.66,
+            "headersCpuMs": 15.894,
+            "warm": true
+          },
+          {
+            "cpuMs": 198.615,
+            "headersCpuMs": 39.932,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.702,
+            "headersCpuMs": 16.879,
+            "warm": true
+          },
+          {
+            "cpuMs": 90.346,
+            "headersCpuMs": 20.279,
+            "warm": true
+          },
+          {
+            "cpuMs": 102.361,
+            "headersCpuMs": 15.04,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.155,
+            "headersCpuMs": 20.711,
+            "warm": true
+          },
+          {
+            "cpuMs": 93.129,
+            "headersCpuMs": 18.305,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.262,
+            "headersCpuMs": 14.974,
+            "warm": true
+          },
+          {
+            "cpuMs": 216.079,
+            "headersCpuMs": 35.618,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.864,
+            "headersCpuMs": 22.673,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.467,
+            "headersCpuMs": 14.346,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.172,
+            "headersCpuMs": 16.051,
+            "warm": true
+          },
+          {
+            "cpuMs": 78.511,
+            "headersCpuMs": 21.303,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.111,
+            "headersCpuMs": 20.946,
+            "warm": true
+          },
+          {
+            "cpuMs": 72.109,
+            "headersCpuMs": 14.98,
+            "warm": true
+          },
+          {
+            "cpuMs": 203.495,
+            "headersCpuMs": 41.069,
+            "warm": true
+          },
+          {
+            "cpuMs": 81.538,
+            "headersCpuMs": 16.072,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.413,
+            "headersCpuMs": 19.511,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.308,
+            "headersCpuMs": 18.277,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-5MiB-retention-on",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 108.1560333333333,
+        "headersCpuMs": 21.891333333333332,
+        "samples": [
+          {
+            "cpuMs": 87.347,
+            "headersCpuMs": 19.446,
+            "warm": true
+          },
+          {
+            "cpuMs": 226.2,
+            "headersCpuMs": 48.36,
+            "warm": true
+          },
+          {
+            "cpuMs": 94.598,
+            "headersCpuMs": 14.08,
+            "warm": true
+          },
+          {
+            "cpuMs": 111.772,
+            "headersCpuMs": 20.192,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.988,
+            "headersCpuMs": 17.973,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.126,
+            "headersCpuMs": 16.389,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.981,
+            "headersCpuMs": 15.464,
+            "warm": true
+          },
+          {
+            "cpuMs": 74.54,
+            "headersCpuMs": 14.497,
+            "warm": true
+          },
+          {
+            "cpuMs": 213.88,
+            "headersCpuMs": 48.265,
+            "warm": true
+          },
+          {
+            "cpuMs": 95.102,
+            "headersCpuMs": 15.244,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.931,
+            "headersCpuMs": 14.251,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.968,
+            "headersCpuMs": 14.051,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.223,
+            "headersCpuMs": 17.502,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.404,
+            "headersCpuMs": 19.74,
+            "warm": true
+          },
+          {
+            "cpuMs": 81.013,
+            "headersCpuMs": 14.998,
+            "warm": true
+          },
+          {
+            "cpuMs": 212.752,
+            "headersCpuMs": 48.499,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.912,
+            "headersCpuMs": 16.652,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.301,
+            "headersCpuMs": 15.213,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.669,
+            "headersCpuMs": 15.31,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.292,
+            "headersCpuMs": 20.435,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.263,
+            "headersCpuMs": 15.816,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.38,
+            "headersCpuMs": 14.859,
+            "warm": true
+          },
+          {
+            "cpuMs": 209.509,
+            "headersCpuMs": 48.683,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.082,
+            "headersCpuMs": 16.15,
+            "warm": true
+          },
+          {
+            "cpuMs": 82.124,
+            "headersCpuMs": 18.23,
+            "warm": true
+          },
+          {
+            "cpuMs": 82.091,
+            "headersCpuMs": 15.633,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.338,
+            "headersCpuMs": 18.931,
+            "warm": true
+          },
+          {
+            "cpuMs": 82.077,
+            "headersCpuMs": 19.848,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.7,
+            "headersCpuMs": 16.605,
+            "warm": true
+          },
+          {
+            "cpuMs": 216.118,
+            "headersCpuMs": 45.424,
+            "warm": true
+          }
+        ]
+      }
+    ]
+  },
+  "after": {
+    "node": "v26.12.1",
+    "warmups": 30,
+    "results": [
+      {
+        "label": "unified-0.5MiB-retention-off",
+        "requestBytes": 524257,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 62.30159999999999,
+        "headersCpuMs": 5.184266666666667,
+        "samples": [
+          {
+            "cpuMs": 46.5,
+            "headersCpuMs": 4.922,
+            "warm": true
+          },
+          {
+            "cpuMs": 39.763,
+            "headersCpuMs": 3.02,
+            "warm": true
+          },
+          {
+            "cpuMs": 45.19,
+            "headersCpuMs": 3.387,
+            "warm": true
+          },
+          {
+            "cpuMs": 57.306,
+            "headersCpuMs": 5.277,
+            "warm": true
+          },
+          {
+            "cpuMs": 53.8,
+            "headersCpuMs": 4.151,
+            "warm": true
+          },
+          {
+            "cpuMs": 55.067,
+            "headersCpuMs": 3.837,
+            "warm": true
+          },
+          {
+            "cpuMs": 50.637,
+            "headersCpuMs": 4.68,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.632,
+            "headersCpuMs": 3.874,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.065,
+            "headersCpuMs": 4.236,
+            "warm": true
+          },
+          {
+            "cpuMs": 92.419,
+            "headersCpuMs": 4.485,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.385,
+            "headersCpuMs": 5.17,
+            "warm": true
+          },
+          {
+            "cpuMs": 68.579,
+            "headersCpuMs": 4.831,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.453,
+            "headersCpuMs": 4.394,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.159,
+            "headersCpuMs": 4.097,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.049,
+            "headersCpuMs": 2.982,
+            "warm": true
+          },
+          {
+            "cpuMs": 72.424,
+            "headersCpuMs": 3.323,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.874,
+            "headersCpuMs": 4.158,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.823,
+            "headersCpuMs": 4.102,
+            "warm": true
+          },
+          {
+            "cpuMs": 100.577,
+            "headersCpuMs": 23.579,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.205,
+            "headersCpuMs": 5.343,
+            "warm": true
+          },
+          {
+            "cpuMs": 49.355,
+            "headersCpuMs": 5.407,
+            "warm": true
+          },
+          {
+            "cpuMs": 40.624,
+            "headersCpuMs": 4.359,
+            "warm": true
+          },
+          {
+            "cpuMs": 39.553,
+            "headersCpuMs": 3.099,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.716,
+            "headersCpuMs": 4.019,
+            "warm": true
+          },
+          {
+            "cpuMs": 46.186,
+            "headersCpuMs": 3.557,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.034,
+            "headersCpuMs": 4.525,
+            "warm": true
+          },
+          {
+            "cpuMs": 45.736,
+            "headersCpuMs": 3.814,
+            "warm": true
+          },
+          {
+            "cpuMs": 54.379,
+            "headersCpuMs": 5.942,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.391,
+            "headersCpuMs": 4.797,
+            "warm": true
+          },
+          {
+            "cpuMs": 100.167,
+            "headersCpuMs": 12.161,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "unified-2MiB-retention-off",
+        "requestBytes": 2097121,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 73.10849999999999,
+        "headersCpuMs": 10.7969,
+        "samples": [
+          {
+            "cpuMs": 65.112,
+            "headersCpuMs": 8.296,
+            "warm": true
+          },
+          {
+            "cpuMs": 82.312,
+            "headersCpuMs": 8.76,
+            "warm": true
+          },
+          {
+            "cpuMs": 61.668,
+            "headersCpuMs": 7.012,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.385,
+            "headersCpuMs": 9.238,
+            "warm": true
+          },
+          {
+            "cpuMs": 76.361,
+            "headersCpuMs": 10.128,
+            "warm": true
+          },
+          {
+            "cpuMs": 53.226,
+            "headersCpuMs": 7.314,
+            "warm": true
+          },
+          {
+            "cpuMs": 52.978,
+            "headersCpuMs": 7.219,
+            "warm": true
+          },
+          {
+            "cpuMs": 48.956,
+            "headersCpuMs": 7.064,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.741,
+            "headersCpuMs": 15.476,
+            "warm": true
+          },
+          {
+            "cpuMs": 53.866,
+            "headersCpuMs": 10.865,
+            "warm": true
+          },
+          {
+            "cpuMs": 51.561,
+            "headersCpuMs": 8.359,
+            "warm": true
+          },
+          {
+            "cpuMs": 155.257,
+            "headersCpuMs": 25.843,
+            "warm": true
+          },
+          {
+            "cpuMs": 55.306,
+            "headersCpuMs": 9.571,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.259,
+            "headersCpuMs": 9.773,
+            "warm": true
+          },
+          {
+            "cpuMs": 55.412,
+            "headersCpuMs": 7.519,
+            "warm": true
+          },
+          {
+            "cpuMs": 53.21,
+            "headersCpuMs": 8.427,
+            "warm": true
+          },
+          {
+            "cpuMs": 57.452,
+            "headersCpuMs": 7.348,
+            "warm": true
+          },
+          {
+            "cpuMs": 65.389,
+            "headersCpuMs": 12.806,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.824,
+            "headersCpuMs": 8.812,
+            "warm": true
+          },
+          {
+            "cpuMs": 96.157,
+            "headersCpuMs": 10.281,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.175,
+            "headersCpuMs": 8.291,
+            "warm": true
+          },
+          {
+            "cpuMs": 103.813,
+            "headersCpuMs": 9.473,
+            "warm": true
+          },
+          {
+            "cpuMs": 104.753,
+            "headersCpuMs": 11.827,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.62,
+            "headersCpuMs": 8.55,
+            "warm": true
+          },
+          {
+            "cpuMs": 90.031,
+            "headersCpuMs": 8.839,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.617,
+            "headersCpuMs": 9.74,
+            "warm": true
+          },
+          {
+            "cpuMs": 57.808,
+            "headersCpuMs": 7.739,
+            "warm": true
+          },
+          {
+            "cpuMs": 147.93,
+            "headersCpuMs": 30.077,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.131,
+            "headersCpuMs": 20.604,
+            "warm": true
+          },
+          {
+            "cpuMs": 50.945,
+            "headersCpuMs": 8.656,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "unified-5MiB-retention-off",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 97.02436666666668,
+        "headersCpuMs": 23.940999999999995,
+        "samples": [
+          {
+            "cpuMs": 75.528,
+            "headersCpuMs": 25.565,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.367,
+            "headersCpuMs": 19.434,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.008,
+            "headersCpuMs": 20.003,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.087,
+            "headersCpuMs": 20.138,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.96,
+            "headersCpuMs": 27.51,
+            "warm": true
+          },
+          {
+            "cpuMs": 90.533,
+            "headersCpuMs": 26.099,
+            "warm": true
+          },
+          {
+            "cpuMs": 256.773,
+            "headersCpuMs": 56.948,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.364,
+            "headersCpuMs": 21.307,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.283,
+            "headersCpuMs": 16.578,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.687,
+            "headersCpuMs": 15.306,
+            "warm": true
+          },
+          {
+            "cpuMs": 81.041,
+            "headersCpuMs": 21.15,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.413,
+            "headersCpuMs": 15.057,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.827,
+            "headersCpuMs": 14.775,
+            "warm": true
+          },
+          {
+            "cpuMs": 167.235,
+            "headersCpuMs": 41.953,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.673,
+            "headersCpuMs": 22.417,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.282,
+            "headersCpuMs": 16.93,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.233,
+            "headersCpuMs": 17.863,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.131,
+            "headersCpuMs": 16.707,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.32,
+            "headersCpuMs": 15.077,
+            "warm": true
+          },
+          {
+            "cpuMs": 101.738,
+            "headersCpuMs": 18.446,
+            "warm": true
+          },
+          {
+            "cpuMs": 279.856,
+            "headersCpuMs": 50.318,
+            "warm": true
+          },
+          {
+            "cpuMs": 95.644,
+            "headersCpuMs": 24.518,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.175,
+            "headersCpuMs": 22.495,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.388,
+            "headersCpuMs": 20.483,
+            "warm": true
+          },
+          {
+            "cpuMs": 75.003,
+            "headersCpuMs": 20.759,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.711,
+            "headersCpuMs": 22.698,
+            "warm": true
+          },
+          {
+            "cpuMs": 83.977,
+            "headersCpuMs": 23.663,
+            "warm": true
+          },
+          {
+            "cpuMs": 231.12,
+            "headersCpuMs": 46.29,
+            "warm": true
+          },
+          {
+            "cpuMs": 81.157,
+            "headersCpuMs": 19.367,
+            "warm": true
+          },
+          {
+            "cpuMs": 99.217,
+            "headersCpuMs": 18.376,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "unified-5MiB-retention-on",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 91.55466666666666,
+        "headersCpuMs": 21.150433333333332,
+        "samples": [
+          {
+            "cpuMs": 73.062,
+            "headersCpuMs": 16.062,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.784,
+            "headersCpuMs": 16.476,
+            "warm": true
+          },
+          {
+            "cpuMs": 168.767,
+            "headersCpuMs": 36.178,
+            "warm": true
+          },
+          {
+            "cpuMs": 88.248,
+            "headersCpuMs": 35.116,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.873,
+            "headersCpuMs": 17.546,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.675,
+            "headersCpuMs": 16.592,
+            "warm": true
+          },
+          {
+            "cpuMs": 76.145,
+            "headersCpuMs": 17.346,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.433,
+            "headersCpuMs": 16.354,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.146,
+            "headersCpuMs": 15.001,
+            "warm": true
+          },
+          {
+            "cpuMs": 185.034,
+            "headersCpuMs": 38.499,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.968,
+            "headersCpuMs": 16.596,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.212,
+            "headersCpuMs": 18.051,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.395,
+            "headersCpuMs": 18.718,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.317,
+            "headersCpuMs": 20.998,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.069,
+            "headersCpuMs": 21.063,
+            "warm": true
+          },
+          {
+            "cpuMs": 63.384,
+            "headersCpuMs": 17.01,
+            "warm": true
+          },
+          {
+            "cpuMs": 191.027,
+            "headersCpuMs": 42.84,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.525,
+            "headersCpuMs": 15.359,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.19,
+            "headersCpuMs": 20.564,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.741,
+            "headersCpuMs": 16.15,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.245,
+            "headersCpuMs": 16.336,
+            "warm": true
+          },
+          {
+            "cpuMs": 68.912,
+            "headersCpuMs": 15.11,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.715,
+            "headersCpuMs": 20.187,
+            "warm": true
+          },
+          {
+            "cpuMs": 179.538,
+            "headersCpuMs": 39.222,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.609,
+            "headersCpuMs": 14.784,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.631,
+            "headersCpuMs": 16.192,
+            "warm": true
+          },
+          {
+            "cpuMs": 93.28,
+            "headersCpuMs": 19.422,
+            "warm": true
+          },
+          {
+            "cpuMs": 86.923,
+            "headersCpuMs": 18.816,
+            "warm": true
+          },
+          {
+            "cpuMs": 103.6,
+            "headersCpuMs": 22.747,
+            "warm": true
+          },
+          {
+            "cpuMs": 103.192,
+            "headersCpuMs": 19.178,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-0.5MiB-retention-off",
+        "requestBytes": 524257,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 46.48603333333333,
+        "headersCpuMs": 3.6368333333333345,
+        "samples": [
+          {
+            "cpuMs": 41.37,
+            "headersCpuMs": 3.224,
+            "warm": true
+          },
+          {
+            "cpuMs": 42.619,
+            "headersCpuMs": 2.659,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.354,
+            "headersCpuMs": 6.132,
+            "warm": true
+          },
+          {
+            "cpuMs": 45.7,
+            "headersCpuMs": 5.03,
+            "warm": true
+          },
+          {
+            "cpuMs": 46.424,
+            "headersCpuMs": 2.908,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.833,
+            "headersCpuMs": 3.21,
+            "warm": true
+          },
+          {
+            "cpuMs": 45.264,
+            "headersCpuMs": 4.326,
+            "warm": true
+          },
+          {
+            "cpuMs": 52.919,
+            "headersCpuMs": 2.952,
+            "warm": true
+          },
+          {
+            "cpuMs": 49.981,
+            "headersCpuMs": 3.679,
+            "warm": true
+          },
+          {
+            "cpuMs": 46.332,
+            "headersCpuMs": 2.859,
+            "warm": true
+          },
+          {
+            "cpuMs": 46.453,
+            "headersCpuMs": 3.762,
+            "warm": true
+          },
+          {
+            "cpuMs": 42.746,
+            "headersCpuMs": 2.897,
+            "warm": true
+          },
+          {
+            "cpuMs": 41.268,
+            "headersCpuMs": 2.825,
+            "warm": true
+          },
+          {
+            "cpuMs": 43.202,
+            "headersCpuMs": 3.887,
+            "warm": true
+          },
+          {
+            "cpuMs": 42.529,
+            "headersCpuMs": 2.803,
+            "warm": true
+          },
+          {
+            "cpuMs": 49.87,
+            "headersCpuMs": 4.643,
+            "warm": true
+          },
+          {
+            "cpuMs": 45.212,
+            "headersCpuMs": 3.453,
+            "warm": true
+          },
+          {
+            "cpuMs": 48.322,
+            "headersCpuMs": 2.81,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.918,
+            "headersCpuMs": 4.192,
+            "warm": true
+          },
+          {
+            "cpuMs": 50.19,
+            "headersCpuMs": 2.924,
+            "warm": true
+          },
+          {
+            "cpuMs": 43.266,
+            "headersCpuMs": 4.784,
+            "warm": true
+          },
+          {
+            "cpuMs": 46.232,
+            "headersCpuMs": 3.032,
+            "warm": true
+          },
+          {
+            "cpuMs": 44.885,
+            "headersCpuMs": 2.504,
+            "warm": true
+          },
+          {
+            "cpuMs": 42.514,
+            "headersCpuMs": 3.071,
+            "warm": true
+          },
+          {
+            "cpuMs": 42.665,
+            "headersCpuMs": 3.01,
+            "warm": true
+          },
+          {
+            "cpuMs": 46.522,
+            "headersCpuMs": 6.161,
+            "warm": true
+          },
+          {
+            "cpuMs": 44.068,
+            "headersCpuMs": 4.387,
+            "warm": true
+          },
+          {
+            "cpuMs": 45.402,
+            "headersCpuMs": 3.284,
+            "warm": true
+          },
+          {
+            "cpuMs": 42.35,
+            "headersCpuMs": 4.895,
+            "warm": true
+          },
+          {
+            "cpuMs": 40.171,
+            "headersCpuMs": 2.802,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-2MiB-retention-off",
+        "requestBytes": 2097121,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 68.27653333333335,
+        "headersCpuMs": 10.863,
+        "samples": [
+          {
+            "cpuMs": 54.801,
+            "headersCpuMs": 11.779,
+            "warm": true
+          },
+          {
+            "cpuMs": 171.162,
+            "headersCpuMs": 38.052,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.917,
+            "headersCpuMs": 20.322,
+            "warm": true
+          },
+          {
+            "cpuMs": 44.173,
+            "headersCpuMs": 7.436,
+            "warm": true
+          },
+          {
+            "cpuMs": 55.425,
+            "headersCpuMs": 7.92,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.349,
+            "headersCpuMs": 9.318,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.959,
+            "headersCpuMs": 6.951,
+            "warm": true
+          },
+          {
+            "cpuMs": 52.116,
+            "headersCpuMs": 8.949,
+            "warm": true
+          },
+          {
+            "cpuMs": 48.19,
+            "headersCpuMs": 6.453,
+            "warm": true
+          },
+          {
+            "cpuMs": 61.439,
+            "headersCpuMs": 9.197,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.911,
+            "headersCpuMs": 8.5,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.749,
+            "headersCpuMs": 9.807,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.294,
+            "headersCpuMs": 7.496,
+            "warm": true
+          },
+          {
+            "cpuMs": 49.567,
+            "headersCpuMs": 9.894,
+            "warm": true
+          },
+          {
+            "cpuMs": 53.525,
+            "headersCpuMs": 6.39,
+            "warm": true
+          },
+          {
+            "cpuMs": 48.427,
+            "headersCpuMs": 7.672,
+            "warm": true
+          },
+          {
+            "cpuMs": 51.886,
+            "headersCpuMs": 7.46,
+            "warm": true
+          },
+          {
+            "cpuMs": 175.704,
+            "headersCpuMs": 36.295,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.836,
+            "headersCpuMs": 16.714,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.206,
+            "headersCpuMs": 7.327,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.569,
+            "headersCpuMs": 6.908,
+            "warm": true
+          },
+          {
+            "cpuMs": 84.905,
+            "headersCpuMs": 9.544,
+            "warm": true
+          },
+          {
+            "cpuMs": 74.997,
+            "headersCpuMs": 7.59,
+            "warm": true
+          },
+          {
+            "cpuMs": 103.432,
+            "headersCpuMs": 9.521,
+            "warm": true
+          },
+          {
+            "cpuMs": 89.302,
+            "headersCpuMs": 10.566,
+            "warm": true
+          },
+          {
+            "cpuMs": 57.266,
+            "headersCpuMs": 7.442,
+            "warm": true
+          },
+          {
+            "cpuMs": 50.415,
+            "headersCpuMs": 8.073,
+            "warm": true
+          },
+          {
+            "cpuMs": 49.852,
+            "headersCpuMs": 7.04,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.449,
+            "headersCpuMs": 6.908,
+            "warm": true
+          },
+          {
+            "cpuMs": 52.473,
+            "headersCpuMs": 8.366,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-5MiB-retention-off",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 80.79463333333337,
+        "headersCpuMs": 23.079400000000003,
+        "samples": [
+          {
+            "cpuMs": 57.904,
+            "headersCpuMs": 18.128,
+            "warm": true
+          },
+          {
+            "cpuMs": 58.842,
+            "headersCpuMs": 18.2,
+            "warm": true
+          },
+          {
+            "cpuMs": 61.752,
+            "headersCpuMs": 20.134,
+            "warm": true
+          },
+          {
+            "cpuMs": 56.935,
+            "headersCpuMs": 18.273,
+            "warm": true
+          },
+          {
+            "cpuMs": 74.829,
+            "headersCpuMs": 18.788,
+            "warm": true
+          },
+          {
+            "cpuMs": 169.789,
+            "headersCpuMs": 45.022,
+            "warm": true
+          },
+          {
+            "cpuMs": 74.736,
+            "headersCpuMs": 26.201,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.287,
+            "headersCpuMs": 18.02,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.133,
+            "headersCpuMs": 14.725,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.715,
+            "headersCpuMs": 18.057,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.089,
+            "headersCpuMs": 14.805,
+            "warm": true
+          },
+          {
+            "cpuMs": 68.97,
+            "headersCpuMs": 18.903,
+            "warm": true
+          },
+          {
+            "cpuMs": 172.392,
+            "headersCpuMs": 41.854,
+            "warm": true
+          },
+          {
+            "cpuMs": 75.303,
+            "headersCpuMs": 26.99,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.527,
+            "headersCpuMs": 20.39,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.146,
+            "headersCpuMs": 24.69,
+            "warm": true
+          },
+          {
+            "cpuMs": 64.742,
+            "headersCpuMs": 22.058,
+            "warm": true
+          },
+          {
+            "cpuMs": 62.747,
+            "headersCpuMs": 21.021,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.517,
+            "headersCpuMs": 23.511,
+            "warm": true
+          },
+          {
+            "cpuMs": 172.416,
+            "headersCpuMs": 41.81,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.059,
+            "headersCpuMs": 26.251,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.511,
+            "headersCpuMs": 17.14,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.966,
+            "headersCpuMs": 20.385,
+            "warm": true
+          },
+          {
+            "cpuMs": 67.13,
+            "headersCpuMs": 16.447,
+            "warm": true
+          },
+          {
+            "cpuMs": 60.537,
+            "headersCpuMs": 14.745,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.389,
+            "headersCpuMs": 14.996,
+            "warm": true
+          },
+          {
+            "cpuMs": 178.461,
+            "headersCpuMs": 42.469,
+            "warm": true
+          },
+          {
+            "cpuMs": 70.647,
+            "headersCpuMs": 28.481,
+            "warm": true
+          },
+          {
+            "cpuMs": 59.463,
+            "headersCpuMs": 19.549,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.905,
+            "headersCpuMs": 20.339,
+            "warm": true
+          }
+        ]
+      },
+      {
+        "label": "native-5MiB-retention-on",
+        "requestBytes": 5242849,
+        "responseBytes": 1185305,
+        "repetitions": 30,
+        "cpuMs": 94.21716666666667,
+        "headersCpuMs": 24.04203333333333,
+        "samples": [
+          {
+            "cpuMs": 69.93,
+            "headersCpuMs": 19.952,
+            "warm": true
+          },
+          {
+            "cpuMs": 191.979,
+            "headersCpuMs": 53.073,
+            "warm": true
+          },
+          {
+            "cpuMs": 80.812,
+            "headersCpuMs": 21.822,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.572,
+            "headersCpuMs": 17.723,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.659,
+            "headersCpuMs": 14.453,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.276,
+            "headersCpuMs": 15.818,
+            "warm": true
+          },
+          {
+            "cpuMs": 87.772,
+            "headersCpuMs": 14.601,
+            "warm": true
+          },
+          {
+            "cpuMs": 79.757,
+            "headersCpuMs": 17.241,
+            "warm": true
+          },
+          {
+            "cpuMs": 177.196,
+            "headersCpuMs": 42.552,
+            "warm": true
+          },
+          {
+            "cpuMs": 99.248,
+            "headersCpuMs": 27.619,
+            "warm": true
+          },
+          {
+            "cpuMs": 90.61,
+            "headersCpuMs": 23.75,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.983,
+            "headersCpuMs": 19.194,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.628,
+            "headersCpuMs": 19.941,
+            "warm": true
+          },
+          {
+            "cpuMs": 69.944,
+            "headersCpuMs": 19.216,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.569,
+            "headersCpuMs": 19.218,
+            "warm": true
+          },
+          {
+            "cpuMs": 184.4,
+            "headersCpuMs": 46.03,
+            "warm": true
+          },
+          {
+            "cpuMs": 74.738,
+            "headersCpuMs": 22.405,
+            "warm": true
+          },
+          {
+            "cpuMs": 68.831,
+            "headersCpuMs": 15.029,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.229,
+            "headersCpuMs": 17.513,
+            "warm": true
+          },
+          {
+            "cpuMs": 75.99,
+            "headersCpuMs": 15.331,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.283,
+            "headersCpuMs": 14.915,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.005,
+            "headersCpuMs": 16.549,
+            "warm": true
+          },
+          {
+            "cpuMs": 188.964,
+            "headersCpuMs": 47.705,
+            "warm": true
+          },
+          {
+            "cpuMs": 85.172,
+            "headersCpuMs": 26.81,
+            "warm": true
+          },
+          {
+            "cpuMs": 66.344,
+            "headersCpuMs": 19.688,
+            "warm": true
+          },
+          {
+            "cpuMs": 73.887,
+            "headersCpuMs": 22.448,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.784,
+            "headersCpuMs": 21.72,
+            "warm": true
+          },
+          {
+            "cpuMs": 77.629,
+            "headersCpuMs": 21.132,
+            "warm": true
+          },
+          {
+            "cpuMs": 71.757,
+            "headersCpuMs": 20.11,
+            "warm": true
+          },
+          {
+            "cpuMs": 190.567,
+            "headersCpuMs": 47.703,
+            "warm": true
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "synthetic": true,
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/google/media-understanding-provider.ts",
+  "model": "gemini-3-flash-preview",
+  "path": "/v1beta/models/gemini-3-flash-preview:generateContent",
+  "audio": { "contents": [{ "role": "user", "parts": [
+    { "text": "Transcribe the audio." },
+    { "inline_data": { "mime_type": "audio/wav", "data": "AAECAw==" } }
+  ] }] },
+  "video": { "contents": [{ "role": "user", "parts": [
+    { "text": "Describe the video." },
+    { "inline_data": { "mime_type": "video/mp4", "data": "AAECAw==" } }
+  ] }] },
+  "response": {
+    "candidates": [{ "finishReason": "STOP", "content": { "parts": [
+      { "text": " Synthetic description. " }, { "text": "Second line." }
+    ] } }],
+    "usageMetadata": { "promptTokenCount": 44, "candidatesTokenCount": 8, "totalTokenCount": 52,
+      "promptTokensDetails": [{ "modality": "TEXT", "tokenCount": 12 }, { "modality": "AUDIO", "tokenCount": 32 }] }
+  },
+  "payloadScope": "Synthetic byte preservation, not playable media or duration evidence",
+  "billing": { "actualProviderCostMicrousd": null, "decodedBytesAreTokensOrDuration": false, "policyFixedIsSeparate": true },
+  "files": { "rawFileIdsAllowed": false, "remoteUrlsFetched": false },
+  "delivery": { "completeEofRequired": true, "remotePostReplay": false }
+}

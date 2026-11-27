@@ -16,6 +16,7 @@ export type {
   FusionConfig,
   FusionReadiness,
   PolicyBinding,
+  PrincipalUsage,
   ProviderAccess,
   ProviderConnection,
   ProviderReadiness,
@@ -33,7 +34,7 @@ export type {
   UsageSummary,
 } from "../../shared/contracts";
 
-export type View = "home" | "catalog" | "playground" | "policies" | "users" | "usage";
+export type View = "my-usage" | "home" | "catalog" | "playground" | "policies" | "users" | "usage" | "subscriptions";
 export type Theme = "light" | "dark";
 export type RefreshOptions = { background?: boolean };
 export type IconComponent = React.ComponentType<React.SVGProps<SVGSVGElement>>;
@@ -65,14 +66,26 @@ export interface PolicyForm {
   tenantId: string;
   enabled: boolean;
   monthlyBudgetMicros: string;
-  requestCostMicros: string;
+  dailyBudgetMicros: string;
+  weeklyBudgetMicros: string;
+  budgetMode: "reserve" | "soft";
+  serviceTierAllowed: string;
+  serviceTierModels: string;
+  limitHint: string;
+  requestCostDollars: string;
+  requestCostsDollars: string;
   budgetScope: NonNullable<AccessPolicy["budgetScope"]>;
   providers: string[];
   allProviders: boolean;
+  models: string;
+  allModels: boolean;
+  poolStatus: "hidden" | "visible";
   retainRequestContent: boolean;
   grantStrategy: AccessPolicy["grantRouting"]["strategy"];
   grantStickiness: AccessPolicy["grantRouting"]["stickiness"];
   grantFailover: boolean;
+  grantEnvironmentFallback: boolean;
+  grantIncludedQuotaReservePercent: string;
   grantStaleState: AccessPolicy["grantRouting"]["staleState"];
   grantStaleAfterSeconds: string;
   grantSwitchAtUsedPercent: string;
@@ -81,7 +94,7 @@ export interface PolicyForm {
 }
 
 export interface AccessForm { email: string; tenantId: string; enabled: boolean; groups: string; policyIds: string[]; contentRetentionDisabled: boolean }
-export interface CredentialForm { credentialId: string; policyId: string; principalId: string }
+export interface CredentialForm { credentialId: string; policyId: string; principalId: string; expiresAt: string; fast: boolean; ultrafast: boolean }
 export interface BindingForm { policyId: string; principalType: "user" | "group"; principalId: string; enabled: boolean; priority: string }
 export interface UpstreamGrantForm { scope: "policies" | "tenants"; scopeId: string; tokenRef: string; kind: UpstreamGrant["kind"]; provider: string; label: string; enabled: boolean; priority: string; weight: string; credential: string; credentialBundle: string; accessToken: string; refreshToken: string; accountId: string; expiresAt: string; keepWarm: boolean }
 export interface AssignmentRuleForm { ruleId: string; enabled: boolean; kind: AssignmentRule["kind"]; subject: string; groups: string; policyIds: string[]; priority: string; revokeOnLoss: boolean; provenance: string }

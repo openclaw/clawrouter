@@ -3,7 +3,7 @@ import test from "node:test";
 import { materializeGrantCredentials, putGrantCredentials } from "../grant-credentials.ts";
 import { observeGrantQuotaProbe } from "../grant-quota.ts";
 import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, transformTransportBody, transportForGrant } from "../provider-auth.ts";
-import { snapshot } from "../providers.ts";
+import { snapshot } from "../provider-catalog.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 
 const anthropic = snapshot.providers.find((provider) => provider.id === "anthropic");
@@ -22,11 +22,11 @@ test("Claude subscription transport uses OAuth identity without changing API-key
   assert.equal(oauthHeaders.has("x-api-key"), false);
   assert.equal(oauthHeaders.get("anthropic-beta"), "interleaved-thinking-2025-05-14,claude-code-20250219,oauth-2025-04-20");
   assert.equal(oauthHeaders.get("x-app"), "cli");
-  assert.equal(oauthHeaders.get("user-agent"), "claude-cli/2.1.251");
+  assert.equal(oauthHeaders.get("user-agent"), "claude-cli/2.1.322 (external, cli)");
 
   const body = transformTransportBody(transport, { model: "claude-sonnet-5", messages: [{ role: "user", content: "fixture" }], system: "operator system" });
   assert.deepEqual(body.system.map((block) => block.text), [
-    "x-anthropic-billing-header: cc_version=2.1.251; cc_entrypoint=sdk-cli;",
+    "x-anthropic-billing-header: cc_version=2.1.288; cc_entrypoint=sdk-cli;",
     "You are Claude Code, Anthropic's official CLI for Claude.",
     "operator system",
   ]);
@@ -37,6 +37,29 @@ test("Claude subscription transport uses OAuth identity without changing API-key
   assert.equal(apiHeaders.get("x-api-key"), "anthropic-api-key-fixture");
   assert.equal(apiHeaders.has("authorization"), false);
 });
+
+for (const model of ["claude-fable-5-1", "claude-sonnet-5-5", "claude-opus-5-5"]) test(
+  "Claude subscription upgrade preserves the historical thinking prefix for " + model, () => {
+    const transport = transportForGrant(anthropic, { provider: "anthropic", kind: "subscription", accessToken: "synthetic-replay-token" });
+    // Historical wire fixture: these exact system blocks preceded the thinking
+    // block. Do not derive the expected prefix from the current transport.
+    const operatorSystem = { type: "text", text: "Synthetic stable operator instructions.", cache_control: { type: "ephemeral" } };
+    const historical = { model, max_tokens: 10, system: [
+      { type: "text", text: "x-anthropic-billing-header: cc_version=2.1.288; cc_entrypoint=sdk-cli;" },
+      { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." }, operatorSystem,
+    ], tools: [{ name: "synthetic_lookup", description: "Synthetic fixture.", input_schema: { type: "object", properties: {} } }],
+    messages: [{ role: "user", content: "Synthetic first turn." }, { role: "assistant", content: [
+      { type: "thinking", thinking: "Synthetic earlier thought.", signature: "synthetic-historical-signature" },
+      { type: "text", text: "Synthetic earlier answer." },
+    ] }, { role: "user", content: "Continue." }] };
+    const expected = structuredClone(historical);
+    // A caller replays its own original system, tools and history; the router
+    // must reconstruct the same prefix, not upgrade a version inside it.
+    assert.deepEqual(transformTransportBody(transport, { ...historical, system: [operatorSystem] }), expected);
+    // Already-transformed historical input must not gain a new billing block.
+    assert.deepEqual(transformTransportBody(transport, historical), expected);
+    assert.deepEqual(historical, expected, "transformation does not mutate the supplied history");
+  });
 
 test("Claude usage payload maps five-hour, weekly, and model windows without retaining the payload", () => {
   const probe = anthropic.quota.probes.find((candidate) => candidate.grantKinds.includes("subscription"));
@@ -68,7 +91,6 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
       get() {
         return { async fetch(url, init) {
           const path = new URL(url).pathname, body = JSON.parse(init.body);
-          if (path === "/grant-pools/sync") return new Response("updated");
           if (path === "/grant-pools/states") return Response.json({ states: {} });
           if (path === "/grant-pools/feedback") { feedback.push(body); return new Response("updated"); }
           return new Response("not found", { status: 404 });
@@ -94,6 +116,7 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
   let calls = 0;
   context.mock.method(globalThis, "fetch", async (input, init) => {
     calls += 1;
+    if (String(input).endsWith("/profile")) return Response.json({ account: { email: "pool@example.test" }, organization: { rate_limit_tier: "default_claude_max_20x" } });
     assert.equal(String(input), "https://api.anthropic.com/api/oauth/usage");
     const headers = new Headers(init.headers);
     assert.equal(headers.get("authorization"), "Bearer claude-alarm-fixture");
@@ -101,7 +124,7 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
     return Response.json({ five_hour: { utilization: 40, resets_at: "2026-09-02T18:00:00Z" }, seven_day: { utilization: 20, resets_at: "2026-09-07T18:00:00Z" } });
   });
   await owner.object.alarm();
-  assert.equal(calls, 1, "disabled keep-warm never sends an inference request");
+  assert.equal(calls, 2, "disabled keep-warm never sends an inference request");
   assert.equal(feedback.length, 1);
   assert.deepEqual(feedback[0].state.windows.map(({ remaining }) => remaining), [60, 80]);
 
@@ -128,7 +151,7 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
     assert.match(headers.get("anthropic-beta"), /oauth-2025-04-20/);
     const body = JSON.parse(init.body);
     assert.deepEqual(body.messages, [{ role: "user", content: "." }]);
-    assert.equal(body.system[0].text, "x-anthropic-billing-header: cc_version=2.1.251; cc_entrypoint=sdk-cli;");
+    assert.equal(body.system[0].text, "x-anthropic-billing-header: cc_version=2.1.288; cc_entrypoint=sdk-cli;");
     return Response.json({ content: [] });
   });
   await warmOwner.object.alarm();
@@ -204,6 +227,7 @@ test("disabled Claude grants cancel maintenance and reject credential materializ
   const legacyOwner = env.GRANT_CREDENTIALS.objects.get(legacyKey);
   const legacyRecord = legacyOwner.values.get("credential");
   delete legacyRecord.enabled;
+  env.grantAuthority.sql.exec("DELETE FROM upstream_grant_pool_versions WHERE grant_key = ?", legacyKey);
   legacyRecord.nextKeepWarmAt = "2020-01-01T00:00:00.000Z";
   legacyOwner.values.set("credential", legacyRecord);
   values.set(legacyKey, { provider: "anthropic", kind: "subscription", enabled: false });

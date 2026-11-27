@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "azure-speech-input-retirement",
+      "split": "development",
+      "base": "655990cdb4c33a148b03425fd6a2c8831c6766ef",
+      "oracle": "80ecc42d40619894b10924c772a07a625996029e",
+      "editPaths": [
+        "worker/native-azure-speech.ts"
+      ],
+      "visibleTests": [
+        "worker/test/native-azure-speech.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/native-azure-speech.test.mjs"
+      ],
+      "sourceContext": [
+        {
+          "path": "worker/input-retirement.ts",
+          "query": "export interface InputRetirement"
+        }
+      ],
+      "instruction": "Repair native Azure speech response cleanup. A rejected response or caller abort must not finish reading or release its existing 32 MiB capacity lease until the original response reader and its cancellation have settled, including asynchronous cancellation rejection. Invalid response headers must use the same retirement guarantee. A cancellation callback may itself abort the caller: cancellation must still happen exactly once, the source must remain locked and the capacity charged while cleanup is pending, and the reader lock and capacity must be released after settlement. Preserve the existing prepareNativeAzureSpeech API, valid MP3 output, destination and SSML checks, status/MIME/encoding/range/length limits, no-partial-output behavior, and rejection of already-aborted calls. Use the existing input retirement contract without adding capacity, retries, replacement readers, timers or detached cleanup. Change only worker/native-azure-speech.ts."
+    }
+  ]
+}

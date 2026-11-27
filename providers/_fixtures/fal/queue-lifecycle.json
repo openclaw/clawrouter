@@ -1,0 +1,149 @@
+{
+  "protocol": "fal.queue",
+  "synthetic": true,
+  "endpointId": "fal-ai/flux/schnell",
+  "requestId": "11111111-2222-4333-8444-555555555555",
+  "submit": {
+    "method": "POST",
+    "path": "/fal-ai/flux/schnell",
+    "body": {
+      "prompt": "A synthetic blue square",
+      "image_size": {
+        "width": 32,
+        "height": 32
+      },
+      "num_images": 1
+    }
+  },
+  "controls": {
+    "status": {
+      "method": "GET",
+      "path": "/fal-ai/flux/requests/11111111-2222-4333-8444-555555555555/status"
+    },
+    "result": {
+      "method": "GET",
+      "path": "/fal-ai/flux/requests/11111111-2222-4333-8444-555555555555"
+    },
+    "cancel": {
+      "method": "PUT",
+      "path": "/fal-ai/flux/requests/11111111-2222-4333-8444-555555555555/cancel"
+    }
+  },
+  "observations": {
+    "queued": {
+      "request_id": "11111111-2222-4333-8444-555555555555",
+      "status": "IN_QUEUE",
+      "queue_position": 0,
+      "response_url": "https://queue.fal.run/fal-ai/flux/requests/11111111-2222-4333-8444-555555555555",
+      "status_url": "https://queue.fal.run/fal-ai/flux/requests/11111111-2222-4333-8444-555555555555/status",
+      "cancel_url": "https://queue.fal.run/fal-ai/flux/requests/11111111-2222-4333-8444-555555555555/cancel"
+    },
+    "running": {
+      "request_id": "11111111-2222-4333-8444-555555555555",
+      "status": "IN_PROGRESS",
+      "logs": []
+    },
+    "completed": {
+      "request_id": "11111111-2222-4333-8444-555555555555",
+      "status": "COMPLETED",
+      "metrics": {
+        "inference_time": 2.5
+      }
+    },
+    "failed": {
+      "request_id": "11111111-2222-4333-8444-555555555555",
+      "status": "COMPLETED",
+      "error": "Synthetic validation error",
+      "error_type": "validation_error"
+    },
+    "hostileUrls": {
+      "request_id": "11111111-2222-4333-8444-555555555555",
+      "status": "IN_QUEUE",
+      "response_url": "https://untrusted.example/result",
+      "status_url": "https://untrusted.example/status",
+      "cancel_url": "https://untrusted.example/cancel"
+    }
+  },
+  "cancelAcks": [
+    {
+      "httpStatus": 200,
+      "body": {
+        "status": "OK"
+      },
+      "disposition": "removed_from_queue",
+      "queueTerminal": true,
+      "observeStatus": false
+    },
+    {
+      "httpStatus": 202,
+      "body": {
+        "status": "CANCELLATION_REQUESTED"
+      },
+      "disposition": "cancellation_requested",
+      "queueTerminal": false,
+      "observeStatus": true
+    },
+    {
+      "httpStatus": 400,
+      "body": {
+        "status": "ALREADY_COMPLETED"
+      },
+      "disposition": "already_completed",
+      "queueTerminal": false,
+      "observeStatus": true
+    },
+    {
+      "httpStatus": 404,
+      "body": {
+        "status": "NOT_FOUND"
+      },
+      "disposition": "not_found",
+      "queueTerminal": false,
+      "observeStatus": true
+    }
+  ],
+  "results": {
+    "success": {
+      "httpStatus": 200,
+      "body": {
+        "images": [
+          {
+            "url": "https://media.example/synthetic.png",
+            "width": 32,
+            "height": 32,
+            "content_type": "image/png"
+          }
+        ],
+        "seed": 42
+      }
+    },
+    "failed": {
+      "httpStatus": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "synthetic_validation",
+            "msg": "Synthetic invalid input"
+          }
+        ]
+      }
+    }
+  },
+  "billing": {
+    "actualProviderCostMicrousd": null,
+    "inferenceTimeIsNotTariff": true,
+    "startTimeoutIsNotRuntimeBound": true,
+    "hardBudgetRequires": "frozen endpoint/model tariff and whole-job bound, or explicit policy_fixed price before egress"
+  },
+  "integrationRequirements": [
+    "persist caller/policy/credential/endpoint lineage before submit",
+    "bind request ID before delivery; never expose raw unowned controls",
+    "never replay uncertain POST; local scoped idempotency alone cannot prove upstream exactly-once",
+    "COMPLETED includes failures; retrieve bounded native result before success settlement",
+    "cancel 202 may race success; freeze first qualified terminal receipt once",
+    "unknown owner, expired binding, key rotation and cross-tenant controls deny before fetch",
+    "never fetch upstream control URLs or auto-download media with credentials",
+    "provider retention is separate from durable ownership and accounting",
+    "cancel/failure does not imply zero dollars across arbitrary serverless/model billing"
+  ]
+}

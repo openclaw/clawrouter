@@ -51,11 +51,6 @@
   --hero-line: #2c2f35;
   --hero-text: #f0eee8;
   --hero-muted: #a3a7ad;
-  --hero-grid: rgb(240 238 232 / 0.045);
-  --hero-signal: rgb(255 122 69 / 0.55);
-  --hero-action: #f2ede3;
-  --hero-action-hover: #ffffff;
-  --hero-action-foreground: #17191d;
 
   --chat-canvas: rgb(242 240 234 / 0.82);
   --chat-grid: #d9d4c7;
@@ -122,11 +117,6 @@
   --hero-line: #262a30;
   --hero-text: #f0eee8;
   --hero-muted: #9da1a7;
-  --hero-grid: rgb(240 238 232 / 0.04);
-  --hero-signal: rgb(255 120 71 / 0.5);
-  --hero-action: #ecede9;
-  --hero-action-hover: #ffffff;
-  --hero-action-foreground: #101216;
 
   --chat-canvas: rgb(12 14 17 / 0.84);
   --chat-grid: #1d2026;

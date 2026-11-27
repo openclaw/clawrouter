@@ -75,7 +75,12 @@ test("key CLI preserves secret inputs, explicit scopes, budgets, and remote tran
   assertSuccess(await fixture.run("key-put.mjs", ["--kid", "keyA", "--secret-file", secretFile, "--providers", "openai", "--monthly-budget-micros", "1000000", "--request-cost-micros", "0"]));
   assert.equal(fixture.policy("keyA").monthlyBudgetMicros, 1000000);
   assert.equal(fixture.policy("keyA").requestCostMicros, 0);
-  assertSuccess(await fixture.run("key-put.mjs", ["--kid", "keyB", "--secret-env", "TEST_PROXY_SECRET", "--all-providers", "--disabled", "--local"], { TEST_PROXY_SECRET: secretB }));
+  const requestCostsMicros = { "search.web": 0, "llm.responses": 17 };
+  assertSuccess(await fixture.run("key-put.mjs", [
+    "--kid", "keyB", "--secret-env", "TEST_PROXY_SECRET", "--all-providers", "--disabled",
+    "--request-costs-micros", JSON.stringify(requestCostsMicros), "--local",
+  ], { TEST_PROXY_SECRET: secretB }));
+  assert.deepEqual(fixture.policy("keyB").requestCostsMicros, requestCostsMicros);
   assert.deepEqual(fixture.policy("keyB").providers, []);
   assert.equal(fixture.credential("keyB").enabled, false);
   assertSuccess(await fixture.run("key-revoke.mjs", ["--kid", "keyA"]));

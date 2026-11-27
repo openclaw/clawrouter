@@ -1,14 +1,31 @@
-import type { BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
-import { budgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
-import { mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
-import { errorResponse, json, normalizeEmail } from "./utils.ts";
+import type { UsageEventScope } from "./usage-ledger-client.ts";
+import { withUsageRetention, maintainUsageVisibility } from "./usage-report-visibility.ts";
+import { reportRetentionMs } from "./usage-report-range.ts";
+import { searchJsonBytes } from "./minimax-search-operation.ts";
+import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
+import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
+import { ensureUsageReportSchema, insertUsageReportEvent, withUsageReportPair, queryUsageReport, queryUsageEvents, migrateUsageReport, usageReportProjectionLive, usageReportProjectionReclaimDue, reclaimUsageReportProjection } from "./usage-report-store.ts";
+import { type UsageReportMigrationOptions, type UsageReportQuery, type UsageEventPosition } from "./usage-report-protocol.ts";
+import { nextDailyReset, nextWeeklyReset } from "./policy-limits.ts";
+import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../shared/contracts";
+import type { BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
+import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
+import { mergePrincipalUsage, usageCutoffs, usageDayMs, usageShardName, type PrincipalUsage, type UsageSnapshot, type UsageTotals } from "./usage-sharding.ts";
+import { errorResponse, json, normalizeEmail, readJson } from "./utils.ts";
+import { dispatchCompleteUsageShard } from "./usage-report-store.ts";
+import { backfillUsageRollups, ensureUsageRollups, rollupOwnerCondition, rollupSummaryColumns, rollupTotalColumns, usageRollupAlarmMs, usageRollupProgress } from "./usage-rollups.ts";
+import { ensureUsageReportCells, maintainUsageReportCells, usageReportCellsDue } from "./usage-report-cells.ts";
 
-export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };
+export interface UsageIngestReceipt {
+  eventId: string;
+  outcome: "stored" | "duplicate" | "expired_by_retention";
+}
 
 const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
-const usageWindowDays = 30;
-const usageRetentionMs = usageWindowDays * usageDayMs;
+const usageRetentionMs = reportRetentionMs;
+const usageWindowDays = usageRetentionMs / usageDayMs;
+const usageAttributionBatchSize = 250;
 
 export class BudgetLedgerObject implements DurableObject {
   private sql: SqlStorage;
@@ -22,13 +39,35 @@ export class BudgetLedgerObject implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    const cover = request.headers.get(musicCoverControlHeader) === musicCoverControlVersion;
+    if (cover) {
+      try {
+        if (request.method === "GET" && url.pathname === "/status") {
+          if (url.href.length > 4096 || [...url.searchParams.keys()].some(key => !["policy_id", "window_key", "scope_key", "limit_micros"].includes(key))) musicCoverUnavailable();
+          searchJsonBytes(Object.fromEntries(url.searchParams));
+        } else {
+          if (request.method !== "POST" || !["/reserve", "/dispatch", "/settle", "/charge"].includes(url.pathname)) musicCoverUnavailable();
+          const body = await readCoverControlRequest(request) as BudgetReserveRequest & BudgetChargeRequest & BudgetSettleRequest;
+          const id = body.reservationId ?? body.chargeId;
+          if (typeof id !== "string" || !id.length || id.length > 512) musicCoverUnavailable();
+          const old = first<{ bytes: number }>(this.sql.exec("SELECT COALESCE(length(CAST(policy_id AS BLOB)),0) + COALESCE(length(CAST(window_key AS BLOB)),0) + COALESCE(length(CAST(budget_scope_key AS BLOB)),0) AS bytes FROM budget_reservations WHERE reservation_id = ?", id));
+          if (old && (!Number.isSafeInteger(old.bytes) || old.bytes > 4096)) musicCoverUnavailable();
+          this.maintain();
+          return url.pathname === "/reserve" ? this.reserve(body, true) : url.pathname === "/dispatch" ? this.dispatch(body)
+            : url.pathname === "/settle" ? this.settle(body) : this.charge(body);
+        }
+      } catch { return errorResponse("minimax_music_cover_unavailable", "Cover ledger request is unavailable", 503); }
+    }
     this.maintain();
     if (request.method === "GET" && url.pathname === "/status") {
       const policyId = url.searchParams.get("policy_id"), windowKey = url.searchParams.get("window_key"), limit = numberParam(url, "limit_micros");
       if (!policyId || !windowKey || limit == null) return errorResponse("invalid_budget_request", "policy_id, window_key, and limit_micros are required", 400);
-      const spent = this.effectiveSpent(windowKey);
-      return json({ policyId, windowKey, limitMicros: limit, spentMicros: spent, remainingMicros: Math.max(0, limit - spent) });
+      const spent = this.effectiveSpent(windowKey, url.searchParams.get("scope_key"));
+      const result = { policyId, windowKey, limitMicros: limit, spentMicros: spent, remainingMicros: Math.max(0, limit - spent) };
+      if (cover) searchJsonBytes(result);
+      return json(result);
     }
+    if (request.method === "POST" && url.pathname === "/charge") return this.charge(await request.json<BudgetChargeRequest>());
     if (request.method === "POST" && url.pathname === "/reserve") return this.reserve(await request.json<BudgetReserveRequest>());
     if (request.method === "POST" && url.pathname === "/dispatch") return this.dispatch(await request.json<{ reservationId: string }>());
     if (request.method === "POST" && url.pathname === "/settle") return this.settle(await request.json<BudgetSettleRequest>());
@@ -40,19 +79,31 @@ export class BudgetLedgerObject implements DurableObject {
     await this.scheduleAlarm();
   }
 
-  private reserve(request: BudgetReserveRequest): Response {
-    const existing = first<{ window_key: string; policy_id: string; reserved_micros: number }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
+  private async charge(request: BudgetChargeRequest): Promise<Response> {
+    if (![request.chargeId, request.policyId, request.windowKey, request.scopeKey, request.capability].every(value => typeof value === "string" && value.length > 0)
+      || !Number.isSafeInteger(request.amountMicros) || request.amountMicros < 0) return errorResponse("invalid_budget_charge", "charge fields and non-negative safe integer amount are required", 400);
+    const existing = first<{ window_key: string; policy_id: string; reserved_micros: number; budget_scope_key: string | null; settled: number; dispatch_started: number }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros, budget_scope_key, settled, dispatch_started FROM budget_reservations WHERE reservation_id = ?", request.chargeId));
+    if (existing && (existing.window_key !== request.windowKey || existing.policy_id !== request.policyId || existing.budget_scope_key !== request.scopeKey || existing.reserved_micros !== request.amountMicros || existing.settled !== 1 || existing.dispatch_started !== 1)) return errorResponse("budget_charge_conflict", "charge conflicts with its retained receipt", 409);
+    if (!existing) this.sql.exec("INSERT INTO budget_reservations (reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled, dispatch_started, budget_scope_key) VALUES (?, ?, ?, ?, ?, 1, 1, ?)", request.chargeId, request.windowKey, request.policyId, request.amountMicros, Date.now(), request.scopeKey);
+    await this.scheduleAlarm();
+    return json({ charged: true, chargeId: request.chargeId });
+  }
+
+  private reserve(request: BudgetReserveRequest, cover = false): Response {
+    const reply = (value: unknown) => { if (cover) searchJsonBytes(value); return json(value); };
+    const existing = first<{ window_key: string; policy_id: string; reserved_micros: number; budget_scope_key: string | null; dispatch_started: number; settled: number; created_at_ms: number }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros, budget_scope_key, dispatch_started, settled, created_at_ms FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
     if (existing) {
-      const spent = this.effectiveSpent(existing.window_key);
-      return json({ allowed: true, policyId: existing.policy_id, windowKey: existing.window_key, chargedMicros: existing.reserved_micros, spentMicros: spent, remainingMicros: Math.max(0, request.limitMicros - spent) });
+      const spent = this.effectiveSpent(existing.window_key, existing.budget_scope_key);
+      const dispatched = request.dispatched === true && existing.dispatch_started === 1 && existing.settled === 0 && existing.created_at_ms + reservationLeaseMs > Date.now();
+      return reply({ allowed: true, policyId: existing.policy_id, windowKey: existing.window_key, chargedMicros: existing.reserved_micros, spentMicros: spent, remainingMicros: Math.max(0, request.limitMicros - spent), ...(dispatched ? { dispatched: true } : {}) });
     }
-    const spent = this.effectiveSpent(request.windowKey);
+    const spent = this.effectiveSpent(request.windowKey, request.scopeKey);
     const remaining = Math.max(0, request.limitMicros - spent);
-    if (request.costMicros > remaining) return json({ allowed: false, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: 0, spentMicros: spent, remainingMicros: remaining });
-    this.sql.exec("INSERT INTO budget_reservations (reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled, dispatch_started) VALUES (?, ?, ?, ?, ?, 0, 0)", request.reservationId, request.windowKey, request.policyId, request.costMicros, Date.now());
+    if (request.costMicros > remaining) return reply({ allowed: false, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: 0, spentMicros: spent, remainingMicros: remaining });
+    this.sql.exec("INSERT INTO budget_reservations (reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled, dispatch_started, budget_scope_key) VALUES (?, ?, ?, ?, ?, 0, ?, ?)", request.reservationId, request.windowKey, request.policyId, request.costMicros, Date.now(), request.dispatched === true ? 1 : 0, request.scopeKey ?? null);
     void this.scheduleAlarm();
     const next = spent + request.costMicros;
-    return json({ allowed: true, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: request.costMicros, spentMicros: next, remainingMicros: Math.max(0, request.limitMicros - next) });
+    return reply({ allowed: true, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: request.costMicros, spentMicros: next, remainingMicros: Math.max(0, request.limitMicros - next), ...(request.dispatched === true ? { dispatched: true } : {}) });
   }
 
   private dispatch(request: { reservationId: string }): Response {
@@ -65,19 +116,21 @@ export class BudgetLedgerObject implements DurableObject {
   }
 
   private settle(request: BudgetSettleRequest): Response {
-    const reservation = first<{ window_key: string; reserved_micros: number; settled: number; dispatch_started: number }>(this.sql.exec("SELECT window_key, reserved_micros, settled, dispatch_started FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
+    const reservation = first<{ window_key: string; reserved_micros: number; settled: number; dispatch_started: number; budget_scope_key: string | null }>(this.sql.exec("SELECT window_key, reserved_micros, settled, dispatch_started, budget_scope_key FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
     if (!reservation) return errorResponse("budget_reservation_missing", "budget settlement has no retained reservation receipt", 404);
     if (!Number.isSafeInteger(request.actualCostMicros) || request.actualCostMicros < 0) return errorResponse("invalid_budget_settlement", "actual cost must be a non-negative safe integer", 400);
     if ((reservation.settled === 1 && reservation.reserved_micros !== request.actualCostMicros) || (!reservation.dispatch_started && request.actualCostMicros !== 0)) return errorResponse("budget_settlement_conflict", "budget settlement conflicts with its retained receipt", 409);
-    const current = this.effectiveSpent(reservation.window_key);
+    const current = this.effectiveSpent(reservation.window_key, reservation.budget_scope_key);
     const next = Math.max(0, current - reservation.reserved_micros) + request.actualCostMicros;
     this.sql.exec("UPDATE budget_reservations SET reserved_micros = ?, settled = 1 WHERE reservation_id = ?", request.actualCostMicros, request.reservationId);
     return json({ settled: true, chargedMicros: request.actualCostMicros, spentMicros: next });
   }
 
-  private effectiveSpent(windowKey: string): number {
+  private effectiveSpent(windowKey: string, scopeKey: string | null = null): number {
     const window = first<{ spent_micros: number }>(this.sql.exec("SELECT spent_micros FROM budget_windows WHERE window_key = ?", windowKey))?.spent_micros ?? 0;
-    const reservations = first<{ spent_micros: number }>(this.sql.exec("SELECT COALESCE(SUM(reserved_micros), 0) AS spent_micros FROM budget_reservations WHERE window_key = ?", windowKey))?.spent_micros ?? 0;
+    // Untyped receipts remain shared legacy debt; their original scope is unknown.
+    // Older callers omit scope and must still count every charge in the window.
+    const reservations = first<{ spent_micros: number }>(this.sql.exec("SELECT COALESCE(SUM(reserved_micros), 0) AS spent_micros FROM budget_reservations WHERE window_key = ? AND (? IS NULL OR budget_scope_key IS NULL OR budget_scope_key = ?)", windowKey, scopeKey, scopeKey))?.spent_micros ?? 0;
     return Math.max(0, window) + Math.max(0, reservations);
   }
 
@@ -100,7 +153,7 @@ export class BudgetLedgerObject implements DurableObject {
 
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS budget_windows (window_key TEXT PRIMARY KEY, policy_id TEXT NOT NULL, spent_micros INTEGER NOT NULL)");
-    this.sql.exec("CREATE TABLE IF NOT EXISTS budget_reservations (reservation_id TEXT PRIMARY KEY, window_key TEXT NOT NULL, policy_id TEXT NOT NULL, reserved_micros INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, settled INTEGER NOT NULL, dispatch_started INTEGER NOT NULL DEFAULT 1)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS budget_reservations (reservation_id TEXT PRIMARY KEY, window_key TEXT NOT NULL, policy_id TEXT NOT NULL, reserved_micros INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, settled INTEGER NOT NULL, dispatch_started INTEGER NOT NULL DEFAULT 1, budget_scope_key TEXT)");
     let columns = new Set(rows<{ name: string }>(this.sql.exec("PRAGMA table_info(budget_reservations)")).map((row) => row.name));
     if (!columns.has("created_at_ms")) {
       for (const reservation of rows<{ window_key: string; policy_id: string; reserved_micros: number }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros FROM budget_reservations"))) {
@@ -115,6 +168,7 @@ export class BudgetLedgerObject implements DurableObject {
     // Existing and older-version reservations lack dispatch evidence. Preserve
     // their bound rather than refunding potentially completed provider work.
     if (!columns.has("dispatch_started")) this.sql.exec("ALTER TABLE budget_reservations ADD COLUMN dispatch_started INTEGER NOT NULL DEFAULT 1");
+    if (!columns.has("budget_scope_key")) this.sql.exec("ALTER TABLE budget_reservations ADD COLUMN budget_scope_key TEXT");
     this.sql.exec("CREATE INDEX IF NOT EXISTS budget_reservations_created_at ON budget_reservations (created_at_ms)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS budget_reservations_pending ON budget_reservations (settled, created_at_ms)");
   }
@@ -128,71 +182,328 @@ export class UsageLedgerObject implements DurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/ingest") {
-      this.ingest(await request.json<UsageEvent>());
-      if (!(await this.state.storage.getAlarm())) await this.state.storage.setAlarm(Date.now() + 86_400_000);
-      return new Response("accepted");
+      const event = request.headers.get(musicCoverControlHeader) === musicCoverControlVersion
+        ? await readCoverControlRequest(request) as UsageEvent : await request.json<UsageEvent>();
+      if (typeof event?.id !== "string" || !event.id.length || !Number.isSafeInteger(event.occurred_at_ms) || event.occurred_at_ms < 0) return errorResponse("invalid_usage_event", "id must be a nonempty string and occurred_at_ms must be a nonnegative safe integer", 400);
+      const now = Date.now(), receipt = this.ingest(event, now);
+      // Drain the report arrival log at the rate it fills. Best effort: the canonical write has
+      // committed, so a maintenance failure must not withhold its receipt.
+      try { this.state.storage.transactionSync(() => maintainUsageVisibility(this.sql, now)); }
+      catch { console.log(JSON.stringify({ event: "usage_visibility_maintenance_failed" })); }
+      await this.scheduleUsageAlarm(now, true);
+      return json(receipt);
+    }
+    // Internal DO transport only; never forwarded from a public mutation route.
+    if (request.method === "POST" && url.pathname === "/complete-usage") {
+      try {
+        const input = await readJson<unknown>(request, undefined, 1024 * 1024);
+        const result = this.state.storage.transactionSync(() => dispatchCompleteUsageShard(this.sql, input));
+        // A report read wakes an idle or newly upgraded shard so its cells catch up.
+        await this.scheduleUsageAlarm(Date.now(), true).catch(() => undefined);
+        return json(result);
+      } catch {
+        return json({ kind: "unavailable", reason: "source" });
+      }
+    }
+    if (request.method === "POST" && (url.pathname === "/personal-report" || url.pathname === "/personal-events")) {
+      const body = await request.json<{ query: UsageReportQuery; limit: number; before?: UsageEventPosition; includeEqualId?: boolean }>();
+      return json(url.pathname === "/personal-report" ? queryUsageReport(this.sql, body.query) : queryUsageEvents(this.sql, body.query, body.limit, body.before, body.includeEqualId));
+    }
+    // Private object binding only. No public Worker route dispatches this operation.
+    // Empty options are deliberately a read-only dry run; historical apply is explicit.
+    if (request.method === "POST" && url.pathname === "/reporting-migration") {
+      const options = await request.json<UsageReportMigrationOptions>();
+      return json(migrateUsageReport(this.sql, fn => this.state.storage.transactionSync(fn), options));
+    }
+    if (request.method === "GET" && url.pathname === "/grant-usage") {
+      const days = Number(url.searchParams.get("days"));
+      const policyId = url.searchParams.get("policy_id");
+      if (!policyId || !Number.isInteger(days) || days < 1 || days > 31) return errorResponse("invalid_usage_range", "policy_id and days from 1 to 31 are required", 400);
+      return this.grantUsage(policyId, days);
     }
     if (request.method === "GET" && url.pathname === "/snapshot") {
       const kind = url.searchParams.get("events"), id = url.searchParams.get("event_owner");
       if (kind !== "admin" && !(kind === "principal" && id !== null) && !(kind === "credential" && id)) return errorResponse("invalid_usage_scope", "an explicit usage event scope is required", 400);
-      return json(this.snapshot(url.searchParams.getAll("policy_id"), kind === "admin" ? { kind } : { kind, id: id! }, Math.min(100, Number(url.searchParams.get("limit")) || 100)));
+      const pending = this.backfillAttribution();
+      const snapshot = this.snapshot(url.searchParams.getAll("policy_id"), kind === "admin" ? { kind } : { kind, id: id! }, Math.min(100, Number(url.searchParams.get("limit")) || 100), pending);
+      await this.scheduleUsageAlarm();
+      return json(snapshot);
     }
     return errorResponse("route_not_found", "route not found", 404);
   }
 
   async alarm(): Promise<void> {
     this.cleanup();
-    if (first(this.sql.exec("SELECT id FROM usage_events LIMIT 1"))) await this.state.storage.setAlarm(Date.now() + 86_400_000);
+    this.state.storage.transactionSync(() => maintainUsageVisibility(this.sql));
+    const attributionPending = this.backfillAttribution();
+    const before = usageRollupProgress(this.sql).last_rowid;
+    backfillUsageRollups(this.sql, fn => this.state.storage.transactionSync(fn));
+    const progress = usageRollupProgress(this.sql);
+    if (!progress.complete || attributionPending) {
+      // COUNT(*) walks a whole index: never on this sub-second migration cadence.
+      if (Math.floor(progress.last_rowid / 100_000) !== Math.floor(before / 100_000)) console.log(JSON.stringify({ event: "usage_rollup_maintenance", databaseSize: this.sql.databaseSize, ...progress }));
+      await this.state.storage.setAlarm(Date.now() + usageRollupAlarmMs);
+      return;
+    }
+    // Report cells fold only after attribution, so its backfill UPDATEs never reset them.
+    // Derived cells never stop the existing maintenance cadence.
+    const now = Date.now();
+    // An unread projection is reclaimed first: it can hold a third of the shard and keep cells storage-paused.
+    let reclaim: ReturnType<typeof reclaimUsageReportProjection> = "idle";
+    try { reclaim = this.state.storage.transactionSync(() => reclaimUsageReportProjection(this.sql)); }
+    catch { console.log(JSON.stringify({ event: "usage_report_projection_reclaim_failed" })); }
+    if (reclaim === "done") console.log(JSON.stringify({ event: "usage_report_projection_reclaimed", databaseSize: this.sql.databaseSize }));
+    let cells: number | null = null;
+    try { cells = this.state.storage.transactionSync(() => maintainUsageReportCells(this.sql, now)); }
+    catch { console.log(JSON.stringify({ event: "usage_report_cells_failed" })); }
+    if (reclaim === "more" || cells !== null && cells <= now) { await this.state.storage.setAlarm(now + usageRollupAlarmMs); return; }
+    const count = first<{ row_count: number }>(this.sql.exec("SELECT COUNT(*) AS row_count FROM usage_events"))!.row_count;
+    console.log(JSON.stringify({ event: "usage_rollup_maintenance", rowCount: count, databaseSize: this.sql.databaseSize, ...progress }));
+    if (count) await this.state.storage.setAlarm(Math.min(now + 86_400_000, cells ?? Infinity));
   }
 
-  private ingest(event: UsageEvent): void {
-    event.occurred_at_ms ||= Date.now();
+  /** `cells`: also wake the report-cell fold (ingest and complete reads; legacy snapshots do not). */
+  private async scheduleUsageAlarm(now = Date.now(), cells = false): Promise<void> {
+    const progress = usageRollupProgress(this.sql);
+    const attribution = first<{ complete: number }>(this.sql.exec("SELECT complete FROM usage_attribution_migration WHERE id = 1"))!;
+    const due = !cells ? null : usageReportProjectionReclaimDue(this.sql) ? 0
+      : usageReportCellsDue(this.sql, Number(first<{ max: number }>(this.sql.exec("SELECT COALESCE(MAX(rowid), 0) AS max FROM usage_events"))!.max));
+    const next = Math.min(now + (!progress.complete || !attribution.complete ? usageRollupAlarmMs : 86_400_000), due === null ? Infinity : Math.max(due, now + usageRollupAlarmMs));
+    const alarm = await this.state.storage.getAlarm();
+    if (alarm === null || alarm > next) await this.state.storage.setAlarm(next);
+  }
+
+  private ingest(event: UsageEvent, now: number): UsageIngestReceipt {
+    const cutoff = now - usageRetentionMs;
+    this.cleanup(cutoff);
+    // A retained ID owns its first payload and time, even if a replay carries an
+    // expired timestamp. Cleanup and admission use the same retention boundary.
+    if (first(this.sql.exec("SELECT id FROM usage_events WHERE id = ?", event.id))) return { eventId: event.id, outcome: "duplicate" };
+    if (event.occurred_at_ms < cutoff) return { eventId: event.id, outcome: "expired_by_retention" };
     event.policy_id ||= event.key_id;
-    this.sql.exec(
-      "INSERT OR IGNORE INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      event.id, event.occurred_at_ms, event.tenant_id, event.policy_id, event.provider, event.status, event.status_code,
-      event.input_tokens, event.output_tokens, event.total_tokens, event.actual_cost_micros, JSON.stringify(event),
-    );
-    this.cleanup();
+    this.state.storage.transactionSync(() => withUsageReportPair(this.sql, () => {
+      // Decided before the canonical insert advances the coverage generation. An unread projection is not extended.
+      const projected = usageReportProjectionLive(this.sql);
+      const inserted = first<{ id: string }>(this.sql.exec(
+        "INSERT INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json, grant_key, grant_lane, principal_id, principal_key, credential_id, cost_basis, principal_nontext) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING RETURNING id",
+        event.id, event.occurred_at_ms, event.tenant_id, event.policy_id, event.provider, event.status, event.status_code,
+        event.input_tokens, event.output_tokens, event.total_tokens, event.actual_cost_micros, JSON.stringify(event), event.grant_key ?? null, event.grant_lane ?? null,
+        ...usageAttribution(event),
+      ));
+      if (inserted?.id !== event.id) throw new Error("usage ledger did not confirm insertion");
+      if (projected && !insertUsageReportEvent(this.sql, event)) throw new Error("usage ledger did not confirm reporting projection");
+    }));
+    return { eventId: event.id, outcome: "stored" };
   }
 
-  private snapshot(policyIds: string[], scope: UsageEventScope, limit: number) {
+  private grantUsage(policyId: string, days: number): Response {
     this.cleanup();
-    const cutoffs = usageCutoffs(Date.now(), usageWindowDays);
+    const until = Date.now(), since = until - days * usageDayMs;
+    const grouped = new Map<string, GrantUsageRow>();
+    // Bound SQLite's grouping sorter by input rows, not output groups. Rowid
+    // seeks visit the retained table once, including gaps and out-of-range rows.
+    const batchSize = 4096;
+    let after: number | null = null;
+    while (true) {
+      const lower: string = after === null ? "" : "rowid > ? AND ";
+      const bindings: number[] = after === null ? [] : [after];
+      const page = first<{ last: number | null; count: number }>(this.sql.exec(`SELECT MAX(rowid) AS last, COUNT(*) AS count FROM (
+        SELECT rowid FROM usage_events NOT INDEXED WHERE ${lower}policy_id = ? AND occurred_at_ms >= ? AND occurred_at_ms <= ? ORDER BY rowid LIMIT ?
+      )`, ...bindings, policyId, since, until, batchSize));
+      if (page?.last == null) break;
+      const partial = this.sql.exec(`SELECT
+        strftime('%Y-%m-%d', occurred_at_ms / 1000, 'unixepoch') AS day,
+        provider, grant_key AS grantKey, grant_lane AS grantLane,
+        json_extract(event_json, '$.model') AS model,
+        COUNT(*) AS requests, COALESCE(SUM(input_tokens), 0) AS inputTokens,
+        COALESCE(SUM(output_tokens), 0) AS outputTokens,
+        COALESCE(SUM(json_extract(event_json, '$.cached_input_tokens')), 0) AS cacheReadTokens,
+        COALESCE(SUM(json_extract(event_json, '$.cache_write_input_tokens')), 0) AS cacheWriteTokens,
+        COALESCE(SUM(actual_cost_micros), 0) AS costMicros
+        FROM usage_events NOT INDEXED WHERE ${lower}rowid <= ? AND policy_id = ? AND occurred_at_ms >= ? AND occurred_at_ms <= ?
+        GROUP BY day, provider, grant_key, grant_lane, model`, ...bindings, page.last, policyId, since, until) as unknown as Iterable<GrantUsageRow>;
+      for (const row of partial) {
+        const id = JSON.stringify([row.day, row.provider, row.grantKey, row.grantLane, row.model]);
+        const group = grouped.get(id);
+        if (group) {
+          for (const key of grantUsageMetrics) group[key] += row[key];
+        } else {
+          if (grouped.size === 8192) return errorResponse("usage_range_too_large", "choose a shorter range; grant usage exceeds 8192 groups", 422);
+          grouped.set(id, row);
+        }
+      }
+      after = page.last;
+      if (page.count < batchSize) break;
+    }
+    const daily = [...grouped.values()].sort((left, right) => {
+      for (const key of ["day", "provider", "grantKey", "grantLane", "model"] as const) {
+        const order = compareSqlText(left[key], right[key]);
+        if (order) return order;
+      }
+      return 0;
+    });
+    const grants = new Map<string, GrantUsageSnapshot["grants"][number]>();
+    const lanes = new Map<string, GrantUsageSnapshot["lanes"][number]>();
+    for (const row of daily) {
+      const grantId = JSON.stringify([row.provider, row.grantKey, row.grantLane]);
+      const laneId = JSON.stringify([row.provider, row.grantLane]);
+      const grant = grants.get(grantId) ?? { provider: row.provider, grantKey: row.grantKey, grantLane: row.grantLane, ...emptyGrantUsage() };
+      const lane = lanes.get(laneId) ?? { provider: row.provider, grantLane: row.grantLane, ...emptyGrantUsage() };
+      for (const key of grantUsageMetrics) { grant[key] += row[key]; lane[key] += row[key]; }
+      grants.set(grantId, grant); lanes.set(laneId, lane);
+    }
+    return json({ days, since, until, retentionDays: usageWindowDays, grants: [...grants.values()], lanes: [...lanes.values()], daily } satisfies GrantUsageSnapshot);
+  }
+
+  // Builds one shard's usage snapshot. Shared totals cover every event in the
+  // requested policies; recent events and personal totals are limited to the
+  // caller's own rows; the admin scope instead gets a per-principal breakdown.
+  private snapshot(policyIds: string[], scope: UsageEventScope, limit: number, pending: string | null): UsageSnapshot {
+    const now = Date.now();
+    this.cleanup(now - usageRetentionMs);
+    const cutoffs = usageCutoffs(now, usageWindowDays);
     const uniquePolicyIds = [...new Set(policyIds.filter(Boolean))];
     const where = uniquePolicyIds.length ? `policy_id IN (${uniquePolicyIds.map(() => "?").join(", ")}) AND occurred_at_ms >= ?` : "occurred_at_ms >= ?";
-    const params = [...uniquePolicyIds, cutoffs.rolling];
-    const dailyParams = [...uniquePolicyIds, cutoffs.daily];
-    const eventFilter = this.eventFilter(where, params, scope);
-    const events = rows<{ event_json: string }>(this.sql.exec(`SELECT event_json FROM usage_events WHERE ${eventFilter.where} ORDER BY occurred_at_ms DESC LIMIT ?`, ...eventFilter.params, limit)).map((row) => JSON.parse(row.event_json));
-    // Count final unavailable outcomes, not historical unpriced-tier admission denials.
-    const unpricedCount = "COALESCE(SUM(CASE WHEN json_extract(event_json, '$.cost_basis') = 'unpriced_usage' THEN 1 ELSE 0 END), 0) AS unpriced_request_count";
-    const summary = first<SummaryRow>(this.sql.exec(`SELECT COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, ${unpricedCount} FROM usage_events WHERE ${where}`, ...params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
-    const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, ${unpricedCount} FROM usage_events WHERE ${where} GROUP BY provider ORDER BY request_count DESC`, ...params) as unknown as Iterable<ProviderRow>);
-    const daily = rows<DailyRow>(this.sql.exec(`SELECT CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000 AS day_start_ms, COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, ${unpricedCount} FROM usage_events WHERE ${where} GROUP BY CAST(occurred_at_ms / 86400000 AS INTEGER) ORDER BY day_start_ms`, ...dailyParams) as unknown as Iterable<DailyRow>);
-    return { ledger: "durable_object", summary: camelSummary(summary), providers: providers.map(camelProvider), daily: daily.map(camelDaily), events };
+    const range = { where, params: [...uniquePolicyIds, cutoffs.rolling] };
+    const dailyRange = { where, params: [...uniquePolicyIds, cutoffs.daily] };
+    const owner = this.ownerCondition(range, scope, pending);
+    // Ownership is filtered in SQL before LIMIT so other principals' rows never displace the caller's.
+    const eventRange = owner ? restrict(range, owner) : range;
+    const events = rows<{ event_json: string }>(this.sql.exec(`SELECT event_json FROM usage_events WHERE ${eventRange.where} ORDER BY occurred_at_ms DESC LIMIT ?`, ...eventRange.params, limit)).map((row) => JSON.parse(row.event_json));
+    if (usageRollupProgress(this.sql).complete) {
+      const rollupRange = { where: uniquePolicyIds.length ? `policy_id IN (${uniquePolicyIds.map(() => "?").join(", ")})` : "1", params: uniquePolicyIds };
+      const daily = restrict(rollupRange, { where: "day_start_ms >= ?", params: [cutoffs.daily] });
+      const columns = { total: rollupTotalColumns, summary: rollupSummaryColumns };
+      const snapshot: UsageSnapshot = { ledger: "durable_object", ...this.totals(rollupRange, daily, columns, true), events };
+      const rollupOwner = rollupOwnerCondition(this.sql, scope);
+      if (rollupOwner) snapshot.personal = this.totals(restrict(rollupRange, rollupOwner), restrict(daily, rollupOwner), columns, true);
+      else snapshot.principals = this.rollupPrincipalTotals(rollupRange);
+      return snapshot;
+    }
+    const columns = usageSummaryColumns(pending ? `CASE WHEN ${pending} THEN json_extract(event_json, '$.cost_basis') ELSE cost_basis END` : "cost_basis");
+    const snapshot: UsageSnapshot = { ledger: "durable_object", ...this.totals(range, dailyRange, columns), events };
+    if (owner) snapshot.personal = this.totals(restrict(range, owner), restrict(dailyRange, owner), columns);
+    else snapshot.principals = this.principalTotals(range, columns.summary, pending);
+    return snapshot;
   }
 
-  private eventFilter(where: string, params: Array<string | number>, scope: UsageEventScope) {
-    if (scope.kind === "admin") return { where, params };
-    if (scope.kind === "credential") return { where: `${where} AND json_extract(event_json, '$.principal_id') IS NULL AND json_extract(event_json, '$.credential_id') = ?`, params: [...params, scope.id] };
+  // Aggregates request, token, and spend totals overall, per provider, and per UTC day.
+  private totals(range: SqlRange, dailyRange: SqlRange, columns: { total: string; summary: string }, rollups = false): UsageTotals {
+    const table = rollups ? "usage_rollups" : "usage_events";
+    const day = rollups ? "day_start_ms" : "CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000";
+    const summary = first<SummaryRow>(this.sql.exec(`SELECT ${columns.summary} FROM ${table} WHERE ${range.where}`, ...range.params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
+    const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, ${columns.total} FROM ${table} WHERE ${range.where} GROUP BY provider ORDER BY request_count DESC`, ...range.params) as unknown as Iterable<ProviderRow>);
+    const daily = rows<DailyRow>(this.sql.exec(`SELECT ${day} AS day_start_ms, ${columns.total} FROM ${table} WHERE ${dailyRange.where} GROUP BY ${day} ORDER BY day_start_ms`, ...dailyRange.params) as unknown as Iterable<DailyRow>);
+    return { summary: camelSummary(summary), providers: providers.map(camelProvider), daily: daily.map(camelDaily) };
+  }
+
+  private rollupPrincipalTotals(range: SqlRange): PrincipalUsage[] {
+    const grouped = rows<PrincipalRow>(this.sql.exec(`SELECT json_extract(principal_key, '$') AS principal_id,
+      CASE WHEN principal_key = 'null' THEN json_extract(credential_key, '$') END AS credential_id,
+      ${rollupSummaryColumns} FROM usage_rollups WHERE ${range.where} GROUP BY 1, 2`, ...range.params) as unknown as Iterable<PrincipalRow>);
+    return mergePrincipalUsage(grouped.map(({ principal_id, credential_id, ...summary }) => ({
+      principalId: principal_id === null ? null : normalizeEmail(principal_id) ?? principal_id,
+      credentialId: principal_id === null ? credential_id : null,
+      summary: camelSummary(summary),
+    })));
+  }
+
+  // Groups totals by attributed principal, or by credential for events without one.
+  // Raw principal IDs are merged under the authority's email normalizer so case and
+  // whitespace variants of one identity report as a single row.
+  private principalTotals(range: SqlRange, summaryColumns: string, pending: string | null): PrincipalUsage[] {
+    const principal = pending ? `CASE WHEN ${pending} THEN CASE WHEN json_type(event_json, '$.principal_id') = 'text' THEN json_extract(event_json, '$.principal_id') END ELSE principal_id END` : "principal_id";
+    const credential = pending ? `CASE WHEN ${pending} THEN json_extract(event_json, '$.credential_id') ELSE credential_id END` : "credential_id";
+    const grouped = rows<PrincipalRow>(this.sql.exec(`SELECT
+      ${principal} AS principal_id,
+      CASE WHEN (${principal}) IS NOT NULL THEN NULL ELSE ${credential} END AS credential_id,
+      ${summaryColumns} FROM usage_events WHERE ${range.where} GROUP BY 1, 2`, ...range.params) as unknown as Iterable<PrincipalRow>);
+    return mergePrincipalUsage(grouped.map(({ principal_id, credential_id, ...summary }) => ({
+      principalId: principal_id === null ? null : normalizeEmail(principal_id) ?? principal_id,
+      credentialId: principal_id === null && typeof credential_id === "string" ? credential_id : null,
+      summary: camelSummary(summary),
+    })));
+  }
+
+  // Returns the SQL condition limiting rows to the caller's own events, or null for admin scope.
+  private ownerCondition(range: SqlRange, scope: UsageEventScope, pending: string | null): SqlRange | null {
+    if (scope.kind === "admin") return null;
+    if (scope.kind === "credential") return pending
+      ? { where: `((NOT (${pending}) AND principal_id IS NULL AND principal_nontext = 0 AND credential_id = ?) OR (${pending} AND json_extract(event_json, '$.principal_id') IS NULL AND json_extract(event_json, '$.credential_id') = ?))`, params: [scope.id, scope.id] }
+      : { where: "principal_id IS NULL AND principal_nontext = 0 AND credential_id = ?", params: [scope.id] };
     const principal = normalizeEmail(scope.id);
     if (!principal) return { where: "0", params: [] };
+    if (!pending) return { where: "principal_key = ?", params: [principal] };
     // SQLite lower/trim do not implement JS Unicode identity normalization.
     // Match retained raw IDs with the authority's normalizer, then filter in SQL
     // before LIMIT. Never derive historical ownership from today's credentials.
-    const candidates = rows<{ principal_id: string }>(this.sql.exec(`SELECT DISTINCT json_extract(event_json, '$.principal_id') AS principal_id FROM usage_events WHERE ${where} AND json_type(event_json, '$.principal_id') = 'text'`, ...params));
+    const candidates = rows<{ principal_id: string }>(this.sql.exec(`SELECT DISTINCT json_extract(event_json, '$.principal_id') AS principal_id FROM usage_events WHERE ${range.where} AND ${pending} AND json_type(event_json, '$.principal_id') = 'text'`, ...range.params));
     const aliases = candidates.map((row) => row.principal_id).filter((id) => normalizeEmail(id) === principal);
-    return { where: `${where} AND json_type(event_json, '$.principal_id') = 'text' AND json_extract(event_json, '$.principal_id') IN (SELECT value FROM json_each(?))`, params: [...params, JSON.stringify(aliases)] };
+    return { where: `((NOT (${pending}) AND principal_key = ?) OR (${pending} AND json_type(event_json, '$.principal_id') = 'text' AND json_extract(event_json, '$.principal_id') IN (SELECT value FROM json_each(?))))`, params: [principal, JSON.stringify(aliases)] };
   }
 
-  private cleanup(): void { this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", Date.now() - usageRetentionMs); }
+  // The fixed upper bound excludes new, already-projected ingests. Advance rows and
+  // watermark atomically; pending rows retain JSON query semantics until visited.
+  private backfillAttribution(): string | null {
+    const migration = first<{ last_rowid: number; upper_rowid: number; complete: number }>(this.sql.exec("SELECT last_rowid, upper_rowid, complete FROM usage_attribution_migration WHERE id = 1"))!;
+    if (migration.complete) return null;
+    const batch = rows<{ rowid: number; event_json: string }>(this.sql.exec("SELECT rowid, event_json FROM usage_events WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?", migration.last_rowid, migration.upper_rowid, usageAttributionBatchSize));
+    const last = batch.at(-1)?.rowid ?? migration.upper_rowid;
+    const complete = batch.length < usageAttributionBatchSize || last === migration.upper_rowid;
+    this.state.storage.transactionSync(() => {
+      for (const row of batch) this.sql.exec("UPDATE usage_events SET principal_id = ?, principal_key = ?, credential_id = ?, cost_basis = ?, principal_nontext = ? WHERE rowid = ?", ...usageAttribution(JSON.parse(row.event_json)), row.rowid);
+      this.sql.exec("UPDATE usage_attribution_migration SET last_rowid = ?, complete = ? WHERE id = 1", last, complete ? 1 : 0);
+    });
+    return complete ? null : `(rowid > ${last} AND rowid <= ${migration.upper_rowid})`;
+  }
+
+  private cleanup(cutoff = Date.now() - usageRetentionMs): void {
+    this.state.storage.transactionSync(() => withUsageReportPair(this.sql, () => withUsageRetention(this.sql, cutoff, () => {
+      this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", cutoff);
+      this.sql.exec("DELETE FROM usage_report_events WHERE occurred_at_ms < ?", cutoff);
+    })));
+  }
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL)");
+    this.state.storage.transactionSync(() => {
+      const columns = new Set(rows<{ name: string }>(this.sql.exec("PRAGMA table_info(usage_events)")).map(row => row.name));
+      if (!columns.has("grant_key")) this.sql.exec("ALTER TABLE usage_events ADD COLUMN grant_key TEXT");
+      if (!columns.has("grant_lane")) this.sql.exec("ALTER TABLE usage_events ADD COLUMN grant_lane TEXT");
+      for (const column of ["principal_id", "principal_key", "credential_id", "cost_basis"]) {
+        if (!columns.has(column)) this.sql.exec(`ALTER TABLE usage_events ADD COLUMN ${column} TEXT`);
+      }
+      if (!columns.has("principal_nontext")) this.sql.exec("ALTER TABLE usage_events ADD COLUMN principal_nontext INTEGER NOT NULL DEFAULT 0");
+      this.sql.exec("CREATE TABLE IF NOT EXISTS usage_attribution_migration (id INTEGER PRIMARY KEY CHECK (id = 1), last_rowid INTEGER NOT NULL, upper_rowid INTEGER NOT NULL, complete INTEGER NOT NULL)");
+      if (!first(this.sql.exec("SELECT id FROM usage_attribution_migration WHERE id = 1"))) {
+        this.sql.exec("INSERT INTO usage_attribution_migration (id, last_rowid, upper_rowid, complete) SELECT 1, 0, COALESCE(MAX(rowid), 0), CASE WHEN MAX(rowid) IS NULL THEN 1 ELSE 0 END FROM usage_events");
+      }
+    });
+    this.state.storage.transactionSync(() => ensureUsageReportSchema(this.sql));
+    this.state.storage.transactionSync(() => ensureUsageRollups(this.sql));
+    this.state.storage.transactionSync(() => ensureUsageReportCells(this.sql));
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_occurred_at ON usage_events (occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy ON usage_events (policy_id, occurred_at_ms DESC)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy_principal ON usage_events (policy_id, principal_key, occurred_at_ms DESC)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy_credential ON usage_events (policy_id, credential_id, occurred_at_ms DESC)");
   }
 }
+
+// SQLite BINARY sorts nulls first and valid UTF-8 text by code point, not locale.
+function compareSqlText(left: string | null, right: string | null): number {
+  if (left === right) return 0;
+  if (left === null) return -1;
+  if (right === null) return 1;
+  let i = 0, j = 0;
+  while (i < left.length && j < right.length) {
+    const a = left.codePointAt(i)!, b = right.codePointAt(j)!;
+    if (a !== b) return a - b;
+    i += a > 0xffff ? 2 : 1; j += b > 0xffff ? 2 : 1;
+  }
+  return left.length - right.length;
+}
+
+const grantUsageMetrics = ["requests", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costMicros"] as const;
+function emptyGrantUsage(): GrantUsageTotals { return { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0 }; }
 
 export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
   for (const message of batch.messages) {
@@ -201,61 +512,114 @@ export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promis
       else {
         const job = message.body;
         const objectName = "ledger" in job ? job.ledger.objectName : `${job.tenant_id}:${job.policy_id}${job.principal_id ? `:${job.principal_id}` : ""}`;
-        await settleLedger(env, objectName, job.request);
+        if (job.kind === "budget_charge") await chargeLedger(env, objectName, job.request);
+        else await settleLedger(env, objectName, job.request);
       }
       message.ack();
     } catch { message.retry(); }
   }
 }
 
-export async function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest): Promise<void> {
-  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
-  const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(request) });
-  if (!response.ok || (await response.json<{ settled: boolean }>()).settled !== true) throw new Error("budget ledger did not acknowledge settlement");
+export class BudgetSettlementError extends Error {
+  readonly disposition: "missing" | "conflict" | "unavailable";
+  constructor(disposition: BudgetSettlementError["disposition"]) { super("budget ledger did not acknowledge settlement"); this.disposition = disposition; }
 }
 
-export async function ingestUsage(env: Env, event: UsageEvent): Promise<void> {
-  const response = await usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event) });
-  if (!response.ok) throw new Error(`usage ledger write returned ${response.status}`);
+export function chargeLedger(env: Env, objectName: string, request: BudgetChargeRequest, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
+  return chargeLedgerNamespace(env.BUDGET_LEDGER, objectName, request, search, cover);
 }
 
-export async function usageSnapshot(env: Env, tenantId: string, policyId: string, scope: UsageEventScope, limit = 100): Promise<UsageSnapshot> {
-  return usageSnapshots(env, [{ tenantId, policyId }], scope, limit);
+export async function chargeLedgerNamespace(namespace: Env["BUDGET_LEDGER"], objectName: string, request: BudgetChargeRequest, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
+  if (cover) {
+    const receipt = await musicCoverLedgerControl<{ charged?: boolean; chargeId?: string }>(namespace, objectName, "/charge", request, cover, true);
+    if (receipt.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
+    return;
+  }
+  if (search) {
+    const receipt = await search.controlJson<{ charged?: boolean; chargeId?: string }>(request,
+      (body, signal) => namespace.get(namespace.idFromName(objectName)).fetch("https://clawrouter.internal/charge", { method: "POST", body, signal }), true);
+    if (receipt.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
+    return;
+  }
+  const response = await namespace.get(namespace.idFromName(objectName)).fetch("https://clawrouter.internal/charge", { method: "POST", body: JSON.stringify(request) });
+  const receipt = response.ok ? await response.json<{ charged?: boolean; chargeId?: string }>().catch(() => null) : null;
+  if (receipt?.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
 }
 
-export async function usageSnapshots(env: Env, policies: Array<{ policyId: string; tenantId: string }>, scope: UsageEventScope, limit = 100): Promise<UsageSnapshot> {
-  const shards = new Map(policies.map(policy => [usageShardName(policy.tenantId, policy.policyId), policy]));
-  const snapshots = await Promise.all([...shards.values()].map(policy => currentUsageSnapshot(env, policy.tenantId, policy.policyId, scope, limit)));
-  return mergeUsageSnapshots(snapshots, limit);
+export function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
+  return settleLedgerNamespace(env.BUDGET_LEDGER, objectName, request, signal, search, cover);
 }
 
-async function currentUsageSnapshot(env: Env, tenantId: string, policyId: string, scope: UsageEventScope, limit: number): Promise<UsageSnapshot> {
-  const url = new URL("https://clawrouter.internal/snapshot");
-  url.searchParams.set("policy_id", policyId);
-  url.searchParams.set("limit", String(limit));
-  url.searchParams.set("events", scope.kind);
-  if (scope.kind !== "admin") url.searchParams.set("event_owner", scope.id);
-  const response = await usageStub(env, tenantId, policyId).fetch(url);
-  if (!response.ok) throw new Error(`usage snapshot returned ${response.status}`);
-  return response.json<UsageSnapshot>();
+export async function settleLedgerNamespace(namespace: Env["BUDGET_LEDGER"], objectName: string, request: BudgetSettleRequest, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
+  if (cover) {
+    const receipt = await musicCoverLedgerControl<{ settled?: boolean }>(namespace, objectName, "/settle", request, cover, true);
+    if (receipt.settled !== true) throw new BudgetSettlementError("unavailable");
+    return;
+  }
+  const stub = namespace.get(namespace.idFromName(objectName));
+  if (search) {
+    const receipt = await search.controlJson<{ settled?: boolean }>(request,
+      (body, active) => stub.fetch("https://clawrouter.internal/settle", { method: "POST", body, signal: active }), true);
+    if (receipt.settled !== true) throw new BudgetSettlementError("unavailable");
+    return;
+  }
+  const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(request), signal });
+  if (!response.ok) throw new BudgetSettlementError(response.status === 404 ? "missing" : response.status === 409 ? "conflict" : "unavailable");
+  if ((await response.json<{ settled: boolean }>().catch(() => null))?.settled !== true) throw new BudgetSettlementError("unavailable");
 }
 
-export async function budgetStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; budgetScope?: "policy" | "principal" }, principal?: string | null) {
+export function ingestUsage(env: Env, event: UsageEvent, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<UsageIngestReceipt> {
+  return ingestUsageNamespace(env.USAGE_LEDGER, event, signal, search, cover);
+}
+
+export async function ingestUsageNamespace(namespace: Env["USAGE_LEDGER"], event: UsageEvent, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<UsageIngestReceipt> {
+  const receipt: unknown = cover
+    ? await cover.controlJson(event, (body, active) => namespace.get(namespace.idFromName(usageShardName(event.tenant_id, event.policy_id))).fetch("https://clawrouter.internal/ingest", { method: "POST", body, signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), true)
+    : search
+    ? await search.controlJson<unknown>(event, (body, active) => namespace.get(namespace.idFromName(usageShardName(event.tenant_id, event.policy_id))).fetch("https://clawrouter.internal/ingest", { method: "POST", body, signal: active }), true)
+    : await (async () => {
+      const response = await namespace.get(namespace.idFromName(usageShardName(event.tenant_id, event.policy_id))).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event), signal });
+      if (!response.ok) throw new Error(`usage ledger write returned ${response.status}`);
+      return response.json<unknown>().catch(() => null);
+    })();
+  // A 2xx from an older producer does not confirm this event's disposition.
+  // Queue retry and direct-fallback failure keep their existing owners.
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)
+    || !("eventId" in receipt) || typeof receipt.eventId !== "string" || receipt.eventId !== event.id
+    || !("outcome" in receipt) || (receipt.outcome !== "stored" && receipt.outcome !== "duplicate" && receipt.outcome !== "expired_by_retention")) {
+    throw new Error("usage ledger did not acknowledge ingestion");
+  }
+  return { eventId: receipt.eventId, outcome: receipt.outcome };
+}
+
+export async function budgetStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; budgetScope?: "policy" | "principal"; budgetOverride?: import("./types").BudgetOverride }, principal?: string | null, override = policy.budgetOverride, observeUncapped = false) {
+  const at = Date.now();
+  const [monthly, daily, weekly] = await Promise.all([
+    budgetWindowStatus(env, policyId, policy, principal, "monthly", at, observeUncapped),
+    budgetWindowStatus(env, policyId, { ...policy, monthlyBudgetMicros: policy.dailyBudgetMicros }, principal, "daily", at, observeUncapped),
+    budgetWindowStatus(env, policyId, { ...policy, monthlyBudgetMicros: policy.weeklyBudgetMicros }, principal, "weekly", at, observeUncapped),
+  ]);
+  const date = new Date(at);
+  return { ...monthly, ...(override ? { override: Object.hasOwn(override, "monthlyBudgetMicros") } : {}), resetsAt: new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1)).toISOString(), daily: { ...daily, ...(override ? { override: Object.hasOwn(override, "dailyBudgetMicros") } : {}), resetsAt: nextDailyReset(at) }, weekly: { ...weekly, ...(override ? { override: Object.hasOwn(override, "weeklyBudgetMicros") } : {}), resetsAt: nextWeeklyReset(at) } };
+}
+
+async function budgetWindowStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; budgetScope?: "policy" | "principal"; budgetOverride?: import("./types").BudgetOverride }, principal?: string | null, window: "monthly" | "daily" | "weekly" = "monthly", at = Date.now(), observeUncapped = false) {
   const limit = policy.monthlyBudgetMicros;
-  if (limit == null) return { configured: false, ledger: "unmetered", windowKey: null, limitMicros: null, spentMicros: null, remainingMicros: null };
+  if (limit == null && !policy.budgetOverride && !observeUncapped) return { configured: false, ledger: "unmetered", windowKey: null, limitMicros: null, spentMicros: null, remainingMicros: null };
   if (policy.budgetScope === "principal" && !principal) return { configured: true, ledger: "per_principal", windowKey: null, limitMicros: limit, spentMicros: null, remainingMicros: null };
-  const address = budgetLedgerAddress(policyId, policy, principal);
-  if (limit === 0) return { configured: true, ledger: "blocked", windowKey: address.windowKey, limitMicros: 0, spentMicros: 0, remainingMicros: 0 };
+  const address = (window === "weekly" ? weeklyBudgetLedgerAddress : window === "daily" ? dailyBudgetLedgerAddress : budgetLedgerAddress)(policyId, policy, principal, at);
+  if (limit === 0 && !policy.budgetOverride && !observeUncapped) return { configured: true, ledger: "blocked", windowKey: address.windowKey, limitMicros: 0, spentMicros: 0, remainingMicros: 0 };
   try {
     const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(address.objectName));
     const url = new URL("https://clawrouter.internal/status");
-    url.searchParams.set("policy_id", address.policyId); url.searchParams.set("window_key", address.windowKey); url.searchParams.set("limit_micros", String(limit));
+    url.searchParams.set("policy_id", address.policyId); url.searchParams.set("window_key", address.windowKey); url.searchParams.set("limit_micros", String(limit ?? Number.MAX_SAFE_INTEGER));
+    url.searchParams.set("scope_key", address.scopeKey);
     const response = await stub.fetch(url);
     if (!response.ok) throw new Error(`budget status returned ${response.status}`);
     const status = await response.json<{ spentMicros: number; remainingMicros: number }>();
-    return { configured: true, ledger: "durable_object", windowKey: address.windowKey, limitMicros: limit, spentMicros: status.spentMicros, remainingMicros: status.remainingMicros };
+    return { configured: limit != null, ledger: limit == null ? "unmetered" : "durable_object", windowKey: address.windowKey, limitMicros: limit ?? null, spentMicros: status.spentMicros, remainingMicros: limit == null ? null : status.remainingMicros };
   } catch {
-    return { configured: true, ledger: "unavailable", windowKey: address.windowKey, limitMicros: limit, spentMicros: null, remainingMicros: null };
+    return { configured: limit != null, ledger: "unavailable", windowKey: address.windowKey, limitMicros: limit, spentMicros: null, remainingMicros: null };
   }
 }
 
@@ -266,6 +630,7 @@ export async function providerBudgetStatus(env: Env, providerId: string, limitMi
     const url = new URL("https://clawrouter.internal/status");
     url.searchParams.set("policy_id", address.policyId);
     url.searchParams.set("window_key", address.windowKey);
+    url.searchParams.set("scope_key", address.scopeKey);
     url.searchParams.set("limit_micros", String(limitMicros));
     const response = await stub.fetch(url);
     if (!response.ok) throw new Error(`provider budget status returned ${response.status}`);
@@ -275,16 +640,37 @@ export async function providerBudgetStatus(env: Env, providerId: string, limitMi
   }
 }
 
-export function usageStub(env: Env, tenantId: string, policyId: string): DurableObjectStub { return env.USAGE_LEDGER.get(env.USAGE_LEDGER.idFromName(usageShardName(tenantId, policyId))); }
-
 function numberParam(url: URL, name: string): number | null { const value = Number(url.searchParams.get(name)); return Number.isSafeInteger(value) && value >= 0 ? value : null; }
 function rows<T>(cursor: Iterable<T>): T[] { return [...cursor]; }
+interface SqlRange { where: string; params: Array<string | number> }
+function restrict(range: SqlRange, condition: SqlRange): SqlRange { return { where: `${range.where} AND ${condition.where}`, params: [...range.params, ...condition.params] }; }
 function first<T>(cursor: Iterable<T>): T | undefined { return rows(cursor)[0]; }
 
 interface SummaryRow { request_count: number; success_count: number; error_count: number; input_tokens: number; output_tokens: number; total_tokens: number; actual_cost_micros: number; unpriced_request_count: number }
 interface ProviderRow { provider: string; request_count: number; success_count: number; error_count: number; total_tokens: number; actual_cost_micros: number; unpriced_request_count: number }
+interface PrincipalRow extends SummaryRow { principal_id: string | null; credential_id: string | null }
+// Count final unavailable outcomes, not historical unpriced-tier admission denials.
+function usageSummaryColumns(costBasis: string) {
+  const total = `COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, COALESCE(SUM(CASE WHEN ${costBasis} = 'unpriced_usage' THEN 1 ELSE 0 END), 0) AS unpriced_request_count`;
+  return { total, summary: `${total}, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens` };
+}
+
+function usageAttribution(event: UsageEvent): [string | null, string | null, string | null, string | null, number] {
+  const principal = typeof event.principal_id === "string" ? event.principal_id : null;
+  // Non-text historical principals count under credentials in admin grouping,
+  // but must not become credential-owned events when their projection is NULL.
+  return [principal, principal === null ? null : normalizeEmail(principal), typeof event.credential_id === "string" ? event.credential_id : null, typeof event.cost_basis === "string" ? event.cost_basis : null, event.principal_id != null && principal === null ? 1 : 0];
+}
 interface DailyRow { day_start_ms: number; request_count: number; success_count: number; error_count: number; total_tokens: number; actual_cost_micros: number; unpriced_request_count: number }
 function emptySummary(): SummaryRow { return { request_count: 0, success_count: 0, error_count: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, actual_cost_micros: 0, unpriced_request_count: 0 }; }
 function camelSummary(row: SummaryRow) { return { requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, inputTokens: row.input_tokens, outputTokens: row.output_tokens, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros, unpricedRequestCount: row.unpriced_request_count }; }
 function camelProvider(row: ProviderRow) { return { provider: row.provider, requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros, unpricedRequestCount: row.unpriced_request_count }; }
 function camelDaily(row: DailyRow) { return { dayStartMs: row.day_start_ms, requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros, unpricedRequestCount: row.unpriced_request_count }; }
+
+// Inactive cover caller only. Slot acquisition precedes serialization and fetch.
+export function musicCoverLedgerControl<T>(namespace: Env["BUDGET_LEDGER"], objectName: string, path: "/reserve" | "/dispatch" | "/settle" | "/charge", body: unknown,
+  owner: MiniMaxMusicCoverControl, mandatory = false): Promise<T> {
+  return owner.controlJson<T>(body, (text, signal) => namespace.get(namespace.idFromName(objectName))
+    .fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal, redirect: "manual",
+      headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), mandatory);
+}

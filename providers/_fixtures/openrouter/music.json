@@ -1,0 +1,15 @@
+{
+  "request": {
+    "model": "google/lyria-3-pro-preview", "messages": [{ "role": "user", "content": "A short calm piano melody.\n\nInstrumental only. No vocals, no sung lyrics, no spoken word.\n\nTarget duration: about 30 seconds." }],
+    "modalities": ["text", "audio"], "audio": { "format": "wav" }, "stream": true
+  },
+  "frames": [
+    { "id": "gen-synthetic-music", "model": "google/lyria-3-pro-preview", "choices": [{ "index": 0, "delta": { "audio": { "data": "Ukl", "transcript": "Synthetic " } }, "finish_reason": null }] },
+    { "id": "gen-synthetic-music", "choices": [{ "index": 0, "delta": { "audio": { "data": "GRgQAAABXQVZF", "transcript": "transcript." } }, "finish_reason": null }] },
+    { "id": "gen-synthetic-music", "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] },
+    { "id": "gen-synthetic-music", "choices": [], "usage": { "prompt_tokens": 30, "completion_tokens": 100, "total_tokens": 130, "cost": 0.08 } }
+  ],
+  "terminal": "[DONE]",
+  "audioBase64": "UklGRgQAAABXQVZF",
+  "note": "Sanitized synthetic WAV-header bytes, split base64 quartet and usage; not a complete playable song or live tariff proof."
+}

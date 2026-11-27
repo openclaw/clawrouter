@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "catalog-protocol",
+      "split": "development",
+      "base": "5c448b2e13ff42d27cee321d314f65193f92e70e",
+      "oracle": "4f315b0d13eeaf41561810197c1d34d580ad2bd6",
+      "editPaths": [
+        "scripts/compile-providers.mjs"
+      ],
+      "visibleTests": [
+        "test/provider-compiler.test.mjs"
+      ],
+      "hiddenTests": [
+        "test/provider-catalog-protocol.test.mjs"
+      ],
+      "instruction": "The provider compiler accepts contradictory registered model-catalog declarations. Enforce the existing finite catalog request/response pairs, explicit GET, omitted streaming/WebSocket transport, canonical list/retrieve capabilities and GET-only capability methods. Only the supported OpenAI and Anthropic model_id retrieve variants may use a path parameter. Preserve unrelated protocols and generic Chat defaults. Do not infer catalog behavior merely from a format name suffix."
+    },
+    {
+      "id": "native-model-identity",
+      "split": "development",
+      "base": "caf0b6db0cf187fdd9a7ce00fff50496a1843306",
+      "oracle": "1545926a86203bddf56f1eb831b6ee2f516d7084",
+      "editPaths": [
+        "worker/providers.ts"
+      ],
+      "visibleTests": [
+        "worker/test/model-availability-runtime.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/declared-native-model-identity.test.mjs"
+      ],
+      "instruction": "Some native requests use a declared model identity that differs from its physical upstream alias. Resolve an exact finite native identity through the provider's declared routing prefix and model card, preserving that card's endpoint facts and pricing. Reject ambiguous declarations. Do not reinterpret deployment templates, foreign prefixes, malformed IDs or opaque passthrough names as registered identities. Preserve existing unified and native alias behavior and capability/budget admission."
+    },
+    {
+      "id": "music-response-lifetime",
+      "split": "development",
+      "base": "2df30ef4fb3b81d5818b8c5fb928b16711ef4445",
+      "oracle": "e90749c31ad11bd780b5aaccc55d71781c39c05a",
+      "editPaths": [
+        "worker/native-openrouter-music.ts"
+      ],
+      "visibleTests": [
+        "worker/test/native-openrouter-music.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/native-openrouter-music.test.mjs"
+      ],
+      "instruction": "The native OpenRouter music response wrapper retains the prepared request and caller selection for the response lifetime. Response processing must retain only immutable selected model and output-format scalars. It must still work after the prepared request is mutated and revoked. Preserve bounded native byte streaming, MP3/WAV checks, model identity, EOF validation, cancellation, leases and unknown token accounting. Do not decode or retain the full audio payload."
+    }
+  ]
+}

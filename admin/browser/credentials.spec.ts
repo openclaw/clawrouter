@@ -1,0 +1,975 @@
+import AxeBuilder from "@axe-core/playwright";
+import { expect, test, type Page } from "@playwright/test";
+import type { AccessPolicy, ProxyCredential } from "../src/ui-types";
+
+test("admin creation is create-only, guarded synchronously, and survives a failed refresh", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await draft(page, "created_key");
+  state.failBootstrap = true;
+  await page.getByRole("button", { name: "Issue credential", exact: true }).evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+  await expect(page.locator(".issuedKey code")).toHaveText(/^clawrouter-live-created_key-[0-9a-f]{48}$/);
+  expect(state.writes).toHaveLength(1);
+  expect(state.writes[0]).toMatchObject({ path: "/v1/admin/credentials", method: "POST", body: { credentialId: "created_key", policyId: "team_policy", principalId: null } });
+  expect(state.writes[0].body.secretSha256).toMatch(/^[0-9a-f]{64}$/);
+  await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+  await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeEnabled();
+  await expect(page.locator(".facts")).toContainText("created_key");
+});
+
+test("a collision retains the create draft and a confirmed rejection can be retried", async ({ page }) => {
+  const state = await fixture(page);
+  state.reject = "credential_exists";
+  await openAdmin(page);
+  await draft(page, "owned_key");
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".inspector")).toContainText("credential_exists");
+  await expect(page.getByRole("textbox", { name: "credential id", exact: true })).toHaveValue("owned_key");
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  state.reject = "";
+  await page.getByRole("textbox", { name: "credential id", exact: true }).fill("another_key");
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".issuedKey code")).toContainText("another_key");
+  expect(state.writes.map((write) => [write.method, write.path])).toEqual([["POST", "/v1/admin/credentials"], ["POST", "/v1/admin/credentials"]]);
+});
+
+test("personal creation sends a create-only request without selecting an owner", async ({ page }) => {
+  const state = await fixture(page);
+  await page.goto("/");
+  await connected(page);
+  await page.locator(".myKeysPanel").getByRole("button", { name: "Create key", exact: true }).click();
+  await expect(page.locator(".issuedKey code")).toHaveText(/^clawrouter-live-key_[0-9a-f]{16}-[0-9a-f]{48}$/);
+  expect(state.writes).toHaveLength(1);
+  expect(state.writes[0].path).toBe("/v1/session/credentials");
+  expect(Object.keys(state.writes[0].body).sort()).toEqual(["credentialId", "expiresAt", "policyId", "secretSha256", "serviceTiers"]);
+});
+
+for (const surface of ["admin", "personal"] as const) {
+  test(`dismissing a pending ${surface} secret acknowledges dismissal without replaying the write`, async ({ page }) => {
+    const state = await fixture(page);
+    const pending = deferred();
+    state.holdMutation = pending.promise;
+    if (surface === "admin") {
+      await openAdmin(page);
+      await draft(page, "build_runner");
+    } else {
+      state.role = "user";
+      await page.goto("/");
+      await connected(page);
+    }
+    const panel = page.locator(surface === "admin" ? ".inspector" : ".myKeysPanel");
+    const submit = panel.getByRole("button", { name: surface === "admin" ? "Issue credential" : "Renew", exact: true });
+    await submit.click();
+    await expect.poll(() => state.writes.length).toBe(1);
+    const dismiss = panel.getByRole("button", { name: "Dismiss pending secret" });
+    await dismiss.focus();
+    await page.keyboard.press("Enter");
+    await expect(dismiss).toHaveCount(0);
+    await expect(panel.getByRole("status")).toContainText("The one-time secret won’t be shown.");
+    await expect(submit).toBeDisabled();
+    pending.release();
+    await expect(panel).toContainText("The one-time secret was dismissed.");
+    await expect(submit).toBeEnabled();
+    await expect(panel.locator(".issuedKey")).toHaveCount(0);
+    expect(state.writes).toHaveLength(1);
+  });
+}
+
+for (const operation of ["rotate", "revoke"] as const) {
+  test(`admin ${operation} consumes the latest policy and evicts a reassigned personal key`, async ({ page }) => {
+    const state = await fixture(page);
+    await openAdmin(page);
+    await page.getByRole("button", { name: /owned_key.*Legacy key/ }).click();
+    state.credentials[0].policyId = "another_policy";
+    state.credentials[0].principalId = "other@example.com";
+    state.failBootstrap = true;
+    await page.getByRole("button", { name: operation === "rotate" ? "Renew credential" : "Revoke credential", exact: true }).click();
+    await expect(page.locator(".facts")).toContainText("another_policy");
+    await expect(page.locator(".inspector")).not.toContainText("could not be confirmed");
+    if (operation === "rotate") {
+      await expect(page.locator(".issuedKey")).toContainText("owned_key · another_policy");
+      await expect(page.locator(".issuedKey code")).toHaveText(/^clawrouter-live-owned_key-[0-9a-f]{48}$/);
+      expect(Object.keys(state.writes[0].body)).toEqual(["secretSha256"]);
+    }
+    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    await expect(page.locator(".myKeysList article")).toHaveCount(0);
+  });
+}
+
+test("personal and admin screens share admission, rotate only the hash, and synchronize revocation", async ({ page }) => {
+  const state = await fixture(page);
+  await page.goto("/");
+  await connected(page);
+  const pending = deferred();
+  state.holdMutation = pending.promise;
+  await page.locator(".myKeysPanel").getByRole("button", { name: "Renew", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  await page.getByRole("button", { name: "Access", exact: true }).click();
+  await page.getByRole("tab", { name: /Credentials/ }).click();
+  await page.getByRole("button", { name: /owned_key.*Legacy key/ }).click();
+  await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeDisabled();
+  await expect(page.locator(".inspector")).not.toContainText("The one-time secret won’t be shown.");
+  await expect(page.getByRole("button", { name: "Dismiss pending secret" })).toHaveCount(0);
+  pending.release();
+  await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeEnabled();
+  expect(state.writes[0].path).toBe("/v1/session/credentials/owned_key/rotate");
+  expect(Object.keys(state.writes[0].body)).toEqual(["secretSha256"]);
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  state.holdMutation = null;
+  state.failBootstrap = true;
+  await page.getByRole("button", { name: "Revoke credential", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Revoke credential", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await expect(page.locator(".myKeysList")).toContainText("revoked");
+  await expect(page.locator(".myKeysPanel").getByRole("button", { name: "Renew", exact: true })).toBeDisabled();
+});
+
+test("a dismissed sent result updates rows without replacing the next draft or revealing a secret", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await draft(page, "first_key");
+  const pending = deferred();
+  state.holdMutation = pending.promise;
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  await page.getByRole("textbox", { name: "credential id", exact: true }).fill("next_draft");
+  pending.release();
+  await expect(page.locator(".inspector")).toContainText("Created first_key.");
+  await expect(page.locator(".inspector")).toContainText("one-time secret was dismissed");
+  await expect(page.getByRole("textbox", { name: "credential id", exact: true })).toHaveValue("next_draft");
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /first_key.*Legacy key/ })).toBeVisible();
+});
+
+for (const phase of ["hashing", "dispatched", "revealed"] as const) {
+  test(`resource focus preserves a ${phase} one-time credential until tab activation`, async ({ page }) => {
+    const state = await fixture(page);
+    if (phase === "hashing") await delayHash(page);
+    const pending = deferred();
+    if (phase === "dispatched") state.holdMutation = pending.promise;
+    await openAdmin(page);
+    await draft(page, "focused_key");
+    await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+    if (phase === "hashing") await expect.poll(() => page.evaluate(() => Boolean((window as HashWindow).releaseHash))).toBe(true);
+    else await expect.poll(() => state.writes.length).toBe(1);
+    const secret = page.locator(".issuedKey code");
+    if (phase === "revealed") await expect(secret).toBeVisible();
+    const priorSecret = phase === "revealed" ? await secret.textContent() : null;
+    const credentials = page.getByRole("tab", { name: /^Credentials/ });
+    await credentials.focus();
+    for (const key of ["ArrowRight", "End", "ArrowLeft", "Home"]) await page.keyboard.press(key);
+    await expect(page.getByRole("tab", { name: /^Policies/ })).toBeFocused();
+    await expect(credentials).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("tabpanel", { name: /^Credentials/ })).toBeFocused();
+    if (phase === "hashing") {
+      expect(state.writes).toHaveLength(0);
+      await page.evaluate(() => (window as HashWindow).releaseHash!());
+    } else if (phase === "dispatched") pending.release();
+    await expect(secret).toHaveText(/^clawrouter-live-focused_key-[0-9a-f]{48}$/);
+    if (priorSecret) await expect(secret).toHaveText(priorSecret);
+    expect(state.writes).toHaveLength(1);
+    await page.keyboard.press("Shift+Tab");
+    await expect(credentials).toBeFocused();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Space");
+    await expect(page.getByRole("tab", { name: /^Policies/ })).toHaveAttribute("aria-selected", "true");
+    await expect(secret).toHaveCount(0);
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Enter");
+    await expect(credentials).toHaveAttribute("aria-selected", "true");
+    await expect(secret).toHaveCount(0);
+    expect(state.writes).toHaveLength(1);
+  });
+}
+
+for (const invalidate of ["dismiss", "leave-return", "resource-tabs"] as const) {
+  test(`${invalidate} while hashing prevents dispatch, even after returning to the same panel`, async ({ page }) => {
+    const state = await fixture(page);
+    await delayHash(page);
+    await openAdmin(page);
+    await draft(page, "unsent_key");
+    await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => Boolean((window as HashWindow).releaseHash))).toBe(true);
+    if (invalidate === "dismiss") await page.getByRole("button", { name: "Dismiss pending secret" }).click();
+    else if (invalidate === "resource-tabs") {
+      await page.getByRole("tab", { name: /^Credentials/ }).focus();
+      await page.keyboard.press("Home");
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Space");
+    } else {
+      await page.getByRole("button", { name: "Catalog", exact: true }).click();
+      await page.getByRole("button", { name: "Access", exact: true }).click();
+    }
+    await expect(page.getByRole("button", { name: "Dismiss pending secret" })).toHaveCount(0);
+    await expect(page.locator(".inspector").getByRole("status")).toContainText("The one-time secret won’t be shown.");
+    await page.evaluate(() => (window as HashWindow).releaseHash!());
+    await expect(page.getByRole("button", { name: "Issue credential", exact: true })).toBeEnabled();
+    expect(state.writes).toHaveLength(0);
+    await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  });
+}
+
+test("leave and return after dispatch cannot resurrect the one-time result", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await draft(page, "sent_key");
+  const pending = deferred();
+  state.holdMutation = pending.promise;
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  await page.getByRole("button", { name: "Catalog", exact: true }).click();
+  await page.goBack();
+  await expect(page.getByRole("textbox", { name: "credential id", exact: true })).toBeVisible();
+  pending.release();
+  await expect(page.locator(".inspector")).toContainText("Created sent_key.");
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+});
+
+test("resource activation after dispatch keeps the row but dismisses its one-time result", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await draft(page, "sent_tab_key");
+  const pending = deferred();
+  state.holdMutation = pending.promise;
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  await page.getByRole("tab", { name: /^Credentials/ }).focus();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Space");
+  pending.release();
+  await expect(page.locator(".inspector")).toContainText("Created sent_tab_key.");
+  await expect(page.locator(".inspector")).toContainText("one-time secret was dismissed");
+  await expect(page.getByRole("button", { name: /sent_tab_key.*Legacy key/ })).toBeVisible();
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  expect(state.writes).toHaveLength(1);
+});
+
+test("pre-mutation admin and personal snapshots cannot restore a revoked row", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await page.getByRole("button", { name: /owned_key.*Legacy key/ }).click();
+  const reads = deferred();
+  state.holdKeys = reads.promise;
+  await focusRefresh(page);
+  await expect.poll(() => state.keyReads).toBe(4);
+  await page.getByRole("button", { name: "Revoke credential", exact: true }).click();
+  await expect(page.locator(".facts")).toContainText("revoked");
+  const response = page.waitForResponse("**/v1/admin/bootstrap");
+  reads.release();
+  await response;
+  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await expect(page.locator(".myKeysList")).toContainText("revoked");
+});
+
+test("an accepted identity change fences a pending mutation and clears old admin drafts", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await draft(page, "old_draft");
+  const sessionRead = deferred();
+  state.holdSession = sessionRead.promise;
+  await focusRefresh(page);
+  await expect.poll(() => state.sessionReads).toBe(2);
+  const mutation = deferred();
+  state.holdMutation = mutation.promise;
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  state.email = "second@example.com";
+  state.failBootstrap = true;
+  sessionRead.release();
+  await expect(page.locator(".tenantSwitch strong")).toHaveText("second@example.com");
+  await expect(page.getByRole("textbox", { name: "credential id", exact: true })).toHaveValue("");
+  mutation.release();
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /owned_key.*Legacy key/ })).toHaveCount(0);
+});
+
+for (const completion of ["before", "after"] as const) {
+  test(`new-identity hydration survives an old operation completing ${completion} it`, async ({ page }) => {
+    const state = await fixture(page);
+    await openAdmin(page);
+    await draft(page, "previous_key");
+    const sessionRead = deferred();
+    state.holdSession = sessionRead.promise;
+    await focusRefresh(page);
+    await expect.poll(() => state.sessionReads).toBe(2);
+    const mutation = deferred();
+    state.holdMutation = mutation.promise;
+    await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+    await expect.poll(() => state.writes.length).toBe(1);
+    state.email = "second@example.com";
+    state.role = "user";
+    state.credentials.push({ credentialId: "second_key", policyId: "team_policy", principalId: state.email, enabled: true, active: true });
+    const reads = deferred();
+    state.holdKeys = reads.promise;
+    sessionRead.release();
+    await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
+    await expect.poll(() => state.keyReads).toBe(3);
+    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    if (completion === "before") {
+      const response = page.waitForResponse("**/v1/admin/credentials");
+      mutation.release();
+      await response;
+      await expect(page.locator(".myKeysPanel")).not.toContainText("A credential change is still finishing");
+    }
+    reads.release();
+    await expect(page.locator(".myKeysList")).toContainText("second_key");
+    if (completion === "after") mutation.release();
+    await expect(page.locator(".myKeysPanel").getByRole("button", { name: "Create key", exact: true })).toBeEnabled();
+    await expect(page.locator(".myKeysList")).not.toContainText("owned_key");
+    await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  });
+}
+
+test("confirmed auth loss clears a reveal before the login availability probe finishes", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
+  await draft(page, "revealed_key");
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".issuedKey code")).toBeVisible();
+  await expect(page.locator(".connectionMeta time")).not.toHaveAttribute("datetime", previousRefresh!);
+  const login = deferred();
+  state.holdLogin = login.promise;
+  state.authLost = true;
+  await focusRefresh(page);
+  await expect.poll(() => state.loginReads).toBe(1);
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  login.release();
+});
+
+for (const role of ["admin", "user"] as const) {
+  for (const path of ["/v1/session/usage", "/v1/session/credentials", "/v1/entitlements"]) {
+    test(`${role} auth loss at ${path} clears the reveal before sibling reads and login finish`, async ({ page }) => {
+      const state = await fixture(page);
+      state.role = role;
+      if (role === "admin") await openAdmin(page);
+      else { await page.goto("/"); await connected(page); }
+      const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
+      if (role === "admin") {
+        await draft(page, "secondary_key");
+        await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+      } else await page.locator(".myKeysPanel").getByRole("button", { name: "Create key", exact: true }).click();
+      await expect(page.locator(".issuedKey code")).toBeVisible();
+      await expect(page.locator(".connectionMeta time")).not.toHaveAttribute("datetime", previousRefresh!);
+      const login = deferred(), sibling = deferred();
+      state.holdLogin = login.promise;
+      state.authLostPath = path;
+      state.omitEntitlements = path === "/v1/entitlements";
+      state.holdReadPath = path === "/v1/session/usage" ? "/v1/session/credentials" : "/v1/session/usage";
+      state.holdRead = sibling.promise;
+      await focusRefresh(page);
+      await expect.poll(() => state.loginReads).toBe(1);
+      await expect(page.locator(".issuedKey code")).toHaveCount(0);
+      sibling.release();
+      login.release();
+    });
+  }
+}
+
+test("a lost response is visibly uncertain and never retried or revealed automatically", async ({ page }) => {
+  const state = await fixture(page);
+  state.loseResponse = true;
+  await openAdmin(page);
+  await draft(page, "uncertain_key");
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".inspector")).toContainText("could not be confirmed");
+  await page.getByRole("button", { name: "Refresh keys", exact: true }).click();
+  await expect(page.getByRole("button", { name: /uncertain_key.*Legacy key/ })).toBeVisible();
+  expect(state.writes).toHaveLength(1);
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+});
+
+test("a secondary auth failure clears a reveal after bootstrap has already failed", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await revealAdminKey(page, "late_auth_key");
+  const auth = deferred();
+  state.failBootstrap = true;
+  state.authLostPath = "/v1/session/credentials";
+  state.holdAuthLoss = auth.promise;
+  await focusRefresh(page);
+  await expect.poll(() => state.authLossReads).toBe(1);
+  await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+  const reads = state.sessionReads;
+  auth.release();
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /owned_key.*Legacy key/ })).toHaveCount(0);
+  expect(state.sessionReads).toBe(reads);
+});
+
+test("an entitlement wait cannot restore keys or freshness after its accepted scope is invalidated", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await revealAdminKey(page, "entitlement_key");
+  const auth = deferred(), entitlements = deferred();
+  state.failBootstrap = true;
+  state.authLostPath = "/v1/session/credentials";
+  state.holdAuthLoss = auth.promise;
+  await focusRefresh(page);
+  await expect.poll(() => state.authLossReads).toBe(1);
+  await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+  state.failBootstrap = false;
+  state.authLostPath = "";
+  state.holdAuthLoss = null;
+  state.omitEntitlements = true;
+  state.holdReadPath = "/v1/entitlements";
+  state.holdRead = entitlements.promise;
+  const entitlementRequest = page.waitForRequest("**/v1/entitlements");
+  await focusRefresh(page);
+  await entitlementRequest;
+  auth.release();
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  const keyReads = state.keyReads;
+  const entitlementResponse = page.waitForResponse("**/v1/entitlements");
+  entitlements.release();
+  await entitlementResponse;
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  expect(state.keyReads).toBe(keyReads);
+  await expect(page.getByRole("button", { name: /owned_key.*Legacy key/ })).toHaveCount(0);
+  await expect(page.locator(".connectionMeta time")).toHaveCount(0);
+  await expect(page.locator(".loginShell")).toContainText("Sign-in required");
+});
+
+for (const identity of ["same", "changed"] as const) {
+  test(`a delayed auth observation belongs to its ${identity} identity despite a later mutation`, async ({ page }) => {
+    const state = await fixture(page);
+    await openAdmin(page);
+    const auth = deferred();
+    state.failBootstrap = true;
+    state.authLostPath = "/v1/session/credentials";
+    state.holdAuthLoss = auth.promise;
+    await focusRefresh(page);
+    await expect.poll(() => state.authLossReads).toBe(1);
+    await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+    state.failBootstrap = false;
+    state.authLostPath = "";
+    state.holdAuthLoss = null;
+    if (identity === "changed") {
+      state.email = "second@example.com";
+      state.role = "user";
+      await focusRefresh(page);
+      await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
+      await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+      await connected(page);
+      await page.locator(".myKeysPanel").getByRole("button", { name: "Create key", exact: true }).click();
+      await expect(page.locator(".issuedKey code")).toBeVisible();
+    } else await revealAdminKey(page, "same_identity_key");
+    const secret = await page.locator(".issuedKey code").textContent();
+    const response = page.waitForResponse((item) => item.url().endsWith("/v1/session/credentials") && item.status() === 401);
+    auth.release();
+    await response;
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    if (identity === "changed") await expect(page.locator(".issuedKey code")).toHaveText(secret!);
+    else await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  });
+}
+
+test("a lost create response is reconciled by a fresh read after stale snapshots finish", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await draft(page, "recovered_key");
+  const reads = deferred();
+  state.holdKeys = reads.promise;
+  await focusRefresh(page);
+  await expect.poll(() => state.keyReads).toBe(4);
+  state.loseResponse = true;
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".inspector")).toContainText("could not be confirmed");
+  state.holdKeys = null;
+  reads.release();
+  await expect.poll(() => state.keyReads).toBe(6);
+  await expect(page.getByRole("button", { name: /recovered_key.*Legacy key/ })).toBeVisible();
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  expect(state.writes).toHaveLength(1);
+});
+
+test("old-identity recovery does not start a refresh after an in-flight read accepts another identity", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
+  await draft(page, "previous_recovery");
+  const sessionRead = deferred();
+  state.holdSession = sessionRead.promise;
+  await focusRefresh(page);
+  await expect.poll(() => state.sessionReads).toBe(2);
+  state.loseResponse = true;
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".inspector")).toContainText("could not be confirmed");
+  state.email = "second@example.com";
+  state.role = "user";
+  state.credentials.push({ credentialId: "second_key", policyId: "team_policy", principalId: state.email, enabled: true, active: true });
+  state.holdSession = null;
+  sessionRead.release();
+  await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
+  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await expect(page.locator(".myKeysList")).toContainText("second_key");
+  await expect(page.locator(".connectionMeta time")).not.toHaveAttribute("datetime", previousRefresh!);
+  await connected(page);
+  await expect(page.locator("body")).not.toContainText("previous_recovery");
+  await expect(page.locator("body")).not.toContainText("could not be confirmed");
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  expect(state.sessionReads).toBe(2);
+  expect(state.writes).toHaveLength(1);
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+});
+
+test("identity replacement clears previous action detail and reports the new refresh failure", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
+  state.loseResponse = true;
+  await draft(page, "old_key_result");
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".inspector")).toContainText("could not be confirmed");
+  await expect(page.locator(".connectionMeta time")).not.toHaveAttribute("datetime", previousRefresh!);
+  await page.getByRole("tab", { name: /^Policies/ }).click();
+  await page.getByRole("textbox", { name: "eligible grants · optional JSON map", exact: true }).fill("{");
+  await page.getByRole("button", { name: "Save policy", exact: true }).click();
+  await expect(page.locator(".statusBar")).toContainText("eligible grants must be a JSON provider-to-token-reference map");
+  state.email = "second@example.com";
+  state.failBootstrap = true;
+  await focusRefresh(page);
+  await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
+  await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+  await expect(page.locator("body")).not.toContainText("eligible grants must be a JSON provider-to-token-reference map");
+  await expect(page.locator(".statusBar")).not.toContainText("old_key_result");
+  expect(state.writes).toHaveLength(1);
+});
+
+for (const status of [401, 403]) {
+  test(`personal mutation ${status} distinguishes sign-in loss from a policy rejection`, async ({ page }) => {
+    const state = await fixture(page);
+    state.role = "user";
+    await page.goto("/");
+    await connected(page);
+    state.reject = status === 401 ? "access_session_required" : "credential_policy_not_held";
+    state.rejectStatus = status;
+    const card = page.locator(".myKeysPanel");
+    await card.getByRole("button", { name: "Renew", exact: true }).click();
+    if (status === 401) await expect(page.locator(".loginShell")).toContainText("Sign-in required");
+    else await expect(card).toContainText("credential_policy_not_held");
+    await expect(card.locator(".myKeysList article")).toHaveCount(status === 401 ? 0 : 1);
+    await expect(page.locator(".issuedKey code")).toHaveCount(0);
+    expect(state.writes).toHaveLength(1);
+    if (status === 401) {
+      await page.getByRole("button", { name: "Retry access", exact: true }).click();
+      await expect(card.locator(".myKeysList")).toContainText("owned_key");
+    }
+  });
+}
+
+test("binding loss keeps an active key revocable while rotation and the chosen policy become unavailable", async ({ page }) => {
+  const state = await fixture(page);
+  await page.goto("/");
+  await connected(page);
+  state.held = false;
+  await focusRefresh(page);
+  const card = page.locator(".myKeysPanel");
+  await expect(card.getByRole("combobox", { name: "policy", exact: true })).toHaveValue("team_policy");
+  await expect(card).toContainText("Policy no longer held: rotation unavailable");
+  await expect(card.getByRole("button", { name: "Renew", exact: true })).toBeDisabled();
+  await expect(card.getByRole("button", { name: "Revoke", exact: true })).toBeEnabled();
+  await card.getByRole("button", { name: "Revoke", exact: true }).click();
+  await expect(card.locator(".myKeysList")).toContainText("revoked");
+});
+
+for (const inactive of ["owner", "generation", "policy"] as const) {
+  test(`canonical ${inactive} inactivity disables rotation without hiding revoke`, async ({ page }) => {
+    const state = await fixture(page);
+    state.credentials[0].active = false;
+    if (inactive === "owner") state.credentials[0].principalEnabled = false;
+    if (inactive === "generation") state.credentials[0].generationMatches = false;
+    if (inactive === "policy") state.credentials[0].policyEnabled = false;
+    await openAdmin(page);
+    await page.getByRole("button", { name: /owned_key.*Legacy key/ }).click();
+    await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Revoke credential", exact: true })).toBeEnabled();
+  });
+}
+
+test("a denied clipboard write selects the one-time key for keyboard copy without reissuing it", async ({ page }) => {
+  const state = await fixture(page);
+  await page.addInitScript(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("denied"); } } }));
+  await openAdmin(page);
+  await draft(page, "copy_key");
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  const issued = page.locator(".issuedKey");
+  await issued.getByRole("button", { name: "Copy", exact: true }).press("Enter");
+  const field = issued.getByRole("textbox", { name: "One-time key" });
+  await expect(field).toHaveAccessibleDescription("Automatic copy unavailable. Use your device’s Copy command before dismissing the key.");
+  const hasFullSelection = () => field.evaluate((el: HTMLInputElement) => el.readOnly && /^clawrouter-live-copy_key-[0-9a-f]{48}$/.test(el.value) && el.selectionStart === 0 && el.selectionEnd === el.value.length);
+  await expect(field).toBeFocused();
+  expect(await hasFullSelection()).toBe(true);
+  // Observe native Copy without writing the fixture key to the host clipboard.
+  await field.evaluate(el => el.addEventListener("copy", event => { event.preventDefault(); el.dataset.copyObserved = "true"; }, { once: true }));
+  await page.keyboard.press("ControlOrMeta+c");
+  await expect(field).toHaveAttribute("data-copy-observed", "true");
+  await field.click();
+  expect(await hasFullSelection()).toBe(false);
+  await page.keyboard.press("Tab");
+  await expect(issued.getByRole("button", { name: "Dismiss" })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(field).toBeFocused();
+  expect(await hasFullSelection()).toBe(true);
+  expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  const dismiss = page.getByRole("button", { name: "Dismiss", exact: true });
+  await dismiss.focus();
+  await page.keyboard.press("Enter");
+  await expect(issued).toHaveCount(0);
+  await focusRefresh(page);
+  await expect(issued).toHaveCount(0);
+  expect(state.writes).toHaveLength(1);
+  expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  for (const theme of ["light", "dark"] as const) {
+    if (theme === "dark") await page.getByRole("switch", { name: "Light mode", exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    const button = page.getByRole("button", { name: "New credential", exact: true });
+    await expect.poll(() => button.evaluate((element) => getComputedStyle(element.querySelector("span")!).color === getComputedStyle(element).color)).toBe(true);
+    expect((await new AxeBuilder({ page }).include(".tableSectionHeader").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  }
+});
+
+test("a late clipboard denial does not steal focus from Dismiss in My keys", async ({ page }) => {
+  const state = await fixture(page);
+  type ClipboardWindow = Window & { denyCopy?: () => void };
+  await page.addInitScript(() => Object.defineProperty(navigator, "clipboard", { value: {
+    writeText: () => new Promise<void>((_resolve, reject) => { (window as ClipboardWindow).denyCopy = () => reject(new Error("denied")); }),
+  } }));
+  await page.goto("/");
+  await connected(page);
+  await page.getByRole("button", { name: "Create key", exact: true }).click();
+  const issued = page.locator(".myKeysPanel .issuedKey");
+  await issued.getByRole("button", { name: "Copy", exact: true }).press("Enter");
+  await page.keyboard.press("Tab");
+  const dismiss = issued.getByRole("button", { name: "Dismiss", exact: true });
+  await expect(dismiss).toBeFocused();
+  await page.evaluate(() => (window as ClipboardWindow).denyCopy!());
+  await expect(issued.getByRole("textbox", { name: "One-time key" })).toBeVisible();
+  await expect(dismiss).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(issued).toHaveCount(0);
+  expect(state.writes).toHaveLength(1);
+});
+
+type HashWindow = Window & { releaseHash?: () => void };
+async function delayHash(page: Page) {
+  await page.addInitScript(() => {
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    crypto.subtle.digest = async (...args: Parameters<SubtleCrypto["digest"]>) => {
+      await new Promise<void>((resolve) => { (window as HashWindow).releaseHash = resolve; });
+      return digest(...args);
+    };
+  });
+}
+function deferred() {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+}
+async function connected(page: Page) { await expect(page.locator(".connectionMeta strong")).toHaveText("Connected"); }
+async function openAdmin(page: Page) { await page.goto("/dashboard/access?resource=credentials"); await connected(page); }
+async function draft(page: Page, id: string) {
+  await page.getByRole("textbox", { name: "credential id", exact: true }).fill(id);
+  await page.getByRole("combobox", { name: "policy", exact: true }).selectOption("team_policy");
+}
+async function revealAdminKey(page: Page, id: string) {
+  const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
+  await draft(page, id);
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".issuedKey code")).toBeVisible();
+  await expect(page.locator(".connectionMeta time")).not.toHaveAttribute("datetime", previousRefresh!);
+}
+async function focusRefresh(page: Page) { await page.evaluate(() => window.dispatchEvent(new Event("focus"))); }
+
+async function fixture(page: Page) {
+  const policy: AccessPolicy = { policyId: "team_policy", enabled: true, providers: [], tenantId: "default", retainRequestContent: false, grantRouting: { strategy: "priority", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} } };
+  const state = {
+    policy,
+    credentials: [{ credentialId: "owned_key", policyId: policy.policyId, principalId: "admin@example.com", enabled: true, active: true }] as ProxyCredential[],
+    writes: [] as { path: string; method: string; body: Record<string, string> }[],
+    reject: "", rejectStatus: 409, failBootstrap: false, loseResponse: false, held: true, authLost: false, authLostPath: "", authLossReads: 0, omitEntitlements: false, holdReadPath: "", email: "admin@example.com", role: "admin", keyReads: 0, sessionReads: 0, loginReads: 0,
+    holdMutation: null as Promise<void> | null, holdKeys: null as Promise<void> | null, holdSession: null as Promise<void> | null, holdLogin: null as Promise<void> | null, holdRead: null as Promise<void> | null, holdAuthLoss: null as Promise<void> | null,
+  };
+  const usage = { ledger: "ready", providers: [], daily: [], events: [], summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 } };
+  await page.route("**/v1**", async (route) => {
+    const request = route.request(), path = new URL(request.url()).pathname;
+    if (request.method() === "POST" || request.method() === "PUT") {
+      const body = request.postData() ? request.postDataJSON() : {};
+      state.writes.push({ path, method: request.method(), body });
+      if (state.reject) {
+        if (state.holdMutation) await state.holdMutation;
+        await route.fulfill({ status: state.rejectStatus, json: { error: { code: state.reject, message: state.reject } } });
+        return;
+      }
+      const create = path.endsWith("/credentials");
+      const credentialId = create ? body.credentialId : decodeURIComponent(path.split("/").at(request.method() === "PUT" ? -1 : -2)!);
+      const prior = state.credentials.find((item) => item.credentialId === credentialId);
+      const credential: ProxyCredential = path.endsWith("/rename")
+        ? { ...prior!, name: body.name?.trim() || null }
+        : { ...prior, credentialId, ...(body.name === undefined ? {} : { name: body.name?.trim() || null }), policyId: prior?.policyId ?? body.policyId, principalId: prior?.principalId ?? (path.includes("/session/") ? state.email : body.principalId), enabled: request.method() === "PUT" ? body.enabled : !path.endsWith("/revoke"), active: request.method() === "PUT" ? body.enabled : !path.endsWith("/revoke") };
+      state.credentials = [...state.credentials.filter((item) => item.credentialId !== credentialId), credential];
+      if (state.holdMutation) await state.holdMutation;
+      if (state.loseResponse) { await route.abort("failed"); return; }
+      await route.fulfill({ status: create ? 201 : 200, json: credential });
+      return;
+    }
+    if (path === "/v1/session") {
+      state.sessionReads += 1;
+      if (state.holdSession) await state.holdSession;
+      if (state.authLost) { await route.fulfill({ status: 401, json: { error: { code: "access_session_required", message: "Sign-in required" } } }); return; }
+    }
+    if (path === "/v1") {
+      state.loginReads += 1;
+      if (state.holdLogin) await state.holdLogin;
+    }
+    if (path === state.authLostPath) {
+      // Capture this request's failure before a later identity changes the fixture.
+      const held = state.holdAuthLoss;
+      state.authLossReads += 1;
+      if (held) await held;
+      await route.fulfill({ status: 401, json: { error: { code: "access_session_required", message: "Sign-in required" } } });
+      return;
+    }
+    if (path === state.holdReadPath && state.holdRead) await state.holdRead;
+    const policies = state.held ? [policy] : [];
+    const responses: Record<string, unknown> = {
+      "/v1": { endpoints: {} },
+      "/v1/providers": { providers: [] },
+      "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
+      "/v1/session": { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default", ...(!state.omitEntitlements ? { entitlements: { providers: [], policies: [{ ...policy, budget: { configured: false, ledger: "unmetered", daily: { configured: policy.dailyBudgetMicros != null, limitMicros: policy.dailyBudgetMicros ?? null, spentMicros: 2_000_000, remainingMicros: 18_000_000, resetsAt: "2026-10-19T00:00:00Z" }, weekly: { configured: policy.weeklyBudgetMicros != null, limitMicros: policy.weeklyBudgetMicros ?? null, spentMicros: 2_000_000, remainingMicros: 4_998_000_000, resetsAt: "2026-10-19T00:00:00Z" } } }] } } : {}) },
+      "/v1/entitlements": { session: { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default" }, providers: [], contentRetention: { enabled: false, retentionDays: 30, policyEnabled: false, userExempt: false } },
+      "/v1/session/usage": { policies: policies.map((item) => ({ ...item, budget: { configured: false, ledger: "ready" } })), usage },
+      "/v1/session/credentials": { credentials: state.credentials.filter((item) => item.principalId === state.email) },
+      "/v1/admin/usage": { policies: [], usage },
+      "/v1/admin/bootstrap": { policies: [policy, { ...policy, policyId: "another_policy" }], credentials: state.credentials, connections: [], users: [], bindings: [], grants: [], rules: [], providers: [], tenants: [], overview: null, fusion: { version: 1, modelId: "clawrouter/fusion", enabled: false, adviserModels: [], aggregatorModel: "", adviserTimeoutMs: 10000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 } },
+    };
+    const snapshot = structuredClone(responses[path]);
+    if (path === "/v1/admin/bootstrap" || path === "/v1/session/credentials") {
+      state.keyReads += 1;
+      if (state.holdKeys) await state.holdKeys;
+    }
+    if (path === "/v1/admin/bootstrap" && state.failBootstrap) { await route.fulfill({ status: 503, body: "reporting offline" }); return; }
+    await route.fulfill({ status: snapshot ? 200 : 404, json: snapshot ?? {} });
+  });
+  return state;
+}
+
+test("personal validity, performance controls, allowance and expired renewal", async ({ page }) => {
+  const state = await fixture(page);
+  state.role = "user";
+  state.policy.dailyBudgetMicros = 20_000_000;
+  state.policy.limitHint = "Use the team server for heavier usage.";
+  state.policy.serviceTiers = { allowed: ["default", "flex", "priority"], models: { "openai/gpt-6.1-sol": ["default", "flex", "priority", "ultrafast"] } };
+  Object.assign(state.credentials[0], { expiresAt: "2026-01-01T00:00:00Z", expired: true, active: false });
+  await page.goto("/");
+  await connected(page);
+  const card = page.locator(".myKeysPanel");
+  await expect(card).toContainText("Today: $2.00 used / $20.00 limit · $18.00 remaining");
+  await expect(card).toContainText("Use the team server for heavier usage.");
+  await expect(card.getByLabel("Validity")).toHaveValue("180");
+  await expect(card.getByLabel("Fast (priority)")).toBeChecked();
+  await expect(card.getByLabel(/Ultrafast/)).not.toBeChecked();
+  await expect(card).toContainText("openai/gpt-6.1-sol");
+  await expect(card).toContainText("expired on 2026-01-01");
+  await expect(card.getByRole("button", { name: "Renew", exact: true })).toBeEnabled();
+  await card.getByRole("button", { name: "Renew", exact: true }).click();
+  await expect(page.locator(".issuedKey code")).toContainText("clawrouter-live-owned_key-");
+  expect(state.writes[0].path).toBe("/v1/session/credentials/owned_key/rotate");
+  expect(Object.keys(state.writes[0].body)).toEqual(["secretSha256"]);
+  await card.getByLabel("Validity").selectOption("30");
+  await card.getByLabel("Fast (priority)").uncheck();
+  await card.getByRole("button", { name: "Create key", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(2);
+  expect(state.writes[1].body.serviceTiers).toEqual(["default", "flex"]);
+  expect(Date.parse(state.writes[1].body.expiresAt)).toBeGreaterThan(Date.now() + 29 * 86_400_000);
+  await expect(page.locator(".issuedKey code")).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).include(".myKeysPanel").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+
+test("members see their weekly allowance without an unconfigured daily or monthly cap", async ({ page }) => {
+  const state = await fixture(page);
+  state.role = "user";
+  state.policy.weeklyBudgetMicros = 5_000_000_000;
+  await page.goto("/");
+  await connected(page);
+  const card = page.locator(".myKeysPanel");
+  await expect(card).toContainText("This week: $2.00 used / $5000.00 limit · $4998.00 remaining · resets 2026-10-19T00:00:00Z");
+  await expect(card).not.toContainText("Today:");
+  await expect(card).not.toContainText("This month:");
+  expect((await new AxeBuilder({ page }).include(".myKeysPanel").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+});
+
+test("admin expiry update preserves revocation and tier restrictions", async ({ page }) => {
+  const state = await fixture(page);
+  Object.assign(state.credentials[0], { name: "Original name", enabled: false, active: false, serviceTiers: ["default", "flex"] });
+  await page.goto("/");
+  await connected(page);
+  await page.getByRole("button", { name: "Access", exact: true }).click();
+  await page.getByRole("tab", { name: /^Credentials/ }).click();
+  await page.getByRole("button", { name: /owned_key/ }).click();
+  state.credentials[0].name = "Renamed in another client";
+  await page.getByLabel("Expiry (ISO-8601 UTC)").fill("2027-01-01T00:00:00Z");
+  await page.getByRole("button", { name: "Set expiry", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  expect(state.writes[0].method).toBe("PUT");
+  expect(state.writes[0].body.enabled).toBe(false);
+  expect(state.writes[0].body.serviceTiers).toEqual(["default", "flex"]);
+  expect(state.writes[0].body.secretSha256).toBeUndefined();
+  expect(state.writes[0].body.name).toBeUndefined();
+  expect(state.credentials[0].name).toBe("Renamed in another client");
+  await expect(page.getByText("Updated owned_key.", { exact: true })).toBeVisible();
+});
+
+
+test("personal creation persists an optional name and displays the immutable key ID", async ({ page }) => {
+  const state = await fixture(page);
+  await page.goto("/");
+  await connected(page);
+  const card = page.locator(".myKeysPanel");
+  await card.getByRole("textbox", { name: "Name (optional)", exact: true }).fill("  Studio  ");
+  await card.getByRole("button", { name: "Create key", exact: true }).click();
+  await expect(card.locator(".myKeysList strong", { hasText: "Studio" })).toBeVisible();
+  expect(state.writes[0].body.name).toBe("Studio");
+  const id = state.writes[0].body.credentialId;
+  await expect(card.locator(".myKeysList")).toContainText(id);
+  await expect(page.locator(".issuedKey code")).toContainText(`clawrouter-live-${id}-`);
+  await page.reload();
+  await connected(page);
+  await expect(card.locator(".myKeysList strong", { hasText: "Studio" })).toBeVisible();
+});
+
+for (const availability of ["active", "revoked", "expired", "lost-policy"] as const) {
+  test(`renaming a personal key (${availability}) only changes its name, with no secret reveal`, async ({ page }) => {
+    const state = await fixture(page);
+    if (availability === "revoked") Object.assign(state.credentials[0], { enabled: false, active: false });
+    if (availability === "expired") Object.assign(state.credentials[0], { expiresAt: "2026-01-01T00:00:00Z", expired: true, active: false });
+    if (availability === "lost-policy") state.held = false;
+    const original = structuredClone(state.credentials[0]);
+    await page.goto("/");
+    await connected(page);
+    const card = page.locator(".myKeysPanel");
+    await expect(card.locator(".myKeysList strong")).toHaveText("owned_key");
+    await card.getByRole("button", { name: "Rename", exact: true }).click();
+    await card.getByRole("textbox", { name: "Key name", exact: true }).fill("  Laptop  ");
+    await card.getByRole("button", { name: "Save name", exact: true }).click();
+    await expect(card.locator(".myKeysList strong")).toHaveText("Laptop");
+    expect(state.writes).toEqual([{ path: "/v1/session/credentials/owned_key/rename", method: "POST", body: { name: "Laptop" } }]);
+    expect(state.credentials[0]).toEqual({ ...original, name: "Laptop" });
+    await expect(page.locator(".issuedKey code")).toHaveCount(0);
+    await expect(card.getByRole("button", { name: "Dismiss pending secret", exact: true })).toHaveCount(0);
+    await card.getByRole("button", { name: "Rename", exact: true }).click();
+    await card.getByRole("textbox", { name: "Key name", exact: true }).fill("   ");
+    await card.getByRole("button", { name: "Save name", exact: true }).click();
+    await expect(card.locator(".myKeysList strong")).toHaveText("owned_key");
+    expect(state.writes[1].body).toEqual({ name: null });
+  });
+}
+
+for (const moveFocus of [false, true]) {
+  test(`rejected member rename ${moveFocus ? "respects a later focus choice" : "accepts a keyboard correction in place"}`, async ({ page }) => {
+    const state = await fixture(page);
+    state.role = "user";
+    state.credentials.push({ ...state.credentials[0], credentialId: "studio_key", name: "Studio" });
+    const rejection = deferred();
+    state.reject = "credential_rename_rejected";
+    state.holdMutation = rejection.promise;
+    await page.goto("/");
+    await connected(page);
+    const card = page.locator(".myKeysPanel");
+    const row = card.locator(".myKeysList article").filter({ hasText: "studio_key" });
+    await row.getByRole("button", { name: "Rename", exact: true }).press("Enter");
+    const name = row.getByRole("textbox", { name: "Key name", exact: true });
+    await expect(name).toBeFocused();
+    await name.fill("Nightly");
+    await page.keyboard.press("Enter");
+    const write = { path: "/v1/session/credentials/studio_key/rename", method: "POST", body: { name: "Nightly" } };
+    await expect.poll(() => state.writes).toEqual([write]);
+    await expect(row.getByRole("button", { name: "Save name", exact: true })).toBeDisabled();
+    await page.keyboard.press("Enter");
+    await page.keyboard.type(" ignored");
+    await page.keyboard.press("Enter");
+    await expect(name).toHaveValue("Nightly");
+    expect(state.writes).toEqual([write]);
+    const other = card.getByRole("textbox", { name: "Name (optional)", exact: true });
+    if (moveFocus) await other.click();
+    rejection.release();
+    await expect(card).toContainText("credential_rename_rejected");
+    await expect(name).toBeEditable();
+    await expect(moveFocus ? other : name).toBeFocused();
+    if (moveFocus) {
+      await page.keyboard.type("New laptop");
+      await expect(name).toHaveValue("Nightly");
+      await expect(other).toHaveValue("New laptop");
+      expect(state.writes).toEqual([write]);
+      return;
+    }
+    await page.keyboard.type(" runner");
+    await expect(name).toHaveValue("Nightly runner");
+    expect(state.writes).toEqual([write]);
+    state.reject = "";
+    await page.keyboard.press("Enter");
+    await expect(row.locator("strong")).toHaveText("Nightly runner");
+    expect(state.writes).toEqual([write, { ...write, body: { name: "Nightly runner" } }]);
+  });
+}
+
+test("rename cancel makes no request, rejection retains the draft, and pending renames share admission", async ({ page }) => {
+  const state = await fixture(page);
+  await page.goto("/");
+  await connected(page);
+  const card = page.locator(".myKeysPanel");
+  await card.getByRole("button", { name: "Rename", exact: true }).click();
+  await card.getByRole("textbox", { name: "Key name", exact: true }).fill("Canceled");
+  await card.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(state.writes).toHaveLength(0);
+  await card.getByRole("button", { name: "Rename", exact: true }).click();
+  await expect(card.getByRole("textbox", { name: "Key name", exact: true })).toHaveValue("");
+  await card.getByRole("textbox", { name: "Key name", exact: true }).fill("Retry me");
+  state.reject = "credential_rename_rejected";
+  await card.getByRole("button", { name: "Save name", exact: true }).click();
+  await expect(card).toContainText("credential_rename_rejected");
+  await expect(card.getByRole("textbox", { name: "Key name", exact: true })).toHaveValue("Retry me");
+  state.reject = "";
+  const pending = deferred();
+  state.holdMutation = pending.promise;
+  await card.getByRole("button", { name: "Save name", exact: true }).evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+  await expect.poll(() => state.writes.length).toBe(2);
+  await expect(card.getByRole("button", { name: "Create key", exact: true })).toBeDisabled();
+  await expect(card.getByRole("button", { name: "Save name", exact: true })).toBeDisabled();
+  await expect(card.getByRole("button", { name: "Dismiss pending secret", exact: true })).toHaveCount(0);
+  pending.release();
+  await expect(card.locator(".myKeysList strong")).toHaveText("Retry me");
+  await expect(card.getByRole("textbox", { name: "Key name", exact: true })).toHaveCount(0);
+  expect((await new AxeBuilder({ page }).include(".myKeysPanel").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  await card.getByRole("button", { name: "Rename", exact: true }).click();
+  expect((await new AxeBuilder({ page }).include(".myKeysPanel").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+});
+
+
+test("demo key names survive renew and revoke, and revoked keys can still be renamed", async ({ page }) => {
+  await page.route("**/v1/**", (route) => route.fulfill({ status: 503, json: { error: { message: "Demo fixture" } } }));
+  await page.goto("/?demo=1");
+  const card = page.locator(".myKeysPanel");
+  await expect(card.getByRole("button", { name: "Create key", exact: true })).toBeEnabled();
+  await card.getByRole("textbox", { name: "Name (optional)", exact: true }).fill("Demo laptop");
+  await card.getByRole("button", { name: "Create key", exact: true }).click();
+  await expect(card.locator(".myKeysList strong")).toHaveText("Demo laptop");
+  await card.getByRole("button", { name: "Renew", exact: true }).click();
+  await expect(card.locator(".myKeysList strong")).toHaveText("Demo laptop");
+  await card.getByRole("button", { name: "Revoke", exact: true }).click();
+  await expect(card.locator(".myKeysList")).toContainText("revoked");
+  await card.getByRole("button", { name: "Rename", exact: true }).click();
+  await card.getByRole("textbox", { name: "Key name", exact: true }).fill("Retired laptop");
+  await card.getByRole("button", { name: "Save name", exact: true }).click();
+  await expect(card.locator(".myKeysList strong")).toHaveText("Retired laptop");
+  await expect(card.locator(".myKeysList")).toContainText("revoked");
+  await expect(card.getByRole("button", { name: "Renew", exact: true })).toBeDisabled();
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+});

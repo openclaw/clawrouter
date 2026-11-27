@@ -1,0 +1,315 @@
+import type { ResponseReceiptInspection } from "./request-tariff.ts";
+import type { Token } from "stream-json/core/parser.js";
+import { createJsonTokenizer } from "./json-tokens.ts";
+import { createSseUsageAccumulator, extractUsageTokens, responseOutcome, responsesObservation, type ResponsesObservation, type SseUsageEvidence, type UsageInspection } from "./token-usage.ts";
+import { createToolEvidenceProjection, type createResponsesToolEvidence } from "./responses-tool-evidence.ts";
+import { createHostedSearchUsage } from "./responses-hosted-usage.ts";
+
+export type ResponsesInspectionTools = Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid"> & { witness?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid"> };
+
+const feedLimit = 4096, depthLimit = 128, scalarLimit = 64;
+// Native search; per-character JS loops dominate CPU in cold isolates.
+const lineEnd = /[\r\n]/g;
+const empty = (): UsageInspection => ({ tokens: null, outcome: null });
+
+// Observe the declared Responses format without assembling output. Identity
+// publication and complete output/tool-history evidence have different owners.
+export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesInspectionTools, observe?: (fact: ResponsesObservation) => Promise<void>, usageExtractor = extractUsageTokens, revokeRejection?: () => void, receipt?: ResponseReceiptInspection) {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const accumulator = createSseUsageAccumulator(revokeRejection);
+  const hosted = createHostedSearchUsage();
+  let document = metadataParser(!!observe || !!receipt, !!tools?.witness, !!receipt), json = empty(), stopped = false;
+  let prefix = "", mode: "prefix" | "data" | "event" | "ignored" = "prefix";
+  let lineNonempty = false, optionalSpace = false, skipLf = false;
+  let hasData = false, hasContent = false, eventError = false, undecodedData = false;
+  let eventName = literal("error"), done = literal("[DONE]", true);
+
+  function data(text: string) {
+    done.push(text);
+    hasContent ||= text.trim().length > 0;
+    document.push(text);
+  }
+  function beginData() {
+    if (hasData) data("\n");
+    hasData = true;
+  }
+  function line(text: string) {
+    lineNonempty ||= text.length > 0;
+    let offset = 0;
+    while (mode === "prefix" && offset < text.length) {
+      const char = text[offset++];
+      if (char === ":") {
+        mode = prefix === "data" ? "data" : prefix === "event" ? "event" : "ignored";
+        optionalSpace = true;
+        if (mode === "data") { beginData(); if (stopped) return; }
+        else if (mode === "event") eventName = literal("error");
+      } else if (prefix.length < 5) prefix += char;
+      else mode = "ignored";
+    }
+    if (optionalSpace && offset < text.length) {
+      optionalSpace = false;
+      if (text[offset] === " ") offset++;
+    }
+    if (mode === "data") data(text.slice(offset));
+    else if (mode === "event") eventName.push(text.slice(offset));
+  }
+  // Returns the dispatched event's observation; the caller awaits its delivery.
+  function endLine(): ResponsesObservation | null {
+    let fact: ResponsesObservation | null = null;
+    if (!lineNonempty) {
+      if (eventError) {
+        const evidence = hasContent ? document.end() : null;
+        if (stopped) return null;
+        receipt?.invalid();
+        accumulator.accept({ kind: "error", ...(evidence?.kind === "data" ? { value: evidence.value } : {}) });
+        tools?.invalid(); tools?.witness?.invalid(); hosted.invalid();
+      }
+      else if (hasData && hasContent) {
+        const evidence = done.matches() ? { kind: "done" } as const : document.end();
+        if (stopped) return null;
+        accumulator.accept(evidence);
+        if (evidence.kind === "done") receipt?.done();
+        if (evidence.kind === "data") {
+          receipt?.accept(evidence.value, true);
+          if (responseOutcome(evidence.value) === "provider_error") { tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
+          tools?.accept(document.tools(), true); tools?.witness?.accept(document.witnesses(), true);
+          hosted.accept(document.tools(), true);
+          fact = observe ? responsesObservation(evidence.value) : null;
+        }
+        else if (evidence.kind !== "done") { receipt?.invalid(); tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
+      }
+      document.stop();
+      document = metadataParser(!!observe || !!receipt, !!tools?.witness, !!receipt); hasData = false; hasContent = false; eventError = false; done = literal("[DONE]", true);
+    } else if (mode === "prefix" && prefix === "data") beginData();
+    else if (mode === "event" || mode === "prefix" && prefix === "event") eventError = mode === "event" && eventName.matches();
+    prefix = ""; mode = "prefix"; lineNonempty = false; optionalSpace = false;
+    return fact;
+  }
+  async function text(value: string) {
+    if (!sse) { document.push(value); return; }
+    let offset = 0;
+    while (offset < value.length && !stopped) {
+      if (skipLf) { skipLf = false; if (value[offset] === "\n") { offset++; continue; } }
+      lineEnd.lastIndex = offset;
+      const end = lineEnd.exec(value)?.index ?? value.length;
+      line(value.slice(offset, end));
+      if (stopped || end === value.length) return;
+      const fact = endLine();
+      if (fact) await observe!(fact);
+      if (stopped) return;
+      skipLf = value[end] === "\r"; offset = end + 1;
+    }
+  }
+  function invalidUtf8() {
+    receipt?.invalid();
+    tools?.invalid(); tools?.witness?.invalid(); hosted.invalid();
+    document.stop();
+    if (sse) accumulator.accept({ kind: "invalid" });
+    else json = { tokens: null, outcome: "provider_error" };
+    stopped = true;
+  }
+  function finishDecoder(): string {
+    try { return decoder.decode(); }
+    catch {
+      // A trailing code point may still be buffered when the caller cancels.
+      // Only payload bytes in a data field undermine no-work evidence. A raw
+      // comment must not turn an otherwise empty/error/marker tail into work.
+      if (sse && revokeRejection) undecodedData ||= mode === "data" && !eventError;
+      else invalidUtf8();
+      return "";
+    }
+  }
+  return {
+    async push(bytes: Uint8Array) {
+      // The parser may materialize one feed's tokens before the selector runs.
+      // Bound that allocation even when the upstream supplies a giant chunk.
+      for (let offset = 0; offset < bytes.length && !stopped; offset += feedLimit) {
+        let decoded: string;
+        try { decoded = decoder.decode(bytes.subarray(offset, offset + feedLimit), { stream: true }); }
+        catch { invalidUtf8(); return; }
+        await text(decoded);
+      }
+    },
+    async end() {
+      if (stopped) return;
+      const tail = finishDecoder();
+      if (stopped) return;
+      await text(tail);
+      if (stopped) return;
+      if (sse) { if (hasData || hasContent) receipt?.invalid(); return; } // Undelimited events cannot attest a receipt.
+      const evidence = document.end();
+      if (stopped) return;
+      if (evidence.kind === "data") {
+        receipt?.accept(evidence.value, false);
+        if (responseOutcome(evidence.value) === "provider_error") { tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
+        tools?.accept(document.tools(), false); tools?.witness?.accept(document.witnesses(), false);
+        hosted.accept(document.tools(), false);
+        const fact = responsesObservation(evidence.value);
+        if (fact) await observe?.(fact);
+      }
+      else { receipt?.invalid(); tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
+      json = evidence.kind === "data" ? { tokens: usageExtractor(evidence.value), outcome: responseOutcome(evidence.value) }
+        : { tokens: null, outcome: evidence.kind === "invalid" ? "provider_error" : null };
+    },
+    result(ended: boolean): UsageInspection {
+      if (sse && revokeRejection) {
+        if (!ended && !stopped) finishDecoder();
+        if (undecodedData) accumulator.unfinished({ kind: "invalid" });
+        else if (hasData && hasContent) {
+          const pending = document.pending();
+          accumulator.unfinished(eventError ? { kind: "error", ...(pending.kind === "data" ? { value: pending.value } : {}) }
+            : done.matches() ? { kind: "done" } : pending);
+        }
+      }
+      return sse ? accumulator.result(ended, document.unavailable()) : ended ? json : empty();
+    },
+    hostedUsage: (ended: boolean) => hosted.result(ended),
+    stop() { stopped = true; document.stop(); },
+  };
+}
+
+function literal(expected: string, trim = false) {
+  let offset = 0, valid = true;
+  return {
+    push(text: string) {
+      if (!valid) return;
+      for (const char of text) {
+        if (trim && /\s/.test(char) && (offset === 0 || offset === expected.length)) continue;
+        if (char !== expected[offset]) { valid = false; return; }
+        offset++;
+      }
+    },
+    matches: () => valid && offset === expected.length,
+  };
+}
+
+class InspectionLimit extends Error {}
+type MetadataEvidence = Extract<SseUsageEvidence, { kind: "data" }> | { kind: "invalid" | "unavailable" };
+
+function metadataParser(inspectIdentity: boolean, encrypted: boolean, receipt: boolean) {
+  const projection = metadataProjection(inspectIdentity, receipt);
+  // Hosted usage also owns this projection when no continuation is requested.
+  const tools = createToolEvidenceProjection();
+  const witnesses = encrypted ? createToolEvidenceProjection(true) : null;
+  let failure: "invalid" | "unavailable" | null = null;
+  let consume: ReturnType<typeof createJsonTokenizer> | undefined = createJsonTokenizer((token: Token) => { projection.accept(token); tools?.accept(token); witnesses?.accept(token); });
+  function failed(error: unknown) {
+    failure = error instanceof InspectionLimit ? "unavailable" : "invalid";
+    consume = undefined; projection.clear(); tools?.clear(); witnesses?.clear();
+  }
+  return {
+    push(text: string) {
+      if (!consume || !text) return;
+      try { consume.push(text); } catch (error) { failed(error); }
+    },
+    end(): MetadataEvidence {
+      if (consume) {
+        try { consume.end(); } catch (error) { failed(error); }
+        consume = undefined;
+      }
+      return failure ? { kind: failure } : { kind: "data", value: projection.value() };
+    },
+    unavailable: () => failure === "unavailable",
+    pending: (): MetadataEvidence => failure ? { kind: failure } : projection.complete() ? { kind: "data", value: projection.value() } : { kind: "unavailable" },
+    tools: () => failure ? undefined : tools?.value(),
+    witnesses: () => failure ? undefined : witnesses?.value(),
+    stop() { consume = undefined; projection.clear(); tools?.clear(); witnesses?.clear(); },
+  };
+}
+
+type Context = "root" | "response" | "usage" | "details" | "creation";
+type Field = Context | "output" | "text" | "identity" | "number" | "error" | null;
+type Frame = { context: Context | null; value: Record<string, unknown> | null; key: string | null; output?: unknown[] };
+const counters = new Set(["input_tokens", "prompt_tokens", "inputTokens", "output_tokens", "completion_tokens", "outputTokens", "total_tokens", "totalTokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_ephemeral_5m_input_tokens", "cache_creation_ephemeral_1h_input_tokens"]);
+const detailCounters = new Set(["cached_tokens", "cache_read_input_tokens", "cache_write_tokens", "text_tokens", "image_tokens", "reasoning_tokens"]);
+const creationCounters = new Set(["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]);
+const textKeys = new Set(["type", "object", "status", "service_tier"]);
+const valueStarts = new Set(["startObject", "startArray", "startString", "startNumber", "nullValue", "trueValue", "falseValue"]);
+const leafFields = new Set(["text", "identity", "number", "error", "output"]);
+
+function metadataProjection(inspectIdentity: boolean, receipt: boolean) {
+  const frames: Frame[] = [];
+  let complete = false;
+  let value: unknown, capture: "key" | "text" | "identity" | "number" | "error" | null = null, scalar = "";
+  const current = () => frames[frames.length - 1];
+  function field(): Field {
+    if (!frames.length) return "root";
+    const frame = current(), key = frame.key;
+    if (!key || !frame.context) return null;
+    if (frame.context === "root" || frame.context === "response") {
+      if (textKeys.has(key)) return "text";
+      if (inspectIdentity && (key === "id" || receipt && key === "model")) return "identity";
+      if (key === "output") return "output";
+      if (frame.context === "root" && key === "error") return "error";
+      if (frame.context === "root" && key === "response") return "response";
+      return key === "usage" ? "usage" : null;
+    }
+    if (frame.context === "usage") {
+      if (key === "input_tokens_details" || key === "prompt_tokens_details" || key === "output_tokens_details" || key === "completion_tokens_details") return "details";
+      if (key === "cache_creation") return "creation";
+      return counters.has(key) || receipt && key === "cost_in_usd_ticks" ? "number" : null;
+    }
+    return (frame.context === "details" ? detailCounters : creationCounters).has(key) ? "number" : null;
+  }
+  function assign(next: unknown) {
+    if (!frames.length) { value = next; complete = false; }
+    else if (field()) current().value![current().key!] = next;
+  }
+  return {
+    value: () => value,
+    complete: () => complete,
+    clear() { value = undefined; complete = false; frames.length = 0; scalar = ""; capture = null; },
+    accept(token: Token) {
+      // Only value starts consult the selected path; it is per-token hot.
+      const selected = valueStarts.has(token.name) ? field() : null;
+      // Retain only a one-element witness for a nonempty output array, never
+      // its generated text/tool arguments. Duplicate output/response keys still
+      // replace the witness together with their other projected descendants.
+      const output = current()?.output;
+      if (output && !output.length && valueStarts.has(token.name)) output.push(true);
+      switch (token.name) {
+        case "startObject":
+        case "startArray": {
+          if (frames.length >= depthLimit) throw new InspectionLimit();
+          const object = token.name === "startObject";
+          // Replacing an ancestor discards all earlier descendants. A non-null
+          // primitive/array must still block the normalizer's nullish fallback.
+          const next = selected ? object ? {} : [] : undefined;
+          assign(next);
+          const context = object && selected && !leafFields.has(selected) ? selected as Context : null;
+          frames.push({ context, value: context ? next as Record<string, unknown> : null, key: null, ...(selected === "output" && !object ? { output: next as unknown[] } : {}) });
+          break;
+        }
+        case "endObject":
+        case "endArray": frames.pop(); if (!frames.length) complete = true; break;
+        case "startKey": current().key = null; scalar = ""; capture = current().context ? "key" : null; break;
+        case "endKey": if (capture === "key") current().key = scalar; scalar = ""; capture = null; break;
+        case "startString":
+          assign(""); scalar = "";
+          capture = selected === "text" || selected === "identity" ? selected : selected === "error" ? "error" : null;
+          break;
+        case "stringChunk":
+          if (capture === "error") { if (token.value.length) assign(true); }
+          else if (capture === "key" || capture === "text" || capture === "identity") {
+            if (scalar.length + token.value.length > (capture === "identity" ? 256 : scalarLimit)) {
+              if (capture !== "key") throw new InspectionLimit();
+              capture = null; scalar = ""; // An overlong key cannot name a selected field.
+            } else scalar += token.value;
+          }
+          break;
+        case "endString": if (capture === "text" || capture === "identity") assign(scalar); scalar = ""; capture = null; break;
+        case "startNumber": assign(0); scalar = ""; capture = selected === "number" || selected === "error" ? "number" : null; break;
+        case "numberChunk":
+          if (capture === "number") {
+            if (scalar.length + token.value.length > scalarLimit) throw new InspectionLimit();
+            scalar += token.value;
+          }
+          break;
+        case "endNumber": if (capture === "number") assign(Number(scalar)); scalar = ""; capture = null; break;
+        case "nullValue":
+        case "trueValue":
+        case "falseValue": assign(token.value); break;
+      }
+    },
+  };
+}

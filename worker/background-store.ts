@@ -1,0 +1,429 @@
+import { admitBackgroundAdmission, admitInputAllocation, newBackgroundJob, liveBackground, type BackgroundAdmission, type ManagedAdmission, type BackgroundJob, type BackgroundTombstone, type BackgroundRecord, type BackgroundSummary, type ManagedState, type SettlementDisposition } from "./background-record.ts";
+import { admitAccountingJson, copyAccountingJson, accountingObjectProjection, accountingArrayProjection } from "./json-body.ts";
+import { assertManagedInputLive, bindManagedInput, inputReceipt, inputUnavailable, uploadJob, validateInputAllocation, type ManagedInputAllocation, type ManagedInputBinding, type ManagedInputReceipt } from "./managed-input-receipt.ts";
+import { type BudgetReservationIntent } from "./accounting.ts";
+import { accountingReceipt, type AccountingOutcome } from "./proxy-accounting.ts";
+import type { ManagedFileDescriptor, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
+import { HttpError } from "./http-error.ts";
+import { assertPublishedInputLive, samePublishedInput, samePublishedObject, validatePublishedInput, validatePublishedObject,
+  validatePublishedAttempt, publishedInputUnavailable, publishedInputVersion, type PublishedInputBinding,
+  type PublishedInputReceipt, type PublishedInputObject, type PublishedInputAttempt } from "./published-input-receipt.ts";
+
+export const backgroundRowBytes = 64 * 1024;
+export const backgroundActiveLimit = 16;
+export const backgroundCapacity = 64;
+
+// All mutations run in the scoped Responses owner's serialized tail. The same
+// 64 rows contain live jobs and evictable summaries; no second recovery index.
+export class BackgroundStore {
+  private readonly sql: SqlStorage;
+  private readonly closeBinding: (id: string) => void;
+  constructor(sql: SqlStorage, closeBinding: (id: string) => void = () => undefined) {
+    this.sql = sql;
+    this.closeBinding = closeBinding;
+    sql.exec("CREATE TABLE IF NOT EXISTS responses_background (job_id TEXT PRIMARY KEY, phase TEXT NOT NULL, admitted_at_ms INTEGER NOT NULL, next_action_ms INTEGER, job_json TEXT NOT NULL)");
+    sql.exec("CREATE INDEX IF NOT EXISTS responses_background_due ON responses_background(next_action_ms)");
+  }
+
+  // Separate input-publication records share the bounded scope/table, never the
+  // generation type, alarm, collector or financial recovery path. NULL due time
+  // is deliberate. Expired attempts remain tombstones; expiry cannot reset them.
+  allocatePublishedInput(binding: PublishedInputBinding): PublishedInputReceipt {
+    assertPublishedInputLive(binding);
+    const prior = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE phase LIKE 'asset_%' AND json_extract(job_json, '$.binding.idempotencyDigest') = ? LIMIT 1", binding.idempotencyDigest)][0];
+    if (prior) {
+      const receipt = JSON.parse(prior.job_json) as PublishedInputReceipt;
+      if (!samePublishedInput(receipt.binding, binding)) publishedInputUnavailable();
+      return receipt;
+    }
+    if ([...this.sql.exec("SELECT job_id FROM responses_background WHERE job_id = ?", binding.id)].length) publishedInputUnavailable();
+    const count = [...this.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM responses_background")][0].count;
+    if (count >= backgroundCapacity) capacity();
+    const receipt: PublishedInputReceipt = { version: publishedInputVersion, binding, state: "pending", object: null, attempt: null };
+    this.savePublishedInput(receipt); return receipt;
+  }
+
+  publishedInput(id: string): PublishedInputReceipt {
+    if (typeof id !== "string" || id.length !== 38 || !/^asset_[a-f0-9]{32}$/.test(id)) publishedInputUnavailable();
+    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id = ? AND phase LIKE 'asset_%'", id)][0];
+    if (!row) publishedInputUnavailable();
+    const receipt = JSON.parse(row.job_json) as PublishedInputReceipt;
+    assertPublishedInputLive(receipt.binding);
+    return receipt;
+  }
+
+  claimPublishedInputPublication(binding: PublishedInputBinding): PublishedInputReceipt {
+    const receipt = this.publishedInput(binding.id);
+    if (!samePublishedInput(receipt.binding, binding) || receipt.state !== "pending") publishedInputUnavailable();
+    receipt.state = "publication_unknown"; this.savePublishedInput(receipt); return receipt;
+  }
+
+  bindPublishedInputObject(binding: PublishedInputBinding, object: PublishedInputObject): PublishedInputReceipt {
+    const receipt = this.publishedInput(binding.id);
+    validatePublishedObject(object, binding);
+    if (!samePublishedInput(receipt.binding, binding)) publishedInputUnavailable();
+    if (receipt.state === "published" && receipt.object && samePublishedObject(receipt.object, object)) return receipt;
+    if (receipt.state !== "publication_unknown" || receipt.object) publishedInputUnavailable();
+    receipt.object = object; receipt.state = "published"; this.savePublishedInput(receipt); return receipt;
+  }
+
+  claimPublishedInputForward(binding: PublishedInputBinding, attempt: PublishedInputAttempt): PublishedInputReceipt {
+    const receipt = this.publishedInput(binding.id);
+    validatePublishedAttempt(attempt);
+    if (!samePublishedInput(receipt.binding, binding) || receipt.state !== "published" || !receipt.object || receipt.attempt) publishedInputUnavailable();
+    receipt.attempt = attempt; receipt.state = "forwarding_unknown"; this.savePublishedInput(receipt); return receipt;
+  }
+
+  private savePublishedInput(receipt: PublishedInputReceipt): void {
+    validatePublishedInput(receipt.binding);
+    const encoded = JSON.stringify(receipt);
+    if (new TextEncoder().encode(encoded).byteLength > backgroundRowBytes) publishedInputUnavailable();
+    this.sql.exec("INSERT INTO responses_background (job_id, phase, admitted_at_ms, next_action_ms, job_json) VALUES (?, ?, ?, NULL, ?) ON CONFLICT(job_id) DO UPDATE SET phase = excluded.phase, next_action_ms = NULL, job_json = excluded.job_json",
+      receipt.binding.id, `asset_${receipt.state}`, receipt.binding.allocatedAt, encoded);
+  }
+
+  admit(input: BackgroundAdmission): BackgroundJob {
+    admitBackgroundAdmission(input);
+    if (!/^bg_[0-9a-f]{32}$/.test(input.id) || !Number.isSafeInteger(input.admittedAt) || Math.abs(Date.now() - input.admittedAt) > 60_000) invalid();
+    if (input.managed) {
+      validateManagedAdmission(input);
+      if (this.managedRetry(input.managed, input.owner.policyGeneration)) throw new HttpError(409, "background_job_exists", "managed admission already exists");
+    }
+    if (this.get(input.id)) throw new HttpError(409, "background_job_exists", "background admission already exists");
+    const job = copyAccountingJson(newBackgroundJob(input), "capsule");
+    encode(job);
+    const active = [...this.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM responses_background WHERE phase IN ('admitting', 'observing')")][0].count;
+    if (active >= backgroundActiveLimit) capacity();
+    const count = [...this.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM responses_background")][0].count;
+    if (count >= backgroundCapacity) {
+      // Completed managed keys remain replay guards for the original retention
+      // window. Capacity pressure must not authorize another generation POST.
+      const evicted = [...this.sql.exec("DELETE FROM responses_background WHERE job_id IN (SELECT job_id FROM responses_background WHERE phase IN ('complete', 'expired') AND (json_extract(job_json, '$.managed') IS NULL OR json_extract(job_json, '$.replayUntil') <= ?) ORDER BY admitted_at_ms, job_id LIMIT 1) RETURNING job_id", Date.now())];
+      if (!evicted.length) capacity();
+    }
+    this.save(job);
+    return job;
+  }
+
+  // Input upload and generation share this row, never a global asset index.
+  allocateInput(input: ManagedInputAllocation): BackgroundJob {
+    admitInputAllocation(input);
+    const uploadInput = { ...input.admission, managed: undefined, ...input.upload };
+    validateInputAllocation(input);
+    if (this.get(input.admission.id)) inputUnavailable();
+    const job = this.admit(input.admission);
+    job.inputReceipt = { binding: input.binding, state: "pending", imageId: null, createClaimed: false,
+      upload: copyAccountingJson(newBackgroundJob(uploadInput), "capsule") };
+    this.save(job); return job;
+  }
+
+  getInput(binding: ManagedInputBinding): ManagedInputReceipt {
+    return inputReceipt(this.get(binding.jobId), binding);
+  }
+
+  claimInputUpload(binding: ManagedInputBinding): BackgroundJob {
+    const job = this.admitting(binding.jobId), receipt = inputReceipt(job, binding);
+    assertManagedInputLive(binding);
+    const upload = uploadJob(receipt);
+    if (receipt.state !== "pending" || upload.event || job.event || job.legs.some(leg => leg.reserve !== "accepted")
+      || upload.legs.some(leg => leg.reserve !== "accepted")) inputUnavailable();
+    receipt.state = "dispatch_unknown"; upload.egress = true;
+    this.save(job); return upload;
+  }
+
+  bindInputUpload(binding: ManagedInputBinding, imageId: string): ManagedInputReceipt {
+    const job = this.admitting(binding.jobId), receipt = inputReceipt(job, binding);
+    bindManagedInput(receipt, imageId);
+    this.save(job);
+    this.freeze(binding.jobId, { occurredAtMs: Date.now(), statusCode: 200, status: "success", billable: true, tokens: null, contentRef: null }, true);
+    return this.getInput(binding);
+  }
+
+  claimInputCreate(binding: ManagedInputBinding): BackgroundJob {
+    const job = this.admitting(binding.jobId), receipt = inputReceipt(job, binding);
+    assertManagedInputLive(binding);
+    if (receipt.state !== "bound" || !receipt.imageId || receipt.createClaimed || job.dispatchClaimed) inputUnavailable();
+    receipt.createClaimed = true; this.save(job);
+    return this.beginDispatch(job.id, null, true);
+  }
+
+  // Called inside the scoped owner's transaction, before any reservation RPC.
+  admitManaged(input: BackgroundAdmission): { created: boolean; job: BackgroundRecord } {
+    validateManagedAdmission(input);
+    const existing = this.managedRetry(input.managed!, input.owner.policyGeneration);
+    return existing ? { created: false, job: existing } : { created: true, job: this.admit(input) };
+  }
+
+  managedRetry(input: ManagedAdmission, policyGeneration: string): BackgroundRecord | null {
+    validateManagedMetadata(input);
+    if (input.idempotencyKey === null) return null;
+    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE json_extract(job_json, '$.managed.protocol') = ? AND json_extract(job_json, '$.managed.idempotencyKey') = ? AND COALESCE(json_extract(job_json, '$.managed.providerId'), 'replicate') = ? AND json_extract(job_json, '$.replayUntil') > ? LIMIT 1", input.protocol, input.idempotencyKey, input.providerId ?? "replicate", Date.now())][0];
+    if (!row) return null;
+    const job = JSON.parse(row.job_json) as BackgroundRecord;
+    if (job.managed?.requestDigest !== input.requestDigest) throw new HttpError(409, "idempotency_conflict", "idempotency key was already used for a different request");
+    if (job.managed.policyGeneration !== policyGeneration) throw new HttpError(409, "background_owner_changed", "the original job policy has changed");
+    return job;
+  }
+
+  get(id: string): BackgroundRecord | null {
+    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id = ? AND phase NOT LIKE 'asset_%'", id)][0];
+    return row ? JSON.parse(row.job_json) : null;
+  }
+
+  list(after = ""): BackgroundRecord[] {
+    return [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id > ? AND phase NOT LIKE 'asset_%' ORDER BY job_id LIMIT 16", after)].map(row => JSON.parse(row.job_json));
+  }
+
+  beginReserve(id: string, index: number, upload = false): BudgetReservationIntent {
+    const job = upload ? this.upload(id) : this.admitting(id), leg = job.legs[index];
+    if (!leg || leg.reserve === "accepted" || leg.reserve === "denied") invalid();
+    if (leg.reserve === "sent") leg.uncertainReserve = true;
+    leg.reserve = "sent"; this.saveOperation(job, upload);
+    return leg.intent;
+  }
+
+  reserved(id: string, index: number, allowed: boolean, upload = false): void {
+    const job = upload ? this.upload(id) : this.admitting(id), leg = job.legs[index];
+    if (!leg || leg.reserve !== "sent") invalid();
+    leg.reserve = allowed ? "accepted" : "denied"; this.saveOperation(job, upload);
+  }
+
+  dispatched(id: string, index: number, upload = false): void {
+    const job = upload ? this.upload(id) : this.admitting(id), leg = job.legs[index];
+    if (!leg || leg.reserve !== "accepted") invalid();
+    leg.dispatched = true; this.saveOperation(job, upload);
+  }
+
+  beginEgress(id: string): BackgroundJob {
+    const job = this.admitting(id);
+    if (job.managed && !job.dispatchClaimed) invalid();
+    if (job.legs.some(leg => leg.reserve !== "accepted" || !leg.dispatched)) invalid();
+    job.egress = true; job.phase = "observing"; job.nextAttemptAt = Date.now() + 5_000;
+    // Commit uncertainty before granting egress: losing either acknowledgement
+    // or the create response can never make the job eligible for another POST.
+    if (job.managed) job.managed.submission = "submission_unknown";
+    this.save(job); return job;
+  }
+
+  identity(id: string, responseId: string): void {
+    const job = this.job(id);
+    if (job.event || Date.now() >= job.observeUntil) return;
+    if (job.phase !== "observing") invalid();
+    if (!responseId || new TextEncoder().encode(responseId).byteLength > 256) invalid();
+    if (job.responseId && job.responseId !== responseId) throw new HttpError(502, "background_identity_conflict", "upstream changed the background response identity");
+    if (job.managed) {
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(responseId)) invalid();
+      job.managed.upstreamId = responseId; job.managed.submission = "bound";
+    }
+    job.responseId = responseId; job.nextAttemptAt = Math.min(job.nextAttemptAt, Date.now() + 5_000); this.save(job);
+  }
+
+  observeManaged(id: string, upstreamId: string, status: string, statusCode: number, attempt?: number, observationUnavailable?: ManagedObservationLoss): void {
+    const current = this.get(id);
+    if (!current || !liveBackground(current) || current.event || attempt !== undefined && current.attempts !== attempt || Date.now() >= current.observeUntil) return;
+    if (!current.managed || current.managed.submission !== "bound" || current.responseId !== upstreamId
+      || !["starting", "processing", "succeeded", "failed", "canceled", "aborted"].includes(status) || !Number.isInteger(statusCode) || !(statusCode >= 200 && statusCode < 300 || status === "failed" && statusCode === 422)) invalid();
+    if (observationUnavailable !== undefined) {
+      if (!["expired_or_unknown", "deleted", "canceled_or_deleted"].includes(observationUnavailable) || status !== "processing") invalid();
+      current.managed.observationUnavailable = observationUnavailable;
+      current.lastError = "observation_unavailable";
+      // Retain terminal=null: observation loss is not failed/free execution.
+    } else {
+      if (status === "starting" || status === "processing") return;
+      current.managed.terminal = status as ManagedState["terminal"];
+    }
+    this.save(current);
+    this.freeze(id, { occurredAtMs: Date.now(), statusCode, status: status === "succeeded" ? "success" : "provider_error", billable: true, tokens: null, contentRef: null });
+  }
+
+  // Called only by the scoped owner after a qualified original-job observation.
+  // Inline observations do not erase an earlier URI. File processing never
+  // changes generation outcome, reservation, settlement or the frozen receipt.
+  bindManagedFiles(id: string, upstreamId: string, files: readonly ManagedFileDescriptor[]): ManagedFileDescriptor[] {
+    const job = this.get(id), managed = job?.managed;
+    if (!job || !managed || managed.submission !== "bound" || managed.upstreamId !== upstreamId
+      || managed.terminal !== "succeeded" || managed.observationUnavailable || Date.now() >= job.replayUntil) {
+      throw new HttpError(409, "managed_files_unavailable", "files require the original succeeded managed job before its retention deadline");
+    }
+    admitAccountingJson(files, "capsule");
+    admitAccountingJson(accountingObjectProjection(job, { managed: accountingObjectProjection(managed, {
+      files: accountingArrayProjection(managed.files ?? [], files),
+    }) }), "capsule");
+    const merged = new Map<string, ManagedFileDescriptor>();
+    for (const entries of [managed.files ?? [], files]) {
+      if (!Array.isArray(entries) || entries.length > 64) invalidFiles();
+      for (const file of entries) {
+        if (!file || typeof file !== "object" || Array.isArray(file) || Object.keys(file).some(key => key !== "id" && key !== "mimeType")
+          || typeof file.id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(file.id)
+          || typeof file.mimeType !== "string" || !/^(?:video|audio|image)\/[a-z0-9.+-]{1,64}$/.test(file.mimeType)) invalidFiles();
+        const previous = merged.get(file.id);
+        if (previous && previous.mimeType !== file.mimeType) throw new HttpError(409, "managed_file_conflict", "a bound output file cannot change its media type");
+        merged.set(file.id, { id: file.id, mimeType: file.mimeType });
+        if (merged.size > 64) invalidFiles();
+      }
+    }
+    const result = [...merged.values()];
+    if (JSON.stringify(managed.files ?? []) !== JSON.stringify(result)) { managed.files = result; this.save(job); }
+    return result;
+  }
+
+  beginDispatch(id: string, contentRef: string | null, input = false): BackgroundJob {
+    const job = this.admitting(id);
+    if (job.inputReceipt && !input) inputUnavailable();
+    if (job.dispatchClaimed) throw new HttpError(409, "background_dispatch_claimed", "background dispatch was already claimed; never repeat generation");
+    job.dispatchClaimed = true; job.contentRef = contentRef; this.save(job); return job;
+  }
+
+  freeze(id: string, outcome: Omit<AccountingOutcome, "reservation">, upload = false): BackgroundRecord {
+    const current = upload ? this.get(id)?.inputReceipt?.upload : this.get(id);
+    if (!current) missing();
+    if (!liveBackground(current) || current.event) return current;
+    const job = current;
+    job.event = accountingReceipt(job.facts!, { ...outcome, contentRef: outcome.contentRef ?? job.contentRef, reservation: { reservedMicros: job.reservedMicros, reservations: job.legs.map(({ intent }) => ({ objectName: intent.objectName, reservationId: intent.request.reservationId })) } });
+    job.amount = job.event.actual_cost_micros; job.basis = job.event.cost_basis;
+    job.phase = "outbox"; job.facts = null; job.route = null; job.responseId = null;
+    for (const leg of job.legs) if (leg.reserve === "never" || leg.reserve === "denied" && !leg.uncertainReserve) leg.settlement = "settled";
+    job.settlements = job.legs.map(leg => leg.settlement); job.nextAttemptAt = Date.now();
+    if (!upload && job.inputReceipt) {
+      const receipt = job.inputReceipt, child = receipt.upload;
+      if (liveBackground(child) && !child.event) {
+        this.save(job);
+        this.freeze(id, { ...outcome, billable: receipt.state !== "pending" }, true);
+        job.inputReceipt = this.get(id)!.inputReceipt;
+      }
+    }
+    this.saveOperation(job, upload); if (!upload) this.closeBinding(id); return job;
+  }
+
+  acknowledge(id: string, eventId: string, sink: number | "usage", disposition: SettlementDisposition | BackgroundSummary["usage"], upload = false): void {
+    const job = upload ? this.get(id)?.inputReceipt?.upload : this.get(id);
+    if (!job) missing();
+    if (!liveBackground(job)) return;
+    if (!job.event || job.event.id !== eventId || Date.now() >= job.replayUntil) return;
+    if (sink === "usage") {
+      if (job.usage === "stored" || job.usage === "duplicate" || job.usage === "expired_by_retention") return;
+      if (!["stored", "duplicate", "expired_by_retention", "unavailable"].includes(disposition)) invalid();
+      job.usage = disposition as BackgroundSummary["usage"];
+    } else {
+      if (!job.legs[sink] || !["settled", "missing", "conflict", "unavailable"].includes(disposition)) invalid();
+      if (job.legs[sink].settlement === "settled") return;
+      job.legs[sink].settlement = disposition as SettlementDisposition;
+      job.settlements = job.legs.map(leg => leg.settlement);
+    }
+    const done = job.settlements.every(value => value === "settled") && ["stored", "duplicate", "expired_by_retention"].includes(job.usage)
+      && (!job.inputReceipt || !liveBackground(job.inputReceipt.upload));
+    this.saveOperation(done ? tombstone(job, "complete") : job, upload);
+    if (upload && done) {
+      const parent = this.get(id);
+      if (parent && liveBackground(parent) && parent.event && parent.settlements.every(value => value === "settled")
+        && ["stored", "duplicate", "expired_by_retention"].includes(parent.usage)) this.save(tombstone(parent, "complete"));
+    }
+  }
+
+  // Claim before network I/O. A crash merely delays the same immutable receipt;
+  // another alarm can never replay a generation POST.
+  claim(now: number, id?: string): BackgroundJob[] {
+    const rows = id ? [this.get(id)].filter((job): job is BackgroundRecord => !!job)
+      : [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE next_action_ms <= ? ORDER BY next_action_ms LIMIT 4", now)].map(row => JSON.parse(row.job_json) as BackgroundRecord);
+    const work: BackgroundJob[] = [];
+    for (const record of rows) {
+      if (!liveBackground(record)) continue;
+      let job = record;
+      if (id && !job.event) throw new HttpError(409, "background_not_final", "manual recovery can only replay a frozen financial receipt");
+      if (now >= job.replayUntil) { this.save(tombstone(job, "expired")); continue; }
+      if (job.phase === "admitting" || !job.event && now >= job.observeUntil) {
+        job.lastError = job.phase === "admitting" ? "admission_lost" : "observation_expired";
+        this.save(job);
+        job = this.freeze(job.id, { occurredAtMs: now, statusCode: null, status: "provider_error", billable: job.egress, tokens: null, contentRef: null }) as BackgroundJob;
+      }
+      if (now >= job.autoRetryUntil && !id) { job.nextAttemptAt = job.autoRetryUntil; this.save(job); continue; }
+      job.attempts++; job.nextAttemptAt = now + 30_000; this.save(job); work.push(job);
+    }
+    return work;
+  }
+
+  retry(id: string, error: BackgroundSummary["lastError"], attempt: number): void {
+    const record = this.get(id);
+    if (!record || !liveBackground(record) || record.attempts !== attempt) return;
+    record.lastError = error;
+    // Healthy collection must not inherit financial backoff and miss temporary
+    // provider retention. Attempts remain monotonic for the late-result fence.
+    const backoff = 5_000 * 2 ** Math.min(record.attempts, 10);
+    const delay = record.event ? Math.min(60 * 60_000, backoff) : error ? Math.min(30_000, backoff) : 5_000;
+    record.nextAttemptAt = Date.now() + delay;
+    this.save(record);
+  }
+
+  nextDeadline(): number | undefined {
+    return [...this.sql.exec<{ next_action_ms: number }>("SELECT next_action_ms FROM responses_background WHERE next_action_ms IS NOT NULL ORDER BY next_action_ms LIMIT 1")][0]?.next_action_ms;
+  }
+
+  private upload(id: string): BackgroundJob {
+    const job = this.job(id);
+    if (!job.inputReceipt) inputUnavailable();
+    const upload = uploadJob(job.inputReceipt);
+    if (upload.phase !== "admitting" || upload.event) inputUnavailable();
+    return upload;
+  }
+  private saveOperation(operation: BackgroundRecord, upload: boolean): void {
+    if (!upload) { this.save(operation); return; }
+    const job = this.job(operation.id);
+    if (!job.inputReceipt) inputUnavailable();
+    job.inputReceipt.upload = operation; this.save(job);
+  }
+  private admitting(id: string): BackgroundJob {
+    const job = this.job(id);
+    if (job.phase !== "admitting" || Date.now() >= job.admittedAt + 60_000) throw new HttpError(409, "background_admission_expired", "background admission is no longer available");
+    return job;
+  }
+  private job(id: string): BackgroundJob {
+    const record = this.get(id);
+    if (!record) missing();
+    if (!liveBackground(record)) throw new HttpError(409, "background_closed", "background financial recovery is closed");
+    return record;
+  }
+  private save(record: BackgroundRecord): void {
+    const encoded = encode(record);
+    const next = liveBackground(record) ? Math.min(record.replayUntil,
+      ...(!record.event ? [record.observeUntil] : []),
+      ...(record.nextAttemptAt < record.autoRetryUntil ? [!record.event && !record.responseId && record.phase === "observing" ? record.observeUntil : record.nextAttemptAt] : [])) : null;
+    this.sql.exec("INSERT INTO responses_background (job_id, phase, admitted_at_ms, next_action_ms, job_json) VALUES (?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET phase = excluded.phase, next_action_ms = excluded.next_action_ms, job_json = excluded.job_json", record.id, record.phase, record.admittedAt, next, encoded);
+  }
+}
+
+function tombstone(job: BackgroundJob, phase: BackgroundTombstone["phase"]): BackgroundTombstone {
+  const { id, admittedAt, observeUntil, autoRetryUntil, replayUntil, eventId, requestId, amount, basis, usage, settlements, lastError } = job;
+  return { id, admittedAt, observeUntil, autoRetryUntil, replayUntil, eventId, requestId, amount, basis, usage, settlements, lastError, phase, ...(job.managed ? { managed: job.managed } : {}), ...(job.inputReceipt ? { inputReceipt: job.inputReceipt } : {}) };
+}
+function validateManagedMetadata(managed: ManagedAdmission | undefined): void {
+  const digest = (value: unknown) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+  if (!managed || Object.keys(managed).some(key => !["protocol", "providerId", "idempotencyKey", "requestDigest", "requestedVersion", "fileBaseUrl"].includes(key))
+    || !["replicate.predictions", "fal.queue", "kie.jobs", "vydra.jobs", "dashscope.video", "pixverse.video", "runway.tasks", "together.video", "google.omni_video", "openrouter.video", "minimax.video"].includes(managed.protocol)
+    || managed.providerId !== undefined && (typeof managed.providerId !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(managed.providerId))
+    || managed.protocol !== "replicate.predictions" && managed.providerId === undefined
+    || managed.idempotencyKey !== null && !digest(managed.idempotencyKey) || !digest(managed.requestDigest)
+    || managed.fileBaseUrl !== undefined && (typeof managed.fileBaseUrl !== "string" || managed.fileBaseUrl.length > 2048
+      || !/^https:\/\/[a-z0-9.-]+(?::443)?(?:\/[a-zA-Z0-9_/-]*)?$/.test(managed.fileBaseUrl))
+    || typeof managed.requestedVersion !== "string" || !/^[a-zA-Z0-9_./:-]{1,256}$/.test(managed.requestedVersion)) invalid();
+}
+function validateManagedAdmission(input: BackgroundAdmission): void {
+  validateManagedMetadata(input.managed);
+  if (input.stream || (input.managed!.providerId ?? "replicate") !== input.owner.providerId) invalid();
+  // This first protocol slice supports an explicit router tariff only. An
+  // unknown provider price is never silently replaced with the flat fallback.
+  if (input.facts.cost.basis !== "policy_fixed" || !Number.isSafeInteger(input.facts.fixed) || input.facts.fixed! < 0
+    || input.facts.fixed !== input.facts.cost.reserveMicros || input.plan.reservedMicros !== (input.plan.legs.length ? input.facts.fixed : 0)
+    || input.plan.legs.some(leg => leg.request.costMicros !== input.facts.fixed)) {
+    throw new HttpError(400, "pricing_required", "managed predictions require an explicit policy-fixed tariff before dispatch");
+  }
+}
+function encode(record: BackgroundRecord): string {
+  const value = JSON.stringify(record);
+  if (new TextEncoder().encode(value).byteLength > backgroundRowBytes) throw new HttpError(413, "background_metadata_too_large", "background recovery metadata exceeds 64 KiB");
+  return value;
+}
+function capacity(): never { throw new HttpError(503, "background_capacity", "background recovery scope has no admission capacity"); }
+function invalid(): never { throw new HttpError(400, "background_request_invalid", "invalid background recovery transition"); }
+function missing(): never { throw new HttpError(404, "background_unavailable", "background recovery record is unavailable; this does not confirm settlement"); }
+
+function invalidFiles(): never { throw new HttpError(400, "managed_files_invalid", "managed files require at most 64 bounded native identifiers and media types"); }

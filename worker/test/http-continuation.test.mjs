@@ -1,0 +1,996 @@
+import { perRequestAuthority } from "./typescript-setup.mjs";
+// The static import graph precedes this execution marker.
+console.error("http-continuation-phase", JSON.stringify({ phase: "module-execution-start" }));
+perRequestAuthority();
+import assert from "node:assert/strict";
+import test from "node:test";
+import { setImmediate } from "node:timers/promises";
+const { authenticateProxyKey } = await import("../proxy-auth.ts");
+const { concreteOpenAiSelection } = await import("../proxy-selection.ts");
+import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
+import { sha256Hex } from "../utils.ts";
+import { HttpError } from "../http-error.ts";
+import { HttpContinuation } from "../http-continuation.ts";
+import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
+const { bodyBudgetCharged } = await import("../body-budget.ts");
+const { ProxyCompletion } = await import("../proxy-completion.ts");
+console.error("http-continuation-phase", JSON.stringify({ phase: "imports-complete" }));
+
+test("two-account HTTP requests pin response and turn identities while stateless calls keep rotating", async t => {
+  const diagnostic = state => { try { if (typeof t.log === "function") t.log("http-continuation-phase " + JSON.stringify({ case: "first", ...state })); } catch {} };
+  diagnostic({ phase: "first-test-entry" });
+  const f = await fixture(t, true, { diagnostic });
+  f.response = (_request, index) => Response.json({ object: "response", id: `resp_${index}`, status: "completed" }, { headers: { "x-codex-turn-state": index === 1 ? "turn_original" : `turn_next_${index}` } });
+  const first = await f.request();
+  assert.equal(first.status, 200); assert.equal(first.headers.get("x-codex-turn-state"), "turn_original");
+  await f.consume(first);
+  const continued = await f.request({ previous_response_id: "resp_1" }, { "x-codex-turn-state": "turn_original" });
+  assert.equal(continued.status, 200); await f.consume(continued);
+  assert.equal(f.sent[1].headers.get("chatgpt-account-id"), "synthetic-account-0");
+  assert.equal(f.sent[1].body.previous_response_id, "resp_1");
+  assert.equal(f.sent[1].headers.get("x-codex-turn-state"), "turn_original");
+  const independent = await f.request();
+  assert.equal(independent.status, 200); await f.consume(independent);
+  assert.equal(f.sent[2].headers.get("chatgpt-account-id"), "synthetic-account-1");
+});
+
+async function toolEvidence(f, id) {
+  const key = await sha256Hex(JSON.stringify(["response", id]));
+  const row = f.bindings().flatMap(([, state]) => state.db.prepare("SELECT pricing_evidence_json FROM http_continuations WHERE binding_key = ?").all(key))[0];
+  return row?.pricing_evidence_json && JSON.parse(row.pricing_evidence_json);
+}
+
+for (const streaming of [false, true]) test(`${streaming ? "SSE" : "JSON"} response collision never publishes another producer's clean proof and retains both charges`, async t => {
+  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
+  const value = { object: "response", id: "collision", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1 } };
+  f.response = () => streaming ? new Response(`data: ${JSON.stringify({ type: "response.created", response: { id: value.id } })}\n\ndata: ${JSON.stringify({ type: "response.completed", response: value })}\n\n`, { headers: { "content-type": "text/event-stream" } }) : Response.json(value);
+  await f.consume(await f.request({ stream: streaming }));
+  const before = await toolEvidence(f, "collision");
+  assert.equal(before.knowledge, "token_only");
+  const collision = await f.request({ stream: streaming, input: [{ type: "additional_tools", tools: [{ type: "web_search" }] }] });
+  const reader = collision.body.getReader();
+  await assert.rejects(reader.read(), error => error.code === "continuation_unavailable");
+  await f.drain();
+  assert.deepEqual(await toolEvidence(f, "collision"), before);
+  assert.equal(f.sent.length, 2); assert.equal(f.events.length, 2);
+  assert.equal(f.events[1].status, "provider_error"); assert.equal(f.events[1].actual_cost_micros, 7);
+  await assertBudgets(f, [7, 7]);
+});
+
+test("proof-only RPC failure preserves HTTP delivery, accounting and durable unknown ancestry", async t => {
+  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
+  f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
+    if (new URL(request.url).pathname === "/http-continuations" && (await request.clone().json()).action === "qualify") throw new Error("fixture qualification outage");
+  };
+  const first = await f.request();
+  assert.equal(first.status, 200); assert.equal(JSON.parse(await f.consume(first)).id, "resp_1");
+  assert.equal((await toolEvidence(f, "resp_1")).state, "pending");
+  f.env.ACCESS_CONTROL.beforeFetch = null;
+  await f.consume(await f.request({ previous_response_id: "resp_1" }));
+  assert.equal((await toolEvidence(f, "resp_2")).knowledge, "unknown");
+  assert.ok(f.events.every(event => event.status === "success" && event.actual_cost_micros === 7));
+  await assertBudgets(f, [7, 7]);
+});
+
+test("same-turn HTTP retries never fail over when the pinned upstream returns unavailable", async t => {
+  const f = await fixture(t);
+  f.response = () => Response.json({ object: "response", id: "resp_initial" }, { headers: { "x-codex-turn-state": "turn_initial" } });
+  await f.consume(await f.request());
+  f.response = () => Response.json({ error: { code: "busy" } }, { status: 503 });
+  for (const body of [{ previous_response_id: "resp_initial" }, {}]) {
+    const response = await f.request(body, { "x-codex-turn-state": "turn_initial" });
+    assert.equal(response.status, 503); await f.consume(response);
+    assert.equal(response.headers.has("x-clawrouter-grant-failover"), false);
+  }
+  assert.equal(f.sent.length, 3);
+  assert.ok(f.sent.every(request => request.headers.get("chatgpt-account-id") === "synthetic-account-0"));
+});
+
+test("WebSocket metadata-only reconnect resolves its owner and all supplied identities must agree", async t => {
+  const f = await fixture(t);
+  f.response = (_request, index) => Response.json({ id: `resp_${index}` }, { headers: { "x-codex-turn-state": `turn_${index}` } });
+  await f.consume(await f.request()); await f.consume(await f.request());
+  const headers = { authorization: "Bearer clawrouter-live-fixture-fixture-secret" };
+  async function resolve(body, extraHeaders = {}, transport = "websocket") {
+    const request = new Request("https://router.example/v1/responses", { method: "POST", headers: { ...headers, ...extraHeaders } });
+    const auth = await authenticateProxyKey(request.headers, f.env);
+    const selection = concreteOpenAiSelection("/v1/responses", { model: "openai/gpt-6-astra", input: "full input", ...body }, f.env);
+    return HttpContinuation.resolve(request, selection, auth, f.env, transport);
+  }
+  const metadata = { client_metadata: { "x-codex-turn-state": "turn_1" } };
+  assert.equal((await resolve(metadata)).pinned?.key, grantKeys[0]);
+  assert.equal((await resolve(metadata, {}, "http")).requested, false, "HTTP client_metadata is not a continuation carrier");
+  assert.equal((await resolve({ ...metadata, previous_response_id: "resp_1" }, { "x-codex-turn-state": "turn_1" })).pinned?.key, grantKeys[0]);
+  const restart = error => error.status === 409 && error.code === "continuation_restart_required";
+  await assert.rejects(resolve({ ...metadata, previous_response_id: "resp_2" }), restart);
+  await assert.rejects(resolve({ client_metadata: { "x-codex-turn-state": "unknown" } }), restart);
+  let lookups = 0;
+  f.env.ACCESS_CONTROL.beforeFetch = async name => { if (name.startsWith("http-continuations:")) lookups++; };
+  await assert.rejects(resolve(metadata, { "x-codex-turn-state": "turn_2" }), restart);
+  for (const value of [123, [], {}, "x".repeat(8193)]) await assert.rejects(resolve({ client_metadata: { "x-codex-turn-state": value } }), restart);
+  assert.equal(lookups, 0, "conflicting or unsupported turn carriers fail before the store lookup");
+  for (const value of [null, ""]) assert.equal((await resolve({ client_metadata: { "x-codex-turn-state": value } })).requested, false);
+  await f.mutateCredential({ operation: "put", credentialId: "fixture", credential: { ...f.credential, principalId: "other@example.com" } });
+  await assert.rejects(resolve(metadata), restart);
+  assert.equal(f.sent.length, 2, "resolution never dispatches upstream");
+});
+
+test("only requested continuations translate preparation owner errors", async t => {
+  const f = await fixture(t);
+  await f.consume(await f.request());
+  const request = new Request("https://router.example/v1/responses", { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret" } });
+  const auth = await authenticateProxyKey(request.headers, f.env);
+  const resolve = body => HttpContinuation.resolve(request, concreteOpenAiSelection("/v1/responses", { model: "openai/gpt-6-astra", input: "fixture", ...body }, f.env), auth, f.env);
+  const requested = await resolve({ previous_response_id: "resp_1" }), stateless = await resolve({});
+  for (const code of ["upstream_grant_pool_unavailable", "upstream_grant_changed", "grant_reauthorization_required", "grant_refresh_failed", "grant_disabled", "grant_credential_missing", "provider_not_configured", "grant_transport_unavailable"]) {
+    const original = new HttpError(503, code, "fixture owner failure");
+    const failure = requested.preflightError(original);
+    assert.equal(failure.status, 409); assert.equal(failure.code, "continuation_restart_required");
+    assert.match(failure.message, /restart with full input and omit previous_response_id and x-codex-turn-state/);
+    assert.equal(stateless.preflightError(original), original);
+  }
+  for (const original of [new HttpError(403, "provider_not_allowed", "fixture denial"), new HttpError(402, "budget_exceeded", "fixture budget"), new HttpError(503, "continuation_unavailable", "fixture authority outage"), new Error("fixture failure"), null]) {
+    assert.equal(requested.preflightError(original), original);
+    assert.equal(stateless.preflightError(original), original);
+  }
+  assert.equal(f.sent.length, 1);
+});
+
+test("the successful stateless failover grant owns the response it actually produced", async t => {
+  const f = await fixture(t);
+  f.response = (_request, index) => index === 1 ? Response.json({ error: "fixture unavailable" }, { status: 429 }) : Response.json({ object: "response", id: `resp_${index}` }, { headers: { "x-codex-turn-state": `turn_${index}` } });
+  const first = await f.request();
+  assert.equal(first.status, 200); assert.equal(first.headers.get("x-clawrouter-grant-failover"), "1");
+  await f.consume(first);
+  const next = await f.request({ previous_response_id: "resp_2" }, { "x-codex-turn-state": first.headers.get("x-codex-turn-state") });
+  assert.equal(next.status, 200); await f.consume(next);
+  assert.equal(f.sent.length, 3);
+  assert.deepEqual(f.sent.map(request => request.headers.get("chatgpt-account-id")), ["synthetic-account-0", "synthetic-account-1", "synthetic-account-1"]);
+  assert.equal(f.sent[2].headers.get("x-codex-turn-state"), "turn_2");
+});
+
+for (const fixedCost of [null, 7]) {
+  test(`failed alternate dispatch retains one ${fixedCost === null ? "measured bound" : "fixed tariff"} in both SQL ledgers`, async t => {
+    const f = await fixture(t, true, { limit: 1_000_000, fixedCost });
+    const cancellation = Promise.withResolvers();
+    let canceled = false, released = false, response;
+    const releaseCancellation = () => { if (!released) { released = true; cancellation.resolve(); } };
+    const children = new WeakSet(), completions = new Map(), initialCharge = bodyBudgetCharged();
+    const fork = ProxyCompletion.prototype.fork;
+    t.mock.method(ProxyCompletion.prototype, "fork", function(...args) {
+      const child = Reflect.apply(fork, this, args);
+      children.add(child);
+      if (!children.has(this) && !completions.has(this)) {
+        const observed = { completion: this.completion, settlements: 0 };
+        observed.outcome = observed.completion.then(value => {
+          observed.settlements++; return { failed: false, value };
+        }, error => {
+          observed.settlements++; return { failed: true, error };
+        });
+        completions.set(this, observed);
+      }
+      return child;
+    });
+    const diagnostic = phase => { try { if (typeof t.log === "function") t.log("http-continuation-phase " + JSON.stringify({ case: fixedCost === null ? "measured-bound" : "fixed-tariff", phase, cancelEntered: canceled, cancelReleased: released })); } catch {} };
+    f.response = (_request, index) => {
+      if (index === 1) return new Response(new ReadableStream({ cancel() { canceled = true; return cancellation.promise; } }, { highWaterMark: 0 }), { status: 429 });
+      assert.equal(canceled, true, "discard the first body before dispatch without waiting for its cleanup");
+      throw new Error("fixture connection lost after alternate dispatch");
+    };
+    let hasPrimary = false, primary;
+    try {
+      diagnostic("request");
+      response = await f.request({ max_output_tokens: 32 });
+      assert.equal(response.status, 502);
+      diagnostic("public-body");
+      assert.equal(JSON.parse(await response.text()).error.code, "provider_unavailable");
+      assert.equal(f.sent.length, 2);
+      assert.deepEqual(f.sent.map(request => request.headers.get("chatgpt-account-id")), ["synthetic-account-0", "synthetic-account-1"]);
+      assert.equal(canceled, true); assert.equal(released, false);
+      assert.equal(completions.size, 1); const [[owner, completion]] = completions;
+      assert.equal(completion.completion, owner.completion);
+      assert.equal(children.has(owner), false, "observe the TOP owner, not a completed child");
+      assert.equal(completion.settlements, 0, "ORIGINAL top completion waits for FIRST cancel");
+      assert.equal(initialCharge, 0); assert.equal(bodyBudgetCharged(), initialCharge);
+      releaseCancellation(); diagnostic("background-drain"); await f.drain(); diagnostic("accounting");
+      assert.equal(completion.settlements, 1); assert.equal((await completion.outcome).failed, false);
+      assert.equal(bodyBudgetCharged(), initialCharge);
+      assert.equal(f.events.length, 1);
+      const [event] = f.events;
+      assert.equal(event.status, "provider_error"); assert.equal(event.status_code, 502);
+      assert.ok(event.reserved_cost_micros > 0);
+      assert.equal(event.actual_cost_micros, event.reserved_cost_micros);
+      assert.equal(event.cost_basis, fixedCost === null ? "manifest_reservation" : "policy_fixed");
+      assert.equal(event.total_tokens, null);
+      await assertBudgets(f, [event.actual_cost_micros]);
+    } catch (error) { hasPrimary = true; primary = error; }
+    finally {
+      releaseCancellation();
+      await response?.body?.cancel().catch(() => {});
+      const outcomes = await Promise.all([
+        f.drain().then(() => ({ failed: false }), error => ({ failed: true, error })),
+        ...[...completions.values()].map(observed => observed.outcome),
+      ]);
+      const failures = outcomes.filter(outcome => outcome.failed).map(outcome => outcome.error);
+      if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "fixture completion cleanup failed");
+    }
+    if (hasPrimary) throw primary;
+  });
+}
+
+test("failed alternate selection preserves the original rejection body and zero charge", async t => {
+  for (const scenario of ["unavailable", "selection_error"]) {
+    const f = await fixture(t, true, { limit: 1_000_000, fixedCost: null });
+    let selections = 0, canceled = false;
+    if (scenario === "unavailable") await revokeGrantCredentials(f.env, grantKeys[1]);
+    const getAuthority = f.env.ACCESS_CONTROL.get.bind(f.env.ACCESS_CONTROL);
+    f.env.ACCESS_CONTROL.get = name => { const stub = getAuthority(name); return { ...stub, fetch(url, init) {
+      if (new URL(url).pathname === "/admission/resolve" && ++selections === 2 && scenario === "selection_error")
+        return accessBytesResponse(JSON.stringify({ error: { code: "authority_error", message: "fixture selection outage" } }), "", { status: 500 });
+      return stub.fetch(url, init);
+    } }; };
+    const body = '{"error":{"code":"fixture_rejection"}}';
+    f.response = () => new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new TextEncoder().encode(body)); controller.close(); },
+      cancel() { canceled = true; },
+    }, { highWaterMark: 0 }), { status: 429, headers: { "content-type": "application/json", "retry-after": "17" } });
+    const response = await f.request({ max_output_tokens: 32 });
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get("retry-after"), "17");
+    assert.equal(response.headers.has("x-clawrouter-grant-failover"), false);
+    assert.equal(await f.consume(response), body);
+    assert.equal(canceled, false); assert.equal(f.sent.length, 1);
+    assert.equal(f.events.length, 1); assert.equal(f.events[0].actual_cost_micros, 0);
+    await assertBudgets(f, [0]);
+  }
+});
+
+test("an alternate rejection remains nonbillable after discarding the first response", async t => {
+  const f = await fixture(t, true, { limit: 1_000_000, fixedCost: null });
+  f.response = (_request, index) => Response.json({ error: `fixture rejection ${index}` }, { status: index === 1 ? 429 : 403 });
+  const response = await f.request({ max_output_tokens: 32 });
+  assert.equal(response.status, 403);
+  assert.equal(JSON.parse(await f.consume(response)).error, "fixture rejection 2");
+  assert.equal(f.sent.length, 2); assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].actual_cost_micros, 0);
+  await assertBudgets(f, [0]);
+});
+
+for (const phase of ["selection", "body_cancel"]) {
+  test(`caller cancellation during alternate ${phase} never dispatches another attempt`, async t => {
+    const f = await fixture(t, true, { limit: 1_000_000, fixedCost: null });
+    const caller = new AbortController();
+    let selections = 0, canceled = false;
+    f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
+      if (new URL(request.url).pathname === "/admission/resolve" && ++selections === 2 && phase === "selection") caller.abort();
+    };
+    f.response = () => new Response(new ReadableStream({ cancel() { canceled = true; if (phase === "body_cancel") caller.abort(); } }, { highWaterMark: 0 }), { status: 429 });
+    const response = await f.request({ max_output_tokens: 32 }, {}, "/v1/responses", caller.signal);
+    assert.equal(response.status, 502);
+    await f.consume(response);
+    assert.equal(canceled, true); assert.equal(f.sent.length, 1);
+    assert.equal(f.events.length, 1); assert.equal(f.events[0].status, "client_error");
+    await assertBudgets(f, [0]);
+  });
+}
+
+test("the request deadline during alternate selection prevents another dispatch", async t => {
+  const f = await fixture(t, true, { limit: 1_000_000, fixedCost: null });
+  const { modelRoute } = await import("../provider-catalog.ts");
+  const timeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
+  const setTimer = globalThis.setTimeout;
+  let deadline, selections = 0, canceled = false;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    if (delay === timeout) deadline = callback;
+    return setTimer(callback, delay, ...args);
+  });
+  f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
+    if (new URL(request.url).pathname === "/admission/resolve" && ++selections === 2) {
+      assert.equal(typeof deadline, "function"); deadline();
+    }
+  };
+  f.response = () => new Response(new ReadableStream({ cancel() { canceled = true; } }, { highWaterMark: 0 }), { status: 429 });
+  const response = await f.request({ max_output_tokens: 32 });
+  assert.equal(response.status, 502); await f.consume(response);
+  assert.equal(canceled, true); assert.equal(f.sent.length, 1);
+  assert.equal(f.events.length, 1); assert.equal(f.events[0].status, "timeout");
+  await assertBudgets(f, [0]);
+});
+
+async function assertBudgets(f, charges) {
+  for (const owner of ["default:fixture", "provider:openai"]) {
+    const ledger = f.env.BUDGET_LEDGER.get(owner), rows = ledger.reservations();
+    assert.deepEqual(rows.map(row => row.reserved_micros), charges);
+    assert.ok(rows.every(row => row.settled === 1 && row.dispatch_started === 1));
+    const policyId = owner.replace(":", "/"), month = new Date().toISOString().slice(0, 7);
+    const status = await (await ledger.fetch(`https://budget/status?policy_id=${policyId}&window_key=${policyId}/${month}&limit_micros=1000000`)).json();
+    assert.equal(status.spentMicros, charges.reduce((sum, cost) => sum + cost, 0));
+  }
+}
+
+test("owner refresh preserves lineage while explicit primary or refresh replacement requires restart", async t => {
+  for (const mutation of ["refresh", "accessToken", "refreshToken", "accountId"]) {
+    const f = await fixture(t);
+    await f.consume(await f.request());
+    const original = f.values.get(grantKeys[0]);
+    if (mutation === "refresh") {
+      // The provider refresh request is form encoded, so isolate that transport
+      // while still exercising the real serialized credential owner.
+      t.mock.method(globalThis, "fetch", async (url, init) => {
+        if (String(url).includes("/oauth/token")) return Response.json({ access_token: "synthetic-rotated-access", expires_in: 3600 });
+        f.sent.push({ url: String(url), body: JSON.parse(init.body), headers: new Headers(init.headers) });
+        return Response.json({ object: "response", id: "resp_after_refresh" });
+      });
+      await materializeGrantCredentials(f.env, grantKeys[0], original, "openai", { tokenUrl: "https://refresh.example/oauth/token", clientId: null, clientIdConfig: null, clientSecretConfig: null, extraParams: {} }, true);
+      assert.equal(f.values.get(grantKeys[0]).credentialLineage, original.credentialLineage);
+    } else {
+      await putGrantCredentials(f.env, grantKeys[0], { ...original, [mutation]: `synthetic-replacement-${mutation}`, credentialLineage: original.credentialLineage }, true);
+      assert.notEqual(f.values.get(grantKeys[0]).credentialLineage, original.credentialLineage);
+    }
+    const response = await f.request({ previous_response_id: "resp_1" });
+    assert.equal(response.status, mutation === "refresh" ? 200 : 409, await response.clone().text());
+    if (mutation !== "refresh") assert.equal((await response.clone().json()).error.code, "continuation_restart_required");
+    await f.consume(response);
+    assert.equal(f.sent.length, mutation === "refresh" ? 2 : 1);
+  }
+});
+
+test("revocation, current eligibility and caller authorization are rechecked without another account", async t => {
+  for (const mutation of ["revoke", "eligible", "credential", "policy", "cooldown"]) {
+    const f = await fixture(t);
+    await f.consume(await f.request());
+    if (mutation === "revoke") await revokeGrantCredentials(f.env, grantKeys[0]);
+    if (mutation === "eligible") await f.authority("/policies/put", { policyId: "fixture", policy: { ...f.policy, grantRouting: { ...f.policy.grantRouting, eligibleGrants: { openai: ["account-b"] } } } });
+    if (mutation === "credential") await f.mutateCredential({ operation: "revoke", credentialId: "fixture" });
+    if (mutation === "policy") await f.authority("/policies/put", { policyId: "fixture", policy: { ...f.policy, providers: ["anthropic"] } });
+    if (mutation === "cooldown") await f.authority("/grant-pools/feedback", { key: grantKeys[0], state: { status: "limited", observedAt: new Date().toISOString(), source: "provider_response", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), lastSignal: "rate_limited", grantRevision: f.values.get(grantKeys[0]).updatedAt, windows: [] } });
+    const response = await f.request({ previous_response_id: "resp_1" });
+    assert.equal(response.status, ["credential", "policy"].includes(mutation) ? 403 : 409, await response.clone().text());
+    await f.consume(response); assert.equal(f.sent.length, 1);
+  }
+});
+
+test("unknown state restarts on pooled and environment routes; known environment state keeps its route", async t => {
+  const pooled = await fixture(t);
+  const denied = await pooled.request({ previous_response_id: "resp_unobserved" });
+  assert.equal(denied.status, 409); assert.equal(pooled.sent.length, 0); await pooled.consume(denied);
+  const f = await fixture(t, false);
+  const legacy = await f.request({ previous_response_id: "resp_legacy" });
+  assert.equal(legacy.status, 409); await f.consume(legacy);
+  const unknownTurn = await f.request({}, { "x-codex-turn-state": "turn_legacy" });
+  assert.equal(unknownTurn.status, 409); await f.consume(unknownTurn);
+  assert.equal(f.sent.length, 0);
+  await f.consume(await f.request());
+  const continued = await f.request({ previous_response_id: "resp_1" });
+  assert.equal(continued.status, 200); await f.consume(continued);
+  assert.equal(f.sent[1].body.previous_response_id, "resp_1");
+  const changedProject = await f.request({ previous_response_id: "resp_1" }, { "openai-project": "new-project" });
+  assert.equal(changedProject.status, 409); await f.consume(changedProject);
+  f.env.OPENAI_API_KEY = "synthetic-new-environment-key";
+  const rotated = await f.request({ previous_response_id: "resp_1" });
+  assert.equal(rotated.status, 409); await f.consume(rotated);
+  assert.equal(f.sent.length, 2);
+});
+
+test("detaching former pooled owners never turns missing or expired state into environment egress", async t => {
+  for (const expired of [false, true]) {
+    const f = await fixture(t);
+    await f.consume(await f.request());
+    for (const key of grantKeys) await revokeGrantCredentials(f.env, key);
+    if (expired) for (const [, state] of f.bindings()) {
+      state.db.prepare("UPDATE http_continuations SET expires_at_ms = 0").run();
+      await state.object.alarm();
+    }
+    for (const previous_response_id of ["resp_1", "resp_unobserved"]) {
+      const response = await f.request({ previous_response_id });
+      assert.equal(response.status, 409);
+      assert.equal((await response.clone().json()).error.code, "continuation_restart_required");
+      await f.consume(response);
+    }
+    assert.equal(f.sent.length, 1);
+    const stateless = await f.request();
+    assert.equal(stateless.status, 200); await f.consume(stateless);
+    assert.equal(f.sent[1].headers.get("authorization"), "Bearer synthetic-environment-key");
+  }
+});
+
+test("continuations do not take the stateless failover path for eligible retry statuses", async t => {
+  for (const status of [401, 403, 429]) {
+    const f = await fixture(t);
+    await f.consume(await f.request());
+    f.response = () => Response.json({ error: "fixture unavailable" }, { status });
+    const response = await f.request({ previous_response_id: "resp_1" });
+    assert.equal(response.status, status); await f.consume(response);
+    assert.equal(f.sent.length, 2);
+    assert.equal(f.sent[1].headers.get("chatgpt-account-id"), "synthetic-account-0");
+  }
+});
+
+test("mixed ownership, missing evidence, expiry and another caller cannot adopt pooled state", async t => {
+  for (const mutation of ["conflict", "missing", "expired", "caller"]) {
+    const f = await fixture(t);
+    f.response = (_request, index) => Response.json({ id: `resp_${index}` }, { headers: { "x-codex-turn-state": `turn_${index}` } });
+    await f.consume(await f.request());
+    await f.consume(await f.request());
+    let headers = { "x-codex-turn-state": mutation === "conflict" ? "turn_2" : mutation === "missing" ? "turn_unknown" : "turn_1" };
+    if (mutation === "expired") for (const [, state] of f.bindings()) state.db.prepare("UPDATE http_continuations SET expires_at_ms = 0").run();
+    if (mutation === "caller") {
+      await f.mutateCredential({ operation: "create", credentialId: "another", credential: f.credential });
+      headers.authorization = "Bearer clawrouter-live-another-fixture-secret";
+    }
+    const response = await f.request({ previous_response_id: "resp_1" }, headers);
+    assert.equal(response.status, 409, await response.clone().text());
+    await f.consume(response); assert.equal(f.sent.length, 2);
+  }
+});
+
+function stream(chunks, headers = { "content-type": "text/event-stream" }, close = true) {
+  const state = { reads: 0, canceled: false };
+  const body = new ReadableStream({
+    pull(controller) { state.reads++; if (chunks.length) controller.enqueue(new TextEncoder().encode(chunks.shift())); else if (close) controller.close(); },
+    cancel() { state.canceled = true; },
+  }, { highWaterMark: 0 });
+  return { state, response: new Response(body, { headers }) };
+}
+
+test("oversized SSE bytes, late turn metadata and native endpoint continuations retain their owner", async t => {
+  const f = await fixture(t);
+  const text = `data: ${JSON.stringify({ type: "response.completed", response: { id: "resp_large", output: "x".repeat(2 * 1024 * 1024 + 1) } })}\n\ndata: ${JSON.stringify({ type: "response.metadata", headers: { "X-Codex-Turn-State": [["turn_late"]] } })}\n\n`;
+  const chunks = [];
+  for (let start = 0; start < text.length; start += 8192) chunks.push(text.slice(start, start + 8192));
+  f.response = () => stream([...chunks]).response;
+  let writes = 0;
+  f.env.ACCESS_CONTROL.beforeFetch = async (name, request) => {
+    if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") writes++;
+  };
+  const response = await f.request({ stream: true });
+  assert.equal(await f.consume(response), text);
+  assert.ok(writes <= 2, "chunks without new identity evidence do not write or extend retention");
+  f.response = () => Response.json({ id: "resp_native" });
+  const continued = await f.request({ previous_response_id: "resp_large" }, { "x-codex-turn-state": "turn_late" }, "/v1/native/openai/v1/responses");
+  assert.equal(continued.status, 200, await continued.clone().text()); await f.consume(continued);
+  assert.equal(f.sent[1].headers.get("chatgpt-account-id"), "synthetic-account-0");
+});
+
+test("headers and identity-completing JSON bytes wait for durable publication without draining upstream", async t => {
+  for (const placement of ["header", "json"]) {
+    const f = await fixture(t);
+    const gate = Promise.withResolvers(), entered = Promise.withResolvers();
+    f.env.ACCESS_CONTROL.beforeFetch = async (name, request) => {
+      if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") { entered.resolve(); await gate.promise; }
+    };
+    const upstream = stream(placement === "header" ? ['{"id":"resp_header"}'] : ['{"id":"resp_', 'json","output":[]}', " "], { "content-type": "application/json", ...(placement === "header" ? { "x-codex-turn-state": "turn_header" } : {}) });
+    f.response = () => upstream.response;
+    let published = false;
+    if (placement === "header") {
+      const pending = f.request().then(response => { published = true; return response; });
+      await entered.promise; assert.equal(published, false); assert.equal(upstream.state.reads, 0);
+      gate.resolve(); const response = await pending;
+      assert.equal(response.headers.get("x-codex-turn-state"), "turn_header"); await f.consume(response);
+    } else {
+      const response = await f.request(), reader = response.body.getReader();
+      assert.equal(new TextDecoder().decode((await reader.read()).value), '{"id":"resp_');
+      const pending = reader.read().then(value => { published = true; return value; });
+      await entered.promise; assert.equal(published, false); assert.equal(upstream.state.reads, 2);
+      gate.resolve(); assert.equal(new TextDecoder().decode((await pending).value), 'json","output":[]}');
+      while (!(await reader.read()).done) {} await f.drain();
+    }
+    const rows = f.bindings()[0][1].db.prepare("SELECT binding_key, owner_json FROM http_continuations").all();
+    assert.equal(rows.length, placement === "header" ? 2 : 1);
+    assert.ok(rows.every(row => /^[0-9a-f]{64}$/.test(row.binding_key) && !/turn_header|resp_|synthetic-access/.test(row.owner_json)));
+  }
+});
+
+test("post-dispatch publication failure cancels upstream and settles conservative or observed usage once", async t => {
+  for (const placement of ["header", "sse"]) {
+    const f = await fixture(t);
+    f.env.ACCESS_CONTROL.beforeFetch = async (name, request) => {
+      if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") throw new Error("fixture unavailable");
+    };
+    const upstream = stream(placement === "header" ? ["unused"] : ['data: {"type":"response.completed","response":{"id":"resp_failed","status":"completed","usage":{"input_tokens":13,"output_tokens":5}}}\n\n'], placement === "header" ? { "x-codex-turn-state": "turn_failed" } : { "content-type": "text/event-stream" }, false);
+    f.response = () => upstream.response;
+    const response = await f.request({ stream: placement === "sse" });
+    if (placement === "header") { assert.equal(response.status, 503); await f.consume(response); }
+    else { assert.equal(response.status, 200); await assert.rejects(response.text(), /continuation authority/); await f.drain(); }
+    assert.equal(upstream.state.canceled, true);
+    assert.equal(f.events.length, 1); assert.equal(f.events[0].status, "provider_error");
+    assert.equal(f.events[0].actual_cost_micros, 7);
+    assert.equal(f.events[0].input_tokens, placement === "sse" ? 13 : null);
+    assert.equal(f.events[0].output_tokens, placement === "sse" ? 5 : null);
+  }
+});
+
+test("caller abort during registration cancels the single owned reader and does not publish queued bytes", async t => {
+  const f = await fixture(t), controller = new AbortController();
+  const gate = Promise.withResolvers(), entered = Promise.withResolvers();
+  f.env.ACCESS_CONTROL.beforeFetch = async (name, request) => {
+    if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") { entered.resolve(); await gate.promise; }
+  };
+  const upstream = stream(['{"id":"resp_aborted"}'], { "content-type": "application/json" }, false);
+  f.response = () => upstream.response;
+  let hasPrimary = false, primary;
+  try {
+    const response = await f.request({}, {}, "/v1/responses", controller.signal);
+    const consumed = assert.rejects(response.text(), /fixture caller abort/);
+    const consumedOutcome = consumed.then(value => ({ failed: false, value }), error => ({ failed: true, error }));
+    const arrival = await Promise.race([entered.promise.then(() => ({ entered: true })),
+      consumedOutcome.then(outcome => ({ entered: false, outcome }))]);
+    if (!arrival.entered) {
+      if (arrival.outcome.failed) throw arrival.outcome.error;
+      assert.fail("consumption settled before registration arrival");
+    }
+    controller.abort(new Error("fixture caller abort"));
+    await consumed; gate.resolve(); await f.drain();
+    assert.equal(upstream.state.canceled, true); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].actual_cost_micros, 7); assert.equal(f.events[0].status, "client_error");
+    await setImmediate(); assert.equal(f.events.length, 1);
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    gate.resolve();
+    try { await f.drain(); }
+    catch (error) { throw new AggregateError([...(hasPrimary ? [primary] : []), error], "registration fixture cleanup failed"); }
+  }
+  if (hasPrimary) throw primary;
+});
+
+for (const phase of ["json", "sse_before_terminal", "sse_after_terminal"]) test(`Responses ${phase} cancellation during projection preserves one receipt and stops identity publication`, async t => {
+  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: null }), caller = new AbortController();
+  const usage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
+  const completed = { object: "response", status: "completed", service_tier: "priority", usage };
+  const frame = value => `data: ${JSON.stringify(value)}\n\n`;
+  const prefix = phase === "json" ? [] : [frame({ type: "response.created" })];
+  if (phase === "sse_after_terminal") prefix.push(frame({ type: "response.completed", response: completed }));
+  const large = { output: "x".repeat(32_000), id: "resp_never_published", ...completed };
+  const interrupted = phase === "json" ? JSON.stringify(large) : frame({ type: "response.completed", response: large });
+  const chunks = [...prefix, interrupted];
+  let decoded = 0, cancels = 0, registrations = 0;
+  const decode = TextDecoder.prototype.decode;
+  t.mock.method(TextDecoder.prototype, "decode", function (bytes, options) {
+    if (bytes?.byteLength === 4096 && ++decoded === 2) queueMicrotask(() => caller.abort(new Error("fixture caller during projection")));
+    return decode.call(this, bytes, options);
+  });
+  f.env.ACCESS_CONTROL.beforeFetch = async (name, request) => {
+    if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") registrations++;
+  };
+  const upstream = new Response(new ReadableStream({
+    pull(controller) { if (chunks.length) controller.enqueue(new TextEncoder().encode(chunks.shift())); },
+    cancel() { cancels++; },
+  }, { highWaterMark: 0 }), { headers: { "content-type": phase === "json" ? "application/json" : "text/event-stream" } });
+  f.response = () => upstream;
+  const response = await f.request({ stream: true, service_tier: "priority", max_output_tokens: 32 }, {}, "/v1/responses", caller.signal);
+  assert.equal(response.status, 200);
+  const reader = response.body.getReader();
+  for (const chunk of prefix) assert.equal(new TextDecoder().decode((await reader.read()).value), chunk);
+  await assert.rejects(reader.read(), /fixture caller during projection/);
+  await setImmediate(); await f.drain();
+  assert.equal(decoded, 2); assert.equal(cancels, 1); assert.equal(upstream.body.locked, false);
+  assert.equal(registrations, 0); assert.equal(f.bindings().length, 0);
+  assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+  const [event] = f.events, measured = phase === "sse_after_terminal";
+  assert.equal(event.status, "client_error"); assert.equal(event.status_code, 200);
+  assert.equal(event.total_tokens, measured ? 22 : null);
+  assert.ok(event.reserved_cost_micros > 1_080);
+  assert.equal(event.actual_cost_micros, measured ? 1_080 : event.reserved_cost_micros);
+  assert.equal(event.cost_basis, measured ? "manifest_pricing" : "manifest_reservation");
+  await assertBudgets(f, [event.actual_cost_micros]);
+});
+
+async function endpointDeadline(t) {
+  const { modelRoute } = await import("../provider-catalog.ts");
+  const timeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
+  const setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout;
+  let timer;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    const handle = setTimer(callback, delay, ...args);
+    if (delay === timeout) timer = { handle, callback, active: true };
+    return handle;
+  });
+  t.mock.method(globalThis, "clearTimeout", handle => {
+    if (timer?.handle === handle) timer.active = false;
+    return clearTimer(handle);
+  });
+  return () => {
+    assert.ok(timer);
+    const active = timer.active;
+    if (active) timer.callback();
+    return active;
+  };
+}
+
+test("pre-header first cause survives later aborts and late fetch rejection for zero, fixed and measured tariffs", async t => {
+  const deadline = await endpointDeadline(t);
+  for (const fixedCost of [0, 7, null]) for (const first of ["caller", "deadline", "upstream"]) {
+    const f = await fixture(t, false, { limit: 1_000_000, fixedCost }), caller = new AbortController();
+    const entered = Promise.withResolvers(), gate = Promise.withResolvers();
+    f.response = () => { entered.resolve(); return gate.promise; };
+    const pending = f.request({ max_output_tokens: 32 }, {}, "/v1/responses", caller.signal);
+    await entered.promise;
+    if (first === "caller") { caller.abort(new Error("fixture caller")); deadline(); gate.reject(new Error("late upstream rejection")); }
+    else if (first === "deadline") { deadline(); caller.abort(); gate.reject(new Error("late upstream rejection")); }
+    else { gate.reject(new DOMException("unrelated upstream abort", "AbortError")); await setImmediate(); caller.abort(); deadline(); }
+    const response = await pending;
+    assert.equal(response.status, 502); assert.equal(JSON.parse(await f.consume(response)).error.code, "provider_unavailable");
+    gate.reject(new Error("late upstream rejection")); await setImmediate();
+    assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].status, first === "caller" ? "client_error" : first === "deadline" ? "timeout" : "provider_error");
+    assert.equal(f.events[0].status_code, 502);
+    assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
+    await assertBudgets(f, [f.events[0].actual_cost_micros]);
+  }
+});
+
+async function withHeldHttpRoots(t, f, release, abortOnFailure, run) {
+  const { default: worker } = await import("../index.ts");
+  const roots = [];
+  let hasPrimary = false, primary, driverCompleted = false, cleanupTask, observer;
+  // Expected failures belong to a named producer, never to a reason value.
+  const start = (thunk, expected = false) => {
+    const row = { expected }; roots.push(row);
+    try { row.actual = Promise.resolve(thunk()); }
+    catch (error) { row.actual = Promise.reject(error); }
+    row.outcome = row.actual.then(value => ({ failed: false, value }), error => ({ failed: true, error }));
+    return row;
+  };
+  const driver = {
+    start,
+    request(thunk) {
+      const request = start(thunk);
+      const body = start(() => request.outcome.then(outcome => outcome.failed ? undefined : outcome.value.text()));
+      return { request, body };
+    },
+    async arrival(entered, row) {
+      const result = await Promise.race([entered.then(() => ({ entered: true })), row.outcome.then(outcome => ({ entered: false, outcome }))]);
+      if (!result.entered) {
+        if (result.outcome.failed) throw result.outcome.error;
+        assert.fail("held HTTP producer completed before arrival");
+      }
+    },
+    drain: () => start(() => f.drain()).actual,
+  };
+  const cleanup = () => cleanupTask ??= Promise.resolve().then(async () => {
+    const failures = [];
+    if (hasPrimary || !driverCompleted) {
+      try { abortOnFailure(hasPrimary ? primary : new Error("fixture teardown before driver completion")); }
+      catch (error) { failures.push(error); }
+    }
+    try { release(); } catch (error) { failures.push(error); }
+    let joined = 0;
+    const join = async () => {
+      while (joined < roots.length) {
+        const row = roots[joined++];
+        try {
+          const outcome = await row.outcome;
+          if (outcome.failed && !row.expected) failures.push(outcome.error);
+        } catch (error) { failures.push(error); }
+      }
+    };
+    await join(); start(() => f.drain()); await join();
+    try { observer?.mock.restore(); } catch (error) { failures.push(error); }
+    return failures;
+  });
+  const finish = async () => {
+    const failures = await cleanup();
+    if (failures.length) throw new AggregateError([...(hasPrimary ? [primary] : []), ...failures], "held HTTP fixture cleanup failed");
+  };
+  t.after(finish);
+  try {
+    const fetch = worker.fetch;
+    observer = t.mock.method(worker, "fetch", function (request, env, context) {
+      if (env !== f.env) return fetch.call(this, request, env, context);
+      return fetch.call(this, request, env, { ...context, waitUntil(promise) {
+        start(() => promise); return context.waitUntil(promise);
+      } });
+    });
+    await run(driver); driverCompleted = true;
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally { await finish(); }
+  if (hasPrimary) throw primary;
+}
+
+test("a response arriving after the deadline is retired without publication or a second receipt", async t => {
+  const deadline = await endpointDeadline(t), f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
+  const entered = Promise.withResolvers(), gate = Promise.withResolvers();
+  let cancels = 0, released = false, started = false, driver;
+  const release = () => {
+    if (released) return; released = true;
+    gate.resolve(started ? new Response(new ReadableStream({ cancel() {
+      cancels++; return driver.start(() => Promise.reject(new Error("fixture cleanup")), true).actual;
+    } }, { highWaterMark: 0 }), { headers: { "x-codex-turn-state": "never_published" } }) : undefined);
+  };
+  await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
+    driver = d; const original = d.start(() => gate.promise);
+    f.response = () => { started = true; entered.resolve(); return original.actual; };
+    const pending = d.request(() => f.request({}, {}, "/v1/responses", caller.signal));
+    await d.arrival(entered.promise, pending.request); deadline();
+    const response = await pending.request.actual;
+    assert.equal(response.status, 502); await pending.body.actual;
+    assert.equal(released, false);
+    release(); await original.outcome; await setImmediate(); await d.drain();
+    assert.equal(cancels, 1); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].status, "timeout");
+    assert.equal(f.bindings().length, 0);
+    await assertBudgets(f, [7]);
+  });
+});
+
+test("header registration keeps the first cause and never publishes a late ACK or settles twice", async t => {
+  const deadline = await endpointDeadline(t);
+  for (const first of ["caller", "publication"]) for (const late of ["resolve", "reject"]) {
+    const f = await fixture(t, false, { limit: 1_000_000, fixedCost: null }), caller = new AbortController();
+    const entered = Promise.withResolvers(), gate = Promise.withResolvers(), cancellation = Promise.withResolvers();
+    let cancels = 0, released = false;
+    const release = () => {
+      if (released) return; released = true;
+      if (late === "resolve") gate.resolve(); else gate.reject(new Error("late publication failure"));
+      cancellation.resolve();
+    };
+    await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
+      d.start(() => gate.promise, true); d.start(() => cancellation.promise);
+      f.env.ACCESS_CONTROL.beforeFetch = (name, request) => {
+        const row = d.start(async () => {
+          if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") {
+            entered.resolve();
+            try { await gate.promise; } catch (error) { row.expected = true; throw error; }
+          }
+        });
+        return row.actual;
+      };
+      f.response = () => new Response(new ReadableStream({ cancel() { cancels++; caller.abort(); return cancellation.promise; } }, { highWaterMark: 0 }), { headers: { "x-codex-turn-state": "held_turn" } });
+      const pending = d.request(() => f.request({ max_output_tokens: 32 }, {}, "/v1/responses", caller.signal));
+      await d.arrival(entered.promise, pending.request);
+      assert.equal(deadline(), false, "endpoint timer retires before header registration");
+      if (first === "caller") caller.abort(new Error("fixture caller"));
+      else gate.reject(new Error("fixture publication failure"));
+      const response = await pending.request.actual;
+      assert.equal(response.status, 503); assert.equal(response.headers.has("x-codex-turn-state"), false);
+      await pending.body.actual; assert.equal(released, false);
+      release(); await setImmediate(); await d.drain();
+      assert.equal(cancels, 1); assert.equal(f.events.length, 1);
+      assert.equal(f.events[0].status, first === "caller" ? "client_error" : "provider_error");
+      assert.equal(f.events[0].status_code, 503);
+      assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
+      await assertBudgets(f, [f.events[0].actual_cost_micros]);
+    });
+  }
+});
+
+test("first-event sniffing keeps its deadline while delivered JSON, SSE and body registration keep caller cancellation", async t => {
+  const deadline = await endpointDeadline(t);
+  for (const phase of ["sniff", "json", "sse", "registration"]) {
+    const f = await fixture(t, false, { limit: 1_000_000, fixedCost: null }), caller = new AbortController();
+    const entered = Promise.withResolvers(), gate = Promise.withResolvers(), cancellation = Promise.withResolvers();
+    let pulls = 0, cancels = 0;
+    const release = () => { gate.resolve(); cancellation.resolve(); };
+    await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
+      d.start(() => gate.promise); d.start(() => cancellation.promise);
+      if (phase === "registration") f.env.ACCESS_CONTROL.beforeFetch = (name, request) => d.start(async () => {
+        if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") { entered.resolve(); await gate.promise; }
+      }).actual;
+      f.response = () => new Response(new ReadableStream({
+        pull(controller) {
+          if (pulls++ === 0 && phase === "sse") controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\n\n'));
+          else if (pulls === 1 && phase === "registration") controller.enqueue(new TextEncoder().encode('{"id":"response_held"}'));
+          else entered.resolve();
+        },
+        cancel() { cancels++; return cancellation.promise; },
+      }, { highWaterMark: 0 }), { headers: { "content-type": phase === "sniff" || phase === "sse" ? "text/event-stream" : "application/json" } });
+      const pending = d.request(() => f.request({ stream: true, max_output_tokens: 32 }, {}, "/v1/responses", caller.signal));
+      let response;
+      if (phase !== "sniff") {
+        response = await pending.request.actual; assert.equal(response.status, 200);
+      }
+      await d.arrival(entered.promise, phase === "sniff" ? pending.request : pending.body);
+      assert.equal(deadline(), phase === "sniff", "only first-event normalization retains the endpoint timer");
+      if (phase !== "sniff") caller.abort(new Error("fixture caller after endpoint deadline retirement"));
+      if (phase === "sniff") { response = await pending.request.actual; assert.equal(response.status, 502); await pending.body.actual; }
+      else { await assert.rejects(pending.body.actual, /fixture caller/); pending.body.expected = true; }
+      release(); await d.drain(); await setImmediate();
+      assert.equal(cancels, 1); assert.equal(f.events.length, 1);
+      assert.equal(f.events[0].status, phase === "sniff" ? "timeout" : "client_error"); assert.equal(f.events[0].status_code, phase === "sniff" ? 502 : 200);
+      assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
+      await assertBudgets(f, [f.events[0].actual_cost_micros]);
+    });
+  }
+});
+
+test("actual Fusion adviser deadlines and oversized consumption stay distinct from the outer caller", async t => {
+  const setTimer = globalThis.setTimeout;
+  let adviserDeadline;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    if (delay === 1_000 && !adviserDeadline) adviserDeadline = callback;
+    return setTimer(callback, delay, ...args);
+  });
+  for (const origin of ["deadline", "oversized", "caller"]) {
+    adviserDeadline = undefined;
+    const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
+    f.values.set("config/fusion", { enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-4.1-mini", adviserTimeoutMs: 1_000, maxProposalChars: 256 });
+    const entered = Promise.withResolvers();
+    let cancels = 0;
+    f.response = (_request, index) => index > 1 ? Response.json({ choices: [{ message: { content: "fixture complete" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }) : new Response(new ReadableStream({
+      pull(controller) {
+        if (origin === "oversized") { controller.enqueue(new TextEncoder().encode(JSON.stringify({ choices: [{ message: { content: "x".repeat(32_000) } }] }))); controller.close(); }
+        entered.resolve();
+      },
+      cancel() { cancels++; },
+    }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } });
+    const pending = f.request({ model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }] }, {}, "/v1/chat/completions", caller.signal);
+    await entered.promise;
+    if (origin === "caller") caller.abort(new Error("fixture caller"));
+    else if (origin === "deadline") { assert.equal(typeof adviserDeadline, "function"); adviserDeadline(); }
+    const response = await pending;
+    assert.equal(response.status, origin === "caller" ? 502 : 200);
+    if (origin === "caller") assert.deepEqual((await response.clone().json()).error, { message: "upstream request to provider openai failed", type: "server_error", param: null, code: "provider_unavailable" });
+    await f.consume(response);
+    assert.equal(f.events.length, 2);
+    const adviser = f.events.find(event => event.compound_request_stage === "fusion_adviser");
+    const synthesizer = f.events.find(event => event.compound_request_stage === "fusion_synthesizer");
+    assert.equal(adviser.status, origin === "caller" ? "client_error" : origin === "deadline" ? "timeout" : "provider_error");
+    assert.equal(adviser.status_code, 200); assert.equal(adviser.actual_cost_micros, 7);
+    assert.equal(synthesizer.status, origin === "caller" ? "client_error" : "success");
+    assert.equal(f.sent.length, origin === "caller" ? 1 : 2);
+    assert.equal(cancels, origin === "oversized" ? 0 : 1);
+    await assertBudgets(f, [origin === "caller" ? 0 : 7, 7]);
+  }
+});
+
+for (const late of ["response", "rejection"]) test(`Fusion invocation watchdog owns the dispatched deadline before late upstream ${late}`, async t => {
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now });
+  const schedule = globalThis.setTimeout, timers = [];
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    const timer = { fired: false, fire() { this.fired = true; callback(...args); } };
+    if (delay === 1_000) timers.push(timer);
+    return schedule(() => timer.fire(), delay);
+  });
+  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
+  f.values.set("config/fusion", { enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-4.1-mini", adviserTimeoutMs: 1_000 });
+  const entered = Promise.withResolvers(), upstream = Promise.withResolvers();
+  let canceled = 0, released = false, started = false;
+  const release = () => {
+    if (released) return; released = true;
+    if (late === "response") upstream.resolve(started ? new Response(new ReadableStream({ cancel() { canceled++; } }, { highWaterMark: 0 })) : undefined);
+    else upstream.reject(new Error("fixture late upstream failure"));
+  };
+  await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
+    const original = d.start(() => upstream.promise, late === "rejection");
+    f.response = (_request, index) => {
+      if (index === 1) { started = true; entered.resolve(); return original.actual; }
+      return Response.json({ choices: [{ message: { content: "fixture complete" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    };
+    const pending = d.request(() => f.request({ model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }] }, {}, "/v1/chat/completions", caller.signal));
+    await d.arrival(entered.promise, pending.request);
+    assert.equal(f.sent.length, 1);
+    for (const owner of ["default:fixture", "provider:openai"]) assert.equal(f.env.BUDGET_LEDGER.get(owner).reservations().filter(row => row.dispatch_started === 1).length, 1);
+    // The invocation watchdog is registered after Fusion's controller timer and
+    // before the admitted HTTP request's timer. Exercise its earlier expiry alone.
+    assert.equal(timers.length, 3);
+    t.mock.timers.setTime(now + 1_000);
+    timers[1].fire();
+    const response = await pending.request.actual;
+    assert.equal(response.status, 200); await pending.body.actual; assert.equal(released, false);
+    assert.equal(timers[0].fired, false); assert.equal(timers[2].fired, false);
+    assert.equal(f.sent[0].signal.reason.cause, "deadline");
+    release(); await original.outcome; await d.drain();
+    const expected = [
+      { stage: "fusion_adviser", status: "timeout", code: 502, cost: 7 },
+      { stage: "fusion_synthesizer", status: "success", code: 200, cost: 7 },
+    ];
+    const receipts = () => f.events.map(event => ({ stage: event.compound_request_stage, status: event.status, code: event.status_code, cost: event.actual_cost_micros })).sort((a, b) => a.stage.localeCompare(b.stage));
+    assert.deepEqual(receipts(), expected);
+    assert.equal(new Set(f.events.map(event => event.request_id)).size, 2);
+    assert.ok(f.events.every(event => event.cost_basis === "policy_fixed"));
+    assert.equal(f.events.find(event => event.compound_request_stage === "fusion_adviser").total_tokens, null);
+    await assertBudgets(f, [7, 7]);
+    await setImmediate(); await d.drain();
+    assert.equal(canceled, late === "response" ? 1 : 0);
+    assert.equal(f.sent.length, 2); assert.deepEqual(receipts(), expected);
+    await assertBudgets(f, [7, 7]);
+  });
+});
+
+test("actual Fusion rejection cleanup preserves adviser and synthesizer status with both ledgers at zero", async t => {
+  for (const status of [400, 429, 503]) {
+    const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
+    f.values.set("config/fusion", { enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-4.1-mini" });
+    let cancels = 0;
+    f.response = (_request, index) => index === 1
+      ? new Response(new ReadableStream({ cancel() { cancels++; } }, { highWaterMark: 0 }), { status })
+      : Response.json({ error: "fixture final rejection" }, { status });
+    const response = await f.request({ model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }] }, {}, "/v1/chat/completions");
+    assert.equal(response.status, status);
+    assert.equal(JSON.parse(await f.consume(response)).error, "fixture final rejection");
+    assert.equal(cancels, 1); assert.equal(f.sent.length, 2); assert.equal(f.events.length, 2);
+    for (const event of f.events) {
+      assert.equal(event.status, status < 500 ? "client_error" : "provider_error");
+      assert.equal(event.status_code, status); assert.equal(event.actual_cost_micros, 0);
+    }
+    await assertBudgets(f, [0, 0]);
+  }
+});
+
+for (const format of ["json", "sse"]) for (const origin of ["caller", "deadline"]) test(`${format} known HTTP rejections preserve status through ${origin} while error details are stalled`, async t => {
+  const deadline = await endpointDeadline(t);
+  for (const status of [400, 429, 503]) for (const cleanup of ["pending", "rejecting"]) {
+    const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
+    const entered = Promise.withResolvers(), disposal = Promise.withResolvers();
+    let cancels = 0, upstream, released = false;
+    const release = () => { if (!released) { released = true; disposal.resolve(); } };
+    await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
+      d.start(() => disposal.promise);
+      f.response = () => upstream = new Response(new ReadableStream({
+        pull() { entered.resolve(); },
+        cancel() { cancels++; return cleanup === "pending" ? disposal.promise : d.start(() => Promise.reject(new Error("fixture cleanup rejection")), true).actual; },
+      }, { highWaterMark: 0 }), { status, headers: { "content-type": format === "sse" ? "text/event-stream" : "application/json", "retry-after": "17" } });
+      const pending = d.request(() => f.request({ stream: true }, {}, "/v1/responses", caller.signal));
+      await d.arrival(entered.promise, pending.request);
+      if (origin === "caller") caller.abort(new Error("fixture caller during error normalization"));
+      else assert.equal(deadline(), true, "error normalization still owns the endpoint timer");
+      const response = await pending.request.actual;
+      assert.equal(response.status, status, "missing error details must not replace a known rejection with 502");
+      assert.equal(response.headers.get("retry-after"), "17");
+      await assert.rejects(pending.body.actual, origin === "caller" ? /fixture caller/ : /deadline/); pending.body.expected = true;
+      assert.equal(released, false);
+      if (cleanup === "pending") assert.equal(upstream.body.locked, true, "original reader remains owned while FIRST cancellation is pending");
+      release(); await d.drain();
+      assert.equal(upstream.body.locked, false); assert.equal(cancels, 1);
+      assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+      assert.equal(f.events[0].status, status < 500 ? "client_error" : "provider_error");
+      assert.equal(f.events[0].status_code, status); assert.equal(f.events[0].actual_cost_micros, 0);
+      assert.equal(f.events[0].cost_basis, "none");
+      await assertBudgets(f, [0]);
+      await setImmediate();
+      assert.equal(f.events.length, 1, "late cleanup does not publish a second receipt");
+    });
+  }
+});
+
+for (const format of ["sse", "json", "native-sse"]) test(`${format} rejections own reciprocal cleanup without replacing their selected status`, async t => {
+  const deadline = await endpointDeadline(t);
+  for (const status of [400, 429, 503]) for (const cleanup of ["none", "caller", "deadline"]) {
+    const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
+    let cancels = 0;
+    const text = format !== "json" ? `data: ${JSON.stringify({ error: { message: "fixture rejection", code: status } })}\n\n` : JSON.stringify({ error: { message: "x".repeat(70_000) } });
+    f.response = () => new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new TextEncoder().encode(text)); },
+      cancel() { cancels++; if (cleanup === "caller") caller.abort(new Error("fixture reciprocal cancellation")); else if (cleanup === "deadline") deadline(); },
+    }, { highWaterMark: 0 }), { status: format === "native-sse" ? 200 : status, headers: { "content-type": format !== "json" ? "text/event-stream" : "application/json" } });
+    const response = await f.request({ stream: true }, {}, "/v1/responses", caller.signal);
+    assert.equal(response.status, format === "native-sse" ? 200 : status, "cleanup must not replace the accepted rejection status");
+    if (format === "native-sse") {
+      const reader = response.body.getReader(); assert.equal(new TextDecoder().decode((await reader.read()).value), text);
+      await reader.cancel(); await f.drain();
+    } else if (cleanup === "none") assert.equal(JSON.parse(await f.consume(response)).error.code, status);
+    else { await assert.rejects(response.text(), cleanup === "caller" ? /reciprocal cancellation/ : /deadline/); await f.drain(); }
+    assert.equal(cancels, 1); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].status, status < 500 ? "client_error" : "provider_error");
+    assert.equal(f.events[0].status_code, format === "native-sse" ? 200 : status); assert.equal(f.events[0].actual_cost_micros, 0);
+    await assertBudgets(f, [0]);
+  }
+});
+
+test("selection deadline returns a nonbillable 502 while rejection delivery retires the deadline", async t => {
+  const deadline = await endpointDeadline(t);
+  for (const phase of ["selection", "delivery"]) {
+    const f = await fixture(t, phase === "selection", { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
+    let selects = 0, cancels = 0;
+    if (phase === "selection") f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
+      if (new URL(request.url).pathname === "/admission/resolve" && ++selects === 2) { deadline(); throw new Error("fixture selection rejected"); }
+    };
+    f.response = () => new Response(new ReadableStream({ cancel() { cancels++; } }, { highWaterMark: 0 }), { status: 429 });
+    const response = await f.request({}, {}, "/v1/responses", caller.signal);
+    assert.equal(response.status, phase === "selection" ? 502 : 429);
+    const consumed = phase === "selection"
+      ? response.json().then(body => assert.equal(body.error.code, "provider_unavailable"))
+      : assert.rejects(response.text(), /fixture caller/);
+    if (phase === "delivery") {
+      assert.equal(deadline(), false);
+      caller.abort(new Error("fixture caller after endpoint deadline retirement"));
+    }
+    await consumed; await f.drain();
+    assert.equal(cancels, 1); assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].status, phase === "selection" ? "timeout" : "client_error");
+    assert.equal(f.events[0].status_code, phase === "selection" ? 502 : 429); assert.equal(f.events[0].actual_cost_micros, 0);
+    await assertBudgets(f, [0]);
+  }
+});

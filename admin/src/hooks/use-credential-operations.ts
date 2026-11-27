@@ -1,0 +1,161 @@
+import { type Dispatch, type SetStateAction, useRef, useState } from "react";
+import { DashboardRequestError, type ConsoleRequest } from "../dashboard-fetch";
+import { errorMessage } from "../domain";
+import { generateSecret, sha256Hex } from "../ui-helpers";
+import type { CapturedSessionScope } from "../session-scope";
+import type { ProxyCredential } from "../ui-types";
+
+type Surface = "admin" | "personal";
+type Intent = { surface: Surface; operation: "create" | "rotate" | "revoke" | "put" | "rename"; name?: string | null; enabled?: boolean; expiresAt?: string | null; serviceTiers?: string[] | null; credentialId: string; policyId: string; principalId?: string | null };
+type Reveal = { key: string; credentialId: string; policyId: string; operation: "create" | "rotate"; scope: number; presentation: number };
+type Feedback = { surface: Surface; error: string; notice: string; reveal: Reveal | null };
+const emptyFeedback: Feedback = { surface: "personal", error: "", notice: "", reveal: null };
+type ReadState = "loading" | "ready" | "unavailable" | "stale";
+const emptyRows = { admin: [] as ProxyCredential[], personal: [] as ProxyCredential[], policyIds: [] as string[], keyRead: "loading" as ReadState, policyRead: "loading" as ReadState };
+function failedRead(previous: ReadState): ReadState { return previous === "ready" || previous === "stale" ? "stale" : "unavailable"; }
+
+export function useCredentialOperations(captureScope: () => CapturedSessionScope, requestForScope: (scope: CapturedSessionScope) => ConsoleRequest, setStatus: Dispatch<SetStateAction<string>>, refresh: (ownsScope: () => boolean) => Promise<void>) {
+  const presentationRef = useRef({ surface: null as Surface | null, epoch: 0 });
+  const mutationRef = useRef(0);
+  const pendingRef = useRef<(Intent & { scope: number; presentation: number }) | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [rows, setRows] = useState(emptyRows);
+  const [feedback, setFeedback] = useState<Feedback>(emptyFeedback);
+
+  function clearScope() {
+    mutationRef.current += 1;
+    presentationRef.current.epoch += 1;
+    setRows(emptyRows);
+    setFeedback(emptyFeedback);
+    // A dispatched request still owns admission until its outcome is known.
+  }
+
+  function invalidatePresentation() {
+    presentationRef.current.epoch += 1;
+    setFeedback((current) => ({ ...current, reveal: null }));
+  }
+
+  function observePresentation(surface: Surface | null) {
+    if (presentationRef.current.surface === surface) return;
+    presentationRef.current = { surface, epoch: presentationRef.current.epoch + 1 };
+  }
+
+  function isPresented(surface: Surface, epoch: number) {
+    return presentationRef.current.surface === surface && presentationRef.current.epoch === epoch;
+  }
+
+  function captureHydration() { return mutationRef.current; }
+  function admitsRead(snapshot: number) {
+    const scope = captureScope();
+    return scope.session.authenticated && pendingRef.current?.scope !== scope.epoch && snapshot === mutationRef.current;
+  }
+  // Undefined: this read supplied no verdict for that resource. Null: its read failed.
+  function reportPersonal(snapshot: number, credentials?: ProxyCredential[] | null, policies?: string[] | null) {
+    if (!admitsRead(snapshot)) return;
+    setRows(current => ({ ...current,
+      ...(credentials === undefined ? {} : credentials === null ? { keyRead: failedRead(current.keyRead) } : { personal: credentials, keyRead: "ready" }),
+      ...(policies === undefined ? {} : policies === null ? { policyRead: failedRead(current.policyRead) } : { policyIds: [...new Set(policies)].sort(), policyRead: "ready" }),
+    }));
+  }
+  function hydrate(surface: Surface, credentials: ProxyCredential[], snapshot: number, policies: string[] = []) {
+    if (surface === "personal") return reportPersonal(snapshot, credentials, policies);
+    if (admitsRead(snapshot) && captureScope().session.role === "admin") setRows(current => ({ ...current, admin: credentials }));
+  }
+
+  function reject(surface: Surface, error: string) {
+    if (pendingRef.current) return;
+    invalidatePresentation();
+    setFeedback({ surface, error, notice: "", reveal: null });
+  }
+
+  async function mutate(intent: Intent): Promise<{ credential: ProxyCredential; presented: boolean } | null> {
+    if (pendingRef.current) return null;
+    const scope = captureScope();
+    if (!scope.session.authenticated || (intent.surface === "admin" && scope.session.role !== "admin")) return null;
+    const presentation = presentationRef.current.epoch;
+    const operation = { ...intent, scope: scope.epoch, presentation };
+    pendingRef.current = operation;
+    mutationRef.current += 1;
+    setBusy(true);
+    setFeedback({ ...emptyFeedback, surface: intent.surface });
+    const ownsScope = scope.isCurrent;
+    const request = requestForScope(scope);
+    const ownsPresentation = () => ownsScope() && isPresented(intent.surface, presentation);
+    let sent = false;
+    setStatus(`${intent.operation === "create" ? "issuing" : intent.operation === "rotate" ? "rotating" : intent.operation === "put" ? "updating" : intent.operation === "rename" ? "renaming" : "revoking"} credential`);
+    try {
+      const secret = (intent.operation === "create" || intent.operation === "rotate") ? generateSecret(24) : "";
+      const digest = secret ? await sha256Hex(secret) : "";
+      // Leaving and returning must not dispatch an intent admitted by the old panel.
+      if (!ownsPresentation()) {
+        if (ownsScope()) setStatus("credential change canceled before sending");
+        return null;
+      }
+      const collection = `/v1/${intent.surface === "admin" ? "admin" : "session"}/credentials`;
+      const path = intent.operation === "create" ? collection : intent.operation === "put" ? `${collection}/${encodeURIComponent(intent.credentialId)}` : `${collection}/${encodeURIComponent(intent.credentialId)}/${intent.operation}`;
+      const body = intent.operation === "create" || intent.operation === "put"
+        ? { credentialId: intent.credentialId, policyId: intent.policyId, ...(intent.surface === "admin" ? { principalId: intent.principalId ?? null } : {}), ...(intent.operation === "create" ? { secretSha256: digest } : { enabled: intent.enabled }), ...(intent.operation === "create" && intent.name !== undefined ? { name: intent.name } : {}), ...(intent.expiresAt ? { expiresAt: intent.expiresAt } : {}), ...(intent.serviceTiers === undefined ? {} : { serviceTiers: intent.serviceTiers }) }
+        : intent.operation === "rotate" ? { secretSha256: digest } : intent.operation === "rename" ? { name: intent.name ?? null } : undefined;
+      sent = true;
+      const credential = scope.demo
+        ? intent.operation === "rename"
+          ? { ...rows[intent.surface].find((item) => item.credentialId === intent.credentialId)!, name: intent.name ?? null }
+          : { credentialId: intent.credentialId, policyId: intent.policyId, name: intent.name ?? rows[intent.surface].find((item) => item.credentialId === intent.credentialId)?.name, principalId: intent.surface === "admin" ? intent.principalId ?? null : scope.session.email, enabled: intent.operation !== "revoke", active: intent.operation !== "revoke" }
+        : await request<ProxyCredential>(scope.origin, path, { method: intent.operation === "put" ? "PUT" : "POST", ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
+      if (!credential || credential.credentialId !== intent.credentialId || typeof credential.policyId !== "string" || (intent.operation === "create" && credential.policyId !== intent.policyId) || typeof credential.enabled !== "boolean") throw new Error("invalid credential response");
+      if (!ownsScope()) return null;
+      const update = (items: ProxyCredential[]) => [...items.filter((item) => item.credentialId !== credential.credentialId), credential].sort((a, b) => a.credentialId.localeCompare(b.credentialId));
+      setRows((current) => ({
+        ...current,
+        admin: scope.session.role === "admin" ? update(current.admin) : [],
+        personal: intent.surface === "personal" || (Boolean(scope.session.email) && credential.principalId?.trim().toLowerCase() === scope.session.email?.trim().toLowerCase()) ? update(current.personal) : current.personal.filter((item) => item.credentialId !== credential.credentialId),
+      }));
+      const verb = intent.operation === "create" ? "Created" : intent.operation === "rotate" ? "Rotated" : intent.operation === "put" ? "Updated" : intent.operation === "rename" ? "Renamed" : "Revoked";
+      const reveal = secret && ownsPresentation() ? { key: `clawrouter-live-${intent.credentialId}-${secret}`, credentialId: intent.credentialId, policyId: credential.policyId, operation: intent.operation as "create" | "rotate", scope: scope.epoch, presentation } : null;
+      const notice = `${verb} ${intent.credentialId}.${secret && !reveal ? " The one-time secret was dismissed. Rotate the active key to obtain a new secret." : ""}`;
+      setFeedback({ surface: intent.surface, error: "", notice, reveal });
+      setStatus(`${intent.operation === "create" ? "issued" : verb.toLowerCase()} credential`);
+      return { credential, presented: ownsPresentation() };
+    } catch (caught) {
+      if (!ownsScope()) return null;
+      const rejected = caught instanceof DashboardRequestError && caught.status >= 400 && caught.status < 500;
+      const inactiveRenewal = intent.surface === "personal" && intent.operation === "rotate" &&
+        caught instanceof DashboardRequestError && caught.status === 409 && caught.code === "credential_inactive";
+      let error = errorMessage(caught);
+      if (inactiveRenewal) {
+        error = "This key could not be renewed. If you hold a policy, create a replacement key under it and update your client to use the new key.";
+      } else if (sent && !rejected) {
+        error = `Change to ${intent.credentialId} could not be confirmed. Refresh and check this key before trying again; the server may have applied it. No secret can be recovered.`;
+      }
+      setFeedback({ surface: intent.surface, error, notice: "", reveal: null });
+      setStatus(`credential error: ${error}`);
+      return null;
+    } finally {
+      if (pendingRef.current === operation) {
+        pendingRef.current = null;
+        // An old identity may still own admission, but cannot stale the new identity's reads.
+        if (ownsScope()) mutationRef.current += 1;
+        setBusy(false);
+      }
+      // Metadata freshness is independent of the canonical mutation outcome.
+      if (sent && ownsScope() && !scope.demo) void refresh(ownsScope);
+    }
+  }
+
+  function forSurface(surface: Surface) {
+    const scope = captureScope();
+    const owned = feedback.surface === surface;
+    const reveal = owned && feedback.reveal?.scope === scope.epoch && isPresented(surface, feedback.reveal.presentation) ? feedback.reveal : null;
+    const pending = pendingRef.current;
+    let pendingReveal: "available" | "dismissed" | null = null;
+    if (busy && pending?.scope === scope.epoch && pending.surface === surface && (pending.operation === "create" || pending.operation === "rotate")) {
+      pendingReveal = isPresented(surface, pending.presentation) ? "available" : "dismissed";
+    }
+    const inventory = surface === "personal" && scope.session.role === "user" ? { keys: rows.keyRead, policies: rows.policyRead } : null;
+    return { items: rows[surface], inventory, busy, pendingReveal, error: owned ? feedback.error : "", notice: owned ? feedback.notice : "", reveal, dismiss: invalidatePresentation, refresh: () => refresh(captureScope().isCurrent) };
+  }
+
+  return { rows, scopeEpoch: captureScope().epoch, busy, clearScope, observePresentation, invalidatePresentation, captureHydration, hydrate, reportPersonal, mutate, forSurface, reject };
+}
+
+export type CredentialOperations = ReturnType<typeof useCredentialOperations>;

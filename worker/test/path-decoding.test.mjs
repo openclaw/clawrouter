@@ -19,6 +19,7 @@ const malformedRoutes = [
   ["PUT", "/v1/admin/credentials/%ZZ"],
   ["POST", "/v1/admin/credentials/%ZZ/revoke"],
   ["PUT", "/v1/admin/connections/%ZZ"],
+  ["PATCH", "/v1/admin/connections/%ZZ"],
   ["PUT", "/v1/admin/upstream-grants/policies/default/%ZZ"],
   ["PUT", "/v1/admin/assignment-rules/%ZZ"],
 ];

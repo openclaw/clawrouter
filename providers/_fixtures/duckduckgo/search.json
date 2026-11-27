@@ -1,0 +1,18 @@
+{
+  "synthetic": true,
+  "openclawRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "protocol": "duckduckgo.html",
+  "request": { "method": "GET", "origin": "https://html.duckduckgo.com", "path": "/html", "query": { "q": "synthetic query", "kl": "us-en", "kp": "-1" } },
+  "success": {
+    "contentType": "text/html; charset=UTF-8",
+    "html": "<html><body><a class=\"result__a\" href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fone%3Fa%3D1%26b%3D2\">Syn<b>thetic</b> &amp; one</a><a class=\"result__snippet\">First &lt;plain&gt; &#x1f98a; result</a><a href=\"https://example.org/two\" class=\"result__a\">Second</a><a class=\"result__snippet\">Second snippet</a></body></html>",
+    "results": [
+      { "title": "Synthetic & one", "url": "https://example.com/one?a=1&b=2", "snippet": "First <plain> 🦊 result" },
+      { "title": "Second", "url": "https://example.org/two", "snippet": "Second snippet" }
+    ]
+  },
+  "empty": "<html><body><div class=\"result results_links result--no-result\">No results found</div></body></html>",
+  "challenge": "<html><body><form id=\"challenge-form\">Synthetic bot challenge</form></body></html>",
+  "changedLayout": "<html><body><div>Unknown synthetic response</div></body></html>",
+  "billing": { "upstreamUsdQualified": false, "policyFixedIsSeparate": true, "challengeIsSearchSuccess": false }
+}

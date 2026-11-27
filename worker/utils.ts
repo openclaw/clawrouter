@@ -1,10 +1,13 @@
+import { HttpError } from "./http-error.ts";
 import { logCorrelationError } from "./correlation.ts";
+import { createJsonBodyParser, JsonBodyStructureLimit } from "./json-body.ts";
+import { markLocalError } from "./native-errors.ts";
 
 const corsHeaders = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET,POST,PUT,OPTIONS",
+  "access-control-allow-methods": "GET,POST,PUT,PATCH,OPTIONS",
   "access-control-allow-headers": [
-    "authorization", "content-type", "x-api-key", "anthropic-beta", "anthropic-version",
+    "authorization", "content-type", "idempotency-key", "cancel-after", "x-api-key", "anthropic-beta", "anthropic-version", "anthropic-user-profile-id", "anthropic-workspace-id", "openai-organization", "openai-project", "x-client-request-id",
     "x-request-id", "traceparent", "session-id", "thread-id", "session_id", "x-clawrouter-session-id",
     "x-clawrouter-agent-id", "x-clawrouter-parent-agent-id", "x-clawrouter-project-id",
     "x-clawrouter-client", "x-claude-code-session-id", "x-claude-code-agent-id",
@@ -15,9 +18,9 @@ const corsHeaders = {
     "x-stainless-helper",
   ].join(","),
   "access-control-expose-headers": [
-    "x-request-id", "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
-    "x-clawrouter-fusion-aggregator", "x-clawrouter-fusion-adviser-count", "x-clawrouter-fusion-failed-count",
-    "x-clawrouter-fusion-latency-ms", "x-clawrouter-fusion-advisers",
+    "retry-after", "server-timing", "request-id", "x-request-id", "x-clawrouter-request-id", "x-clawrouter-error-code", "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
+    "x-clawrouter-fusion-strategy", "x-clawrouter-fusion-aggregator", "x-clawrouter-fusion-adviser-count", "x-clawrouter-fusion-failed-count",
+    "x-clawrouter-fusion-latency-ms", "x-clawrouter-fusion-advisers", "x-clawrouter-background-recovery",
   ].join(","),
   "access-control-max-age": "600",
 };
@@ -29,13 +32,18 @@ export function json(value: unknown, status = 200, headers: HeadersInit = {}): R
   });
 }
 
-export function errorResponse(code: string, message: string, status: number, detail?: unknown): Response {
-  return json({ error: { code, message, ...(detail === undefined ? {} : { detail }) } }, status);
+export function errorResponse(code: string, message: string, status: number, detail?: unknown, headers: HeadersInit = {}): Response {
+  return markLocalError(json({ error: { code, message, ...(detail === undefined ? {} : { detail }) } }, status, headers), code, message);
 }
 
 export function withCors(response: Response): Response {
   const copy = new Response(response.body, { status: response.status, statusText: response.statusText, headers: response.headers, ...(response.webSocket ? { webSocket: response.webSocket } : {}) });
   for (const [key, value] of Object.entries(corsHeaders)) copy.headers.set(key, value);
+  // Expose actual native rate headers, including new limit dimensions, without
+  // exposing arbitrary provider headers or cookies to browser callers.
+  const exposed = new Set(corsHeaders["access-control-expose-headers"].split(","));
+  for (const name of response.headers.keys()) if (name.startsWith("x-ratelimit-") || name.startsWith("anthropic-ratelimit-")) exposed.add(name);
+  copy.headers.set("access-control-expose-headers", [...exposed].join(","));
   return copy;
 }
 
@@ -129,6 +137,11 @@ export function normalizeEmail(value: string): string | null {
   return email.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(email) ? email : null;
 }
 
+export function envValue(env: Record<string, unknown>, key: string): string | null {
+  const value = env[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
 export function commaSet(value: string | undefined): Set<string> {
   return new Set((value ?? "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean));
 }
@@ -137,45 +150,135 @@ export function nowIso(): string { return new Date().toISOString(); }
 export function randomId(prefix: string): string { return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`; }
 
 export const maxJsonBodyBytes = 8 * 1024 * 1024;
+// Media-bearing generation routes (Claude Messages and token counting, OpenAI
+// Responses and Chat Completions) accept 32 MB: Claude's documented limit and
+// Cloudflare's WebSocket message ceiling. Opt in only after resolving those
+// endpoints; admin and other provider routes stay at 8 MiB.
+export {mediaJsonBytes as maxMediaJsonBodyBytes} from './large-http/runtime-limits.ts';
 
-export async function readJson<T>(request: Request, emptyValue?: T): Promise<T> {
+// Provider routes lease isolate memory as bytes arrive and authenticate before
+// expanding past 8 MiB; either may throw the caller's error response.
+// An ingress classifier may already own a complete, admitted byte prefix.
+// Transfer that owner directly to the canonical parser instead of replaying
+// its bytes through another ReadableStream and admitting the same bytes twice.
+export interface JsonReadPrefix {
+  bytes: number;
+  read(): Uint8Array | undefined;
+  finish(): void;
+}
+export interface JsonIntake {
+  reserve(bytes: number): Promise<void>;
+  expand(): Promise<void>;
+  takePrefix?(request: Request): JsonReadPrefix | undefined;
+}
+
+function jsonReadFailure(error: unknown): never {
+  if (error instanceof JsonBodyStructureLimit) throw new HttpError(413, "request_too_large", "JSON request exceeds Worker structure limits (65536 values, 128 nesting levels, 4096-character keys/numbers)");
+  if (error instanceof HttpError || error instanceof Response) throw error;
+  throw new HttpError(400, "invalid_json", "request body must be valid JSON");
+}
+
+async function readJsonPrefix<T>(request: Request, prefix: JsonReadPrefix, emptyValue: T | undefined, maxBytes: number, intake: JsonIntake): Promise<T> {
+  try {
+    if (prefix.bytes > maxBytes) throw new HttpError(413, "request_too_large", `JSON request body exceeds the ${maxBytes} byte limit`);
+    if (prefix.bytes === 0 && emptyValue !== undefined) return emptyValue;
+    const decoder = new TextDecoder();
+    if (prefix.bytes > maxJsonBodyBytes) {
+      await intake.expand();
+      const parser = createJsonBodyParser();
+      for (let chunk = prefix.read(); chunk; chunk = prefix.read()) {
+        if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
+        for (let offset = 0; offset < chunk.byteLength; offset += 4096) parser.push(decoder.decode(chunk.subarray(offset, offset + 4096), { stream: true }));
+      }
+      parser.push(decoder.decode());
+      return parser.end() as T;
+    }
+    let text = "";
+    for (let chunk = prefix.read(); chunk; chunk = prefix.read()) text += decoder.decode(chunk, { stream: true });
+    return JSON.parse(text + decoder.decode()) as T;
+  } catch (error) { return jsonReadFailure(error); }
+  finally {
+    prefix.finish();
+    // The transferred stream is deliberately unread; release its empty owner.
+    void request.body?.cancel().catch(() => undefined);
+  }
+}
+
+export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = maxJsonBodyBytes, intake?: JsonIntake): Promise<T> {
+  const tooLarge = () => new HttpError(413, "request_too_large", `JSON request body exceeds the ${maxBytes} byte limit`);
   const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxJsonBodyBytes) throw new HttpError(413, "request_too_large", "JSON request body exceeds the 8 MiB limit");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    void request.body?.cancel().catch(() => undefined);
+    throw tooLarge();
+  }
   if (!request.body) {
     if (emptyValue !== undefined) return emptyValue;
     throw new HttpError(400, "invalid_json", "request body must be valid JSON");
   }
+  const retained = intake?.takePrefix?.(request);
+  if (retained) return readJsonPrefix(request, retained, emptyValue, maxBytes, intake!);
+  // A declared length leases all at once: concurrent uploads that each lease
+  // as they read could all stall partway past the budget and all be refused.
+  if (Number.isFinite(declared) && declared > 0) {
+    try { await intake?.reserve(declared); }
+    catch (error) { void request.body.cancel().catch(() => undefined); throw error; }
+  }
   const reader = request.body.getReader(), decoder = new TextDecoder();
-  let size = 0, text = "";
+  // Keep raw bytes until the body either fits JSON.parse or expands. Handing the
+  // streaming parser slices of one decoded prefix would pin all 8 MiB of it for
+  // as long as any parsed value of 13+ characters lives (V8 slices share it).
+  let size = 0, prefix: Array<Uint8Array | undefined> = [];
+  // Preserve JSON.parse semantics/cost within the existing 8 MiB envelope.
+  let parser: ReturnType<typeof createJsonBodyParser> | undefined;
+  const feed = async (bytes: Uint8Array) => {
+    for (let offset = 0; offset < bytes.byteLength; offset += 4096) parser!.push(decoder.decode(bytes.subarray(offset, offset + 4096), { stream: true }));
+  };
+  const canceled = () => { void reader.cancel(request.signal.reason).catch(() => undefined); };
   try {
     while (true) {
+      if (parser && request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
       const { done, value } = await reader.read();
+      if (parser && request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
       if (done) break;
       size += value.byteLength;
-      if (size > maxJsonBodyBytes) {
-        await reader.cancel();
-        throw new HttpError(413, "request_too_large", "JSON request body exceeds the 8 MiB limit");
+      if (size > maxBytes) {
+        // Cancellation failure must not turn a size rejection into invalid JSON,
+        // and a hostile source cannot hold the rejection open indefinitely.
+        void reader.cancel().catch(() => undefined);
+        throw tooLarge();
       }
-      text += decoder.decode(value, { stream: true });
+      if (!parser && size > maxJsonBodyBytes) {
+        // Authenticate/admit before parsing this chunk or pulling any more.
+        await intake?.expand();
+        parser = createJsonBodyParser();
+        request.signal.addEventListener("abort", canceled, { once: true });
+        if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
+        for (const chunk of prefix) await feed(chunk!);
+        prefix = [];
+      }
+      await intake?.reserve(size);
+      if (parser) await feed(value);
+      else prefix.push(value);
     }
     // Some HTTP runtimes expose an empty stream for a bodyless request. Only
     // callers with an optional-body contract may accept zero bytes as a default.
     if (size === 0 && emptyValue !== undefined) return emptyValue;
+    if (parser) { parser.push(decoder.decode()); return parser.end() as T; }
+    let text = "";
+    // Release each chunk as it decodes so bytes and text never both peak.
+    for (let index = 0; index < prefix.length; index++) { text += decoder.decode(prefix[index], { stream: true }); prefix[index] = undefined; }
     return JSON.parse(text + decoder.decode()) as T;
   } catch (error) {
-    if (error instanceof HttpError) throw error;
-    throw new HttpError(400, "invalid_json", "request body must be valid JSON");
+    void reader.cancel().catch(() => undefined);
+    return jsonReadFailure(error);
+  } finally {
+    request.signal.removeEventListener("abort", canceled);
+    reader.releaseLock();
   }
 }
 
-export class HttpError extends Error {
-  status: number;
-  code: string;
-  constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; }
-}
-
 export function caughtResponse(error: unknown, requestId: string): Response {
-  if (error instanceof HttpError) return errorResponse(error.code, error.message, error.status);
+  if (error instanceof HttpError) return errorResponse(error.code, error.message, error.status, undefined, error.headers);
   logCorrelationError("unhandled request error", requestId);
   return errorResponse("internal_error", "internal server error", 500);
 }

@@ -1,89 +1,66 @@
+import { admitIdentityText, identityUtf8, admitIdentity, identityHeader, identityJson, identitySourceBudget, isIdentityFailure, parseIdentity, readIdentityKv, readIdentityRaw, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
+import { videoControlHeader, videoControlVersion, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
+import { miniMaxApiKeySecret, miniMaxMusicCoverProjection, miniMaxMusicCoverIdentity } from "./native-media-credential.ts";
+import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
+import { miniMaxSearchDenied, miniMaxSearchOwnerBinding, miniMaxSearchProjection, mutateMiniMaxSearchBinding } from "./minimax-search-credential.ts";
+import { searchJsonBytes, searchControlHeader, searchControlVersion, type MiniMaxSearchOperation } from "./minimax-search-operation.ts";
+import type { SearchGrantAttestation, MusicGrantAttestation, VideoGrantAttestation } from "./authority-contracts.ts";
+import { mutateMiniMaxVideoBinding, miniMaxVideoDenied, miniMaxVideoProjection, miniMaxVideoIdentity } from "./minimax-video-credential.ts";
+import type { WanManagedOperation } from "./managed-media-json.ts";
+import { CopilotCatalogFlow } from "./copilot-catalog-flow.ts";
+import { CopilotAccountFlow, assertCopilotAccountRecord } from "./copilot-account-flow.ts";
+import { VertexOwnerRefresh } from "./vertex-owner-refresh.ts";
+import { mutateVertexAnthropicBinding, vertexOwnerBinding } from "./vertex-anthropic-binding.ts";
+import { mutateMiniMaxAnthropicBinding, miniMaxCredential, miniMaxOwnerBinding } from "./minimax-anthropic-binding.ts";
+import { prepareMiniMaxRefreshRequest, decodeMiniMaxTokenResponse, type MiniMaxOAuthCredential } from "./provider-minimax-oauth.ts";
+import { readMiniMaxTokenBody } from "./minimax-token-body.ts";
+import { authorizationTimestamp, refreshExpiryFromSeconds } from "../shared/refresh-expiry.ts";
+import { credentialProjection, materializedGrant, hasFreshPrimaryCredentials, type CredentialRecord, type CredentialProjection, type OwnerResponse, type MaterializeRequest, type PutRequest } from "./grant-credential-record.ts";
+import { mutateMiniMaxImageBinding, miniMaxImageOwnerBinding, miniMaxImageDenied } from "./minimax-image-credential.ts";
+import { mutateNativeMediaBinding, miniMaxMediaProjection } from "./native-media-credential.ts";
+export type { CredentialProjection } from "./grant-credential-record.ts";
+import { claimRefreshOwnership, reserveRefreshOwnership, OWNERSHIP_CLAIM, OWNERSHIP_CURRENT } from "./refresh-ownership.ts";
+import { normalizedScopes, validTimestamp, envValue, boundedSecret, optionalSecret, boundedRefreshJson, boundedResponseJson, MAX_REFRESH_RESPONSE_BYTES, permanentRefreshFailure, safeOAuthError, refreshRetryAt } from "./grant-refresh-diagnosis.ts";
+import { routingProjection } from "./grant-projection.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
-import { authorityCall } from "./authority.ts";
-import { grantCoolingDown, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
-import { grantUsable, syncGrantPoolIndex } from "./grant-selection.ts";
-import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
+import { authorityCall, type GrantAttachmentResult, type GrantAttachmentSnapshot, type GrantAttachmentStatus } from "./authority.ts";
+import { observeProviderGrantQuota } from "./provider-quota.ts";
+import { observeGrantQuota, observeGrantQuotaProbe, quotaRuntime, validGrantQuotaSnapshot } from "./grant-quota.ts";
+import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio } from "../shared/grant-quota.ts";
+import { grantUsable, REFRESH_MARGIN_MS } from "./grant-eligibility.ts";
+import { validGrantSegment } from "./grant-routing.ts";
+import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, quotaProbesForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
-import { errorResponse, HttpError, json, readJson } from "./utils.ts";
+import { errorResponse, json, readJson, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
+import type { ResponseControlDispatch } from "./responses-control-dispatch.ts";
+import { HttpOperation } from "./http-operation.ts";
+import { MiniMaxDeviceFlow } from "./minimax-device-flow.ts";
+import type { MiniMaxDeviceInput } from "./minimax-device-admin.ts";
+import { CopilotDeviceFlow, type CopilotDeviceCredential } from "./copilot-device-flow.ts";
+import type { CopilotDeviceInput } from "./copilot-device-admin.ts";
 
-const REFRESH_MARGIN_MS = 5 * 60_000;
-const MAX_SECRET_BYTES = 64 * 1024;
-const MAX_REFRESH_RESPONSE_BYTES = 128 * 1024;
 const MAX_LEGACY_GRANT_BYTES = 3 * 1024 * 1024;
 const MIN_ALARM_DELAY_MS = 1_000;
 const MAX_MAINTENANCE_FAILURES = 6;
 const snapshot = snapshotJson as unknown as ProviderSnapshot;
 
-interface CredentialRecord {
-  version: 1;
-  generation: number;
-  enabled?: boolean;
-  status: "active" | "reauth_required";
-  credential?: string | null;
-  credentials?: Record<string, string>;
-  accessToken?: string | null;
-  refreshToken?: string | null;
-  tokenType?: string;
-  expiresAt?: string | null;
-  scopes?: string[];
-  accountId?: string | null;
-  subscription?: { plan?: string | null; subject?: string | null } | null;
-  refresh?: UpstreamGrant["refresh"];
-  createdAt?: string | null;
-  updatedAt: string;
+type RefreshSettlement = NonNullable<NonNullable<UpstreamGrant["refreshDiagnosis"]>["failure"]>["settlement"];
+interface PendingRefreshResult {
+  attempt: { id: string; generation: number };
   grantKey?: string;
-  providerId?: string | null;
-  kind?: UpstreamGrant["kind"];
-  maintenance?: { keepWarm: boolean };
-  nextQuotaProbeAt?: string | null;
-  nextKeepWarmAt?: string | null;
-  nextRefreshAttemptAt?: string | null;
-  quotaFailureCount?: number;
-  revokedAt?: string | null;
-  revokedProviderId?: string | null;
-  metadata?: UpstreamGrant;
-}
-
-export interface CredentialProjection {
-  credentialStore: "durable_object";
-  credentialGeneration: number;
-  credentialStatus: "active" | "reauth_required";
-  hasCredential: boolean;
-  credentialFields: string[];
-  hasAccessToken: boolean;
-  hasRefreshToken: boolean;
-  tokenType?: string;
-  expiresAt?: string | null;
-  scopes?: string[];
-  accountId?: string | null;
-  subscription?: { plan?: string | null; subject?: string | null } | null;
-  refresh?: UpstreamGrant["refresh"];
-  createdAt?: string | null;
-  updatedAt: string;
-}
-
-interface OwnerResponse {
-  grant: UpstreamGrant;
-}
-
-interface MaterializeRequest {
-  key: string;
-  grant: UpstreamGrant;
-  legacy?: UpstreamGrant | null;
-  providerId: string;
-  refresh?: RefreshConfig | null;
-  force: boolean;
-  expectedGeneration?: number | null;
-}
-
-interface PutRequest {
-  key: string;
-  grant: UpstreamGrant;
-  preserveUnspecifiedSecrets: boolean;
+  lineage?: string;
+  httpStatus: number;
+  credentials: Pick<CredentialRecord, "accessToken" | "refreshToken" | "tokenType" | "scopes" | "expiresAt" | "refreshTokenExpiresAt" | "updatedAt">;
 }
 
 export type GrantRevokeMetadata = Pick<UpstreamGrant, "kind" | "provider" | "label">;
+
+class SupersededRefresh extends Error {
+  readonly current: CredentialRecord;
+  constructor(current: CredentialRecord) { super("refresh generation superseded"); this.current = current; }
+}
 
 class ReauthorizationRequired extends HttpError {
   projection: CredentialProjection;
@@ -98,21 +75,275 @@ export class GrantCredentialObject implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
   private tail: Promise<void> = Promise.resolve();
+  private pendingRefresh?: PendingRefreshResult;
+  private readonly vertexRefresh: VertexOwnerRefresh;
+  private readonly minimaxDevice: MiniMaxDeviceFlow;
+  private readonly copilotDevice: CopilotDeviceFlow;
+  private readonly copilotAccount: CopilotAccountFlow;
+  private readonly copilotCatalog: CopilotCatalogFlow;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
+    this.vertexRefresh = new VertexOwnerRefresh({
+      order: run => this.order(run), load: key => this.loadRecord(key, undefined, true, identitySourceBudget()),
+      read: async () => { const record = await this.state.storage.get<CredentialRecord>("credential"); if (record) admitIdentity(record, "record"); return record; },
+      save: record => this.state.storage.put("credential", record),
+      materialize: input => this.materialize(input, identitySourceBudget()),
+      result: record => { admitIdentity(record, "record"); const result = { grant: materializedGrant(metadataGrant(record), record) }; admitIdentity(result); return result; },
+      publish: async record => { await this.schedule(record); await this.publishProjection(record); },
+      failure: (record, persisted) => this.recordRefreshFailure(record, null, "outcome_unknown", persisted ? "provider_ok_persist_failed" : "ambiguous"),
+    });
+    this.minimaxDevice = new MiniMaxDeviceFlow({
+      order: run => {
+        const operation = this.tail.then(run);
+        this.tail = operation.then(() => undefined, () => undefined);
+        this.state.waitUntil?.(this.tail);
+        return operation;
+      },
+      read: () => this.state.storage.get<CredentialRecord>("credential"),
+      save: record => this.state.storage.put("credential", record),
+      begin: (key, input) => this.beginMiniMaxDevice(key, input),
+      install: (record, credential, revalidate) => this.installMiniMaxDevice(record, credential, revalidate),
+      publish: async record => { await this.schedule(record); await this.publishProjection(record); },
+    }, env);
+    this.copilotCatalog = new CopilotCatalogFlow({
+      order: run => this.order(run),
+      read: () => this.state.storage.get<CredentialRecord>("credential"),
+      retain: work => { this.state.waitUntil?.(work); void work.catch(() => undefined); },
+    }, env);
+    this.copilotAccount = new CopilotAccountFlow({
+      invalidateCatalog: () => this.copilotCatalog.invalidate(),
+      inferenceControl: this.copilotCatalog.inferenceControl,
+      order: run => this.order(run),
+      read: () => this.state.storage.get<CredentialRecord>("credential"),
+      save: async record => { assertCopilotAccountRecord(record); await this.state.storage.put("credential", record); },
+      publish: record => this.publishProjection(record),
+      retain: work => { this.state.waitUntil?.(work); void work.catch(() => undefined); },
+    }, env);
+    this.copilotDevice = new CopilotDeviceFlow({
+      order: run => this.order(run),
+      read: () => this.state.storage.get<CredentialRecord>("credential"),
+      save: record => this.saveCopilotDevice(record),
+      begin: (key, input) => this.beginCopilotDevice(key, input),
+      install: (record, token, revalidate) => this.installCopilotDevice(record, token, revalidate),
+      publish: record => this.publishProjection(record),
+      retain: work => { this.state.waitUntil?.(work); void work.catch(() => undefined); },
+    }, env);
+  }
+
+  private order<T>(run: () => Promise<T>): Promise<T> {
+    const operation = this.tail.then(run);
+    this.tail = operation.then(() => undefined, () => undefined);
+    this.state.waitUntil?.(this.tail);
+    return operation;
   }
 
   fetch(request: Request): Promise<Response> {
+    if (request.headers.has(identityHeader) && (request.method !== "POST" || new URL(request.url).pathname !== "/materialize")) {
+      const operation = readIdentityRequest(request, false).then(() => json(null), error => this.credentialError(error));
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined)); return operation;
+    }
+    if (request.headers.get(musicCoverControlHeader) === musicCoverControlVersion) {
+      const operation = (async () => {
+        try {
+          const path = new URL(request.url).pathname;
+          if (request.method !== "POST" || !["/inspect", "/materialize"].includes(path)) musicCoverUnavailable();
+          const input = await readCoverControlRequest(request) as MaterializeRequest;
+          return await this.order(async () => {
+            if (input.coverOriginal !== musicCoverControlVersion || typeof input.key !== "string") musicCoverUnavailable();
+            const record = await this.state.storage.get<CredentialRecord>("credential");
+            // Producer-owned storage is not caller heap qualification. Bound the
+            // complete record BEFORE projection, copies or serialization; never repair it.
+            if (!record) musicCoverUnavailable();
+            searchJsonBytes(record);
+            if (!canonicalRecord(record) || record.poolSyncPending || record.refreshAttempt || record.grantKey !== input.key
+              || !miniMaxMusicCoverProjection(metadataGrant(record))) musicCoverUnavailable();
+            const original = metadataGrant(record);
+            if (path === "/inspect") {
+              if (Object.keys(input).some(key => !["coverOriginal", "key"].includes(key))) musicCoverUnavailable();
+              const result = { grant: original }; searchJsonBytes(result); return json(result);
+            }
+            if (input.providerId !== "minimax" || input.operation !== "minimax.music" || input.force || input.legacy || input.refresh
+              || input.expectedGeneration !== record.generation || input.grant?.credentialGeneration !== record.generation
+              || !miniMaxMusicCoverProjection(input.grant) || miniMaxMusicCoverIdentity(original) !== miniMaxMusicCoverIdentity(input.grant)) musicCoverUnavailable();
+            const result = { grant: materializedGrant(original, record) };
+            searchJsonBytes(result); request.signal.throwIfAborted(); return json(result);
+          });
+        } catch { return errorResponse("minimax_music_cover_unavailable", "Music cover original owner is unavailable", 503); }
+      })();
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
+    if (request.method === "POST" && ["/copilot-public/reserve", "/copilot-public/catalog-reserve", "/copilot-public/observe", "/copilot-public/execute", "/copilot-public/retire"].includes(new URL(request.url).pathname)) {
+      const operation = this.copilotCatalog.publicOwner.fetch(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/copilot-inference") {
+      const operation = this.copilotCatalog.inference(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/copilot-catalog") {
+      const operation = this.copilotCatalog.fetch(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/copilot-account") {
+      const operation = this.copilotAccount.fetch(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/copilot-device") {
+      const operation = this.copilotDevice.fetch(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/materialize") {
+      const operation = (async () => {
+        try {
+          const selected = request.headers.has(identityHeader);
+          const input = (selected ? await readIdentityRequest(request, true) : await readJson<MaterializeRequest>(request)) as MaterializeRequest;
+          const result = input.providerId === "anthropic-vertex"
+            ? await this.vertexRefresh.materialize(input, request.signal)
+            : await this.order(() => this.materialize(input, selected ? identitySourceBudget() : undefined));
+          return selected ? new Response(identityJson(result), { headers: { "content-type": "application/json" } }) : json(result);
+        } catch (error) { return this.credentialError(error); }
+      })();
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
+
+    if (request.method === "POST" && new URL(request.url).pathname === "/minimax-device") {
+      const operation = this.minimaxDevice.fetch(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === OWNERSHIP_CURRENT) {
+      return (async () => {
+        const record = await this.state.storage.get<CredentialRecord>("credential");
+        const pending = this.pendingRefresh ?? await this.state.storage.get<PendingRefreshResult>("refresh-result");
+        return json({ exists: !!record, refreshToken: record?.refreshToken ?? null,
+          pendingRefreshToken: matchesRefreshResult(record, pending) ? pending?.credentials.refreshToken ?? null : null });
+      })();
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/published-input/forward") {
+      return import("./published-music-dispatch.ts").then(async dispatch => {
+        let prepared: Awaited<ReturnType<typeof dispatch.preparePublishedMusicForward>> | undefined;
+        try {
+          // Parse and bound the small URL-bearing native request before taking
+          // credential ordering. No raw image or alternate secret crosses here.
+          prepared = await dispatch.preparePublishedMusicForward(request);
+          const current = prepared;
+          const operation = this.tail.then(async () => {
+            const record = await this.state.storage.get<CredentialRecord>("credential");
+            return dispatch.dispatchPublishedMusicUnderOwner(this.env, current, record,
+              record && canonicalRecord(record) ? materializedGrant(metadataGrant(record), record) : undefined);
+          });
+          this.tail = operation.then(() => undefined, () => undefined);
+          const started = await operation;
+          return await dispatch.publishedMusicOwnerResponse(await started.response, prepared);
+        } catch (error) {
+          prepared?.operation.stop("upstream", error); prepared?.lease.release();
+          return dispatch.publishedMusicDispatchFailure(error, prepared?.attempted ?? false);
+        }
+      });
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/managed-input/compose") {
+      return import("./pixverse-input-compose.ts").then(async ({ composePixVerseInput }) => {
+        const { authorizeInputUnderOwner, dispatchInputUnderOwner } = await import("./pixverse-input-dispatch.ts");
+        const ordered = <T>(run: (record: CredentialRecord | undefined, grant: UpstreamGrant | undefined) => Promise<T>) => {
+          const operation = this.tail.then(async () => {
+            const record = await this.state.storage.get<CredentialRecord>("credential");
+            return run(record, record && canonicalRecord(record) ? materializedGrant(metadataGrant(record), record) : undefined);
+          });
+          this.tail = operation.then(() => undefined, () => undefined);
+          return operation;
+        };
+        return composePixVerseInput(request, this.env,
+          (prepared, signal) => ordered((record, grant) => dispatchInputUnderOwner(this.env, prepared, record, grant, signal)),
+          (input, signal) => ordered((record, grant) => authorizeInputUnderOwner(this.env, input, record, grant, signal)));
+      }).catch(error => error instanceof HttpError ? errorResponse(error.code, error.message, error.status)
+        : errorResponse("managed_input_unavailable", "original composed input dispatch could not be confirmed", 503));
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/managed-input/dispatch") {
+      // Bounded bytes/multipart preparation must not hold credential ordering.
+      return import("./pixverse-input-dispatch.ts").then(async ({ prepareInputDispatch, dispatchInputUnderOwner }) => {
+        const prepared = await prepareInputDispatch(request);
+        const operation = this.tail.then(async () => {
+          const record = await this.state.storage.get<CredentialRecord>("credential");
+          return dispatchInputUnderOwner(this.env, prepared, record,
+            record && canonicalRecord(record) ? materializedGrant(metadataGrant(record), record) : undefined, request.signal);
+        });
+        this.tail = operation.then(() => undefined, () => undefined);
+        try { const started = await operation; return await started.response; }
+        finally { prepared.lease.release(); }
+      }).catch(error => error instanceof HttpError ? errorResponse(error.code, error.message, error.status)
+        : errorResponse("managed_input_unavailable", "original input dispatch could not be confirmed", 503));
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/responses/control") {
+      const operation = this.tail.then(async () => {
+        let preparation = new HttpOperation(request.signal, 10_000);
+        try {
+          const input = await preparation.wait(readJson<ResponseControlDispatch>(request));
+          const { prepareResponseControl, assertControlDeadline, assertResponseControlRetention, responseControlRetentionProtocol, assertResponseControlDispatch } = await import("./responses-control-dispatch.ts");
+          const { assertControlCallerLive, authorizeResponseControl } = await import("./response-control-authorization.ts");
+          assertControlDeadline(input);
+          if (input.deadline !== undefined) {
+            preparation.stop("complete");
+            preparation = new HttpOperation(request.signal, Math.min(10_000, input.deadline - Date.now()));
+          }
+          const record = await preparation.wait(this.state.storage.get<CredentialRecord>("credential"));
+          // Jobs are admitted only after materialization. Polling never imports
+          // legacy KV, adopts another lineage, or reselects a pool account.
+          if (!record || !canonicalRecord(record) || record.grantKey !== input.owner.grantKey
+            || record.providerId !== input.owner.providerId || record.lineage !== input.owner.lineage
+            || record.enabled !== true || record.revokedAt || record.status !== "active" || !record.kind
+            || input.protocol === "minimax.video" && (record.poolSyncPending || !miniMaxVideoProjection(metadataGrant(record)))) {
+            throw new HttpError(409, "response_owner_unavailable", "the original response credential is unavailable or changed");
+          }
+          const outbound = await preparation.wait(prepareResponseControl(this.env, input, materializedGrant(metadataGrant(record), record)));
+          await preparation.wait(authorizeResponseControl(this.env, input.authorization, input.owner, preparation.signal, responseControlRetentionProtocol(input), undefined, undefined, undefined, input.protocol === "minimax.video"));
+          preparation.signal.throwIfAborted();
+          assertControlDeadline(input);
+          assertControlCallerLive(input.authorization);
+          if (record.expiresAt && Date.parse(record.expiresAt) <= Date.now()) {
+            throw new HttpError(409, "response_owner_unavailable", "the original response credential has expired");
+          }
+          assertResponseControlRetention(this.env, input);
+          assertResponseControlDispatch(input, outbound);
+          // Start egress before releasing the serialized credential check, but
+          // never make revocation wait for the remote response or stream.
+          return { response: fetch(outbound, { signal: request.signal }) };
+        } catch (error) {
+          return { response: Promise.resolve(error instanceof HttpError ? errorResponse(error.code, error.message, error.status)
+            : errorResponse("response_owner_unavailable", "response control dispatch failed", 503)) };
+        } finally { preparation.stop("complete"); }
+      });
+      this.tail = operation.then(() => undefined, () => undefined);
+      return operation.then(result => result.response);
+    }
     const operation = this.tail.then(() => this.handle(request));
     this.tail = operation.then(() => undefined, () => undefined);
+    // Rotation settlement belongs to the DO, not the observing HTTP caller.
+    this.state.waitUntil?.(this.tail);
     return operation;
   }
 
   alarm(): Promise<void> {
-    const operation = this.tail.then(() => this.maintain());
-    this.tail = operation.then(() => undefined, () => undefined);
+    const operation = (async () => {
+      const input = await this.order(async () => {
+        const record = await this.state.storage.get<CredentialRecord>("credential");
+        if (record && vertexOwnerBinding(record)?.source === "service_account") {
+          if (!record.enabled || record.revokedAt || record.status !== "active" || record.refreshAttempt) { await this.state.storage.deleteAlarm(); return; }
+          return { key: record.grantKey!, grant: metadataGrant(record), providerId: "anthropic-vertex", force: false, expectedGeneration: record.generation };
+        }
+        await this.maintain();
+      });
+      if (input) { try { await this.vertexRefresh.materialize(input); } catch { /* durable fence owns failure; no automatic replay */ } }
+    })();
+    this.state.waitUntil?.(operation);
     return operation;
   }
 
@@ -120,61 +351,455 @@ export class GrantCredentialObject implements DurableObject {
     const path = new URL(request.url).pathname;
     if (request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
     try {
+      if (path === OWNERSHIP_CLAIM) return await reserveRefreshOwnership(this.state.storage, this.env, request);
       if (path === "/put") {
         const input = await readJson<PutRequest>(request);
-        const current = await this.loadRecord(input.key);
-        const previous = current ? poolMetadata(current) : await legacyGrantMetadata(this.env, input.key);
-        let record = current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(input.grant))
-          ? updatedCredentialRecord(current, input.grant)
-          : credentialRecord(input.grant, (current?.generation ?? previous?.credentialGeneration ?? 0) + 1);
+        await this.minimaxDevice.invalidate();
+        await this.copilotDevice.invalidate();
+        await this.copilotAccount.invalidate();
+        this.vertexRefresh.invalidate();
+        const replace = input.intent === "replace";
+        if (replace && !hasPrimaryCredential(input.grant) && !input.vertexPrivateKey) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
+        let current = await this.state.storage.get<CredentialRecord>("credential");
+        if (current) nextCredentialGeneration(current.generation);
+        const musicMutation = input.nativeMediaIntent?.operation === "minimax.music" || musicMutationRecord(current);
+        const videoMutation = input.minimaxVideoIntent !== undefined || !!current?.minimaxVideoBinding;
+        if (videoMutation && (!input.videoActor || input.provenance
+          || current && (!canonicalRecord(current) || current.grantKey !== input.key || current.poolSyncPending))) miniMaxVideoDenied();
+        if (musicMutation && (!input.musicActor || input.provenance
+          || current && (!canonicalRecord(current) || current.grantKey !== input.key || current.poolSyncPending))) musicMutationDenied();
+        let attachment: GrantAttachmentSnapshot;
+        let previous: UpstreamGrant | null;
+        if (videoMutation || musicMutation || input.minimaxSearchIntent !== undefined || current?.minimaxSearchBinding) {
+          // Search never repairs or adopts a legacy/pending attachment on the
+          // way to attestation. The original record must already be canonical.
+          if (current && !canonicalRecord(current)) miniMaxSearchDenied();
+          attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key: input.key });
+          if (attachment.pending || attachment.generation !== (current?.generation ?? 0)) {
+            if (musicMutation) musicMutationDenied();
+            miniMaxSearchDenied();
+          }
+          previous = current ? metadataGrant(current) : null;
+        } else if (replace && (!current || !canonicalRecord(current))) {
+          // Recover directly into the final mutation. An incomplete old owner
+          // must not publish a synthetic migration or adopt newer index facts.
+          previous = current ? metadataGrant(current) : await legacyGrantMetadata(this.env, input.key, true);
+          attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key: input.key });
+          if (current && attachment.generation > current.generation) throw new HttpError(409, "grant_attachment_changed", "attachment is newer than the credential owner; operator recovery is required");
+        } else {
+          await this.loadRecord(input.key, current, false);
+          ({ record: current, result: attachment } = await this.reconcileAttachment(input.key));
+          previous = current ? metadataGrant(current) : await legacyGrantMetadata(this.env, input.key);
+        }
+        if (!current && !previous) {
+          // A KV miss cannot erase legacy membership, including generation zero.
+          // Reconcile only a proven first proposal before admitting a new owner.
+          if (attachment.generation === 0 && attachment.pending) ({ result: attachment } = await this.reconcileAttachment(input.key));
+          if (attachment.generation !== 0 || attachment.attached || attachment.pending) throw new HttpError(409, "grant_attachment_changed", "upstream attachment has no recoverable credential metadata; operator recovery is required");
+        }
+        const admissionGeneration = replace && (current || previous) ? attachment.generation : current?.generation ?? 0;
+        const generation = nextCredentialGeneration(current?.generation ?? (replace && previous ? attachment.generation : previous?.credentialGeneration ?? 0));
+        let record = !replace && current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(input.grant))
+          ? updatedCredentialRecord(current, input.grant, !!input.vertexPrivateKey || vertexOwnerBinding(current)?.source === "service_account")
+          : credentialRecord(input.grant, generation, !!input.vertexPrivateKey);
         record = ownerMetadata(record, input.grant, input.key);
+        // Generic mutations never carry an acquired GitHub token or its device
+        // attempt into another generation, provider, domain or credential kind.
+        delete record.copilotDeviceCredential;
+        delete record.copilotAccountAttempt;
+        delete record.copilotAccountBinding;
+        delete record.copilotDeviceAttempt;
+        mutateNativeMediaBinding(record, current, input.nativeMediaIntent,
+          !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
+        delete record.minimaxMusicTombstone;
+        mutateMiniMaxAnthropicBinding(record, current, input.minimaxAnthropicIntent,
+          !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
+        await mutateVertexAnthropicBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.vertexAnthropicIntent,
+          !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt, input.vertexPrivateKey);
+        mutateMiniMaxImageBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.minimaxImageIntent,
+          !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
+        mutateMiniMaxSearchBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.minimaxSearchIntent,
+          !!input.searchActor && !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
+        mutateMiniMaxVideoBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.minimaxVideoIntent,
+          !!input.videoActor && !replace && input.preserveUnspecifiedSecrets && !input.provenance && !current?.revokedAt);
+        if (record.refreshToken) await claimRefreshOwnership(this.env, input.key, record.refreshToken, { current: current?.refreshToken === record.refreshToken && (!current.refreshAttempt || input.grant.refreshToken === undefined) });
+        const freshAuthority = !current || record.refreshToken !== current.refreshToken;
+        record.credentialProvenance = freshAuthority ? input.provenance ?? "imported" : current?.credentialProvenance ?? "imported";
+        // Access-only/metadata edits and same-token replacement cannot erase
+        // the refresh authority's fence, rejection, diagnosis or retry floor.
+        // Removing only refresh authority is not a fresh access credential.
+        const retainsFailedAccess = current && (current.refreshAttempt || current.status === "reauth_required") && !record.refreshToken && !hasFreshPrimaryCredentials(current, record);
+        if (current && (record.refreshToken && !freshAuthority || retainsFailedAccess
+          || current.refreshAttempt && vertexOwnerBinding(current)?.source === "service_account" && record.vertexPrivateKey === current.vertexPrivateKey)) {
+          record.status = current.status; record.refreshAttempt = current.refreshAttempt;
+          record.refreshDiagnosis = current.refreshDiagnosis; record.nextRefreshAttemptAt = current.nextRefreshAttemptAt;
+        }
+        const searchMutation = input.minimaxSearchIntent !== undefined || !!current?.minimaxSearchBinding;
+        let searchProof: Omit<SearchGrantAttestation, "admissionRevision"> | undefined;
+        if (searchMutation) {
+          if (!input.searchActor || input.provenance || !canonicalRecord(record)) miniMaxSearchDenied();
+          searchJsonBytes(record);
+          const fingerprint = await sha256Hex(miniMaxApiKeySecret(record) ?? "");
+          const mutation = { key: input.key, original: { exists: !!current, generation: current?.generation ?? 0,
+            lineage: current?.lineage ?? null, revision: attachment.revision }, resultGeneration: record.generation,
+            resultLineage: record.lineage!, credentialFingerprint: fingerprint, account: record.accountId ?? null,
+            provider: record.providerId ?? null, kind: record.kind ?? null, binding: record.minimaxSearchBinding ?? null,
+            expiry: record.expiresAt ?? null, preserve: input.preserveUnspecifiedSecrets, replace };
+          searchJsonBytes(mutation);
+          const digest = await sha256Hex(JSON.stringify(mutation));
+          searchProof = { actor: input.searchActor, key: input.key, original: mutation.original,
+            resultGeneration: record.generation, resultLineage: record.lineage!, digest };
+        }
+        const musicProof = musicMutation ? await musicMutationProof(input.musicActor!, input.key, current, record, attachment,
+          replace ? "replace" : "preserve", { preserve: input.preserveUnspecifiedSecrets, intent: input.nativeMediaIntent ?? null,
+            specified: input.nativeMediaIntent !== undefined }) : undefined;
+        if (musicProof && searchProof && JSON.stringify(musicProof.actor) !== JSON.stringify(searchProof.actor)) musicMutationDenied();
+        const videoProof = videoMutation ? await videoMutationProof(input.videoActor!, input.key, current, record, attachment,
+          replace ? "replace" : "preserve", { preserve: input.preserveUnspecifiedSecrets,
+            specified: input.minimaxVideoIntent !== undefined, intent: input.minimaxVideoIntent }) : undefined;
+        if (videoProof && [musicProof, searchProof].some(proof => proof && JSON.stringify(proof.actor) !== JSON.stringify(videoProof.actor))) miniMaxVideoDenied();
         const grant = metadataGrant(record);
-        // Pool capacity admission precedes installation; compensation cannot race a
-        // later command because it stays inside this owner's serialized operation.
-        await syncGrantPoolIndex(this.env, input.key, previous, grant);
-        try { await this.state.storage.put("credential", record); }
-        catch (error) { await syncGrantPoolIndex(this.env, input.key, grant, previous).catch(() => undefined); throw error; }
+        // Admission reserves capacity without removing the old attachment. A
+        // failed store leaves indexed pending work for this owner to reconcile.
+        const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", { key: input.key, generation: admissionGeneration, revision: attachment.revision, provider: record.providerId ?? null, status: attachmentStatus(record) });
+        // Only this explicit commit may acknowledge the reservation; later
+        // refreshes and legacy imports cannot complete a failed account write.
+        record.poolAdmissionRevision = admitted.revision;
+        if (videoProof) {
+          const expected: VideoGrantAttestation = { ...videoProof, admissionRevision: admitted.revision };
+          searchJsonBytes(expected);
+          const reply = await authorityCall<VideoGrantAttestation>(this.env, "/grant-video/authorize", expected);
+          searchJsonBytes(reply);
+          if (JSON.stringify(reply) !== JSON.stringify(expected)) miniMaxVideoDenied();
+        } else if (musicProof) {
+          // This also covers an explicit switch to Search: the complete result
+          // and both intents were prepared before the SAME last SQL role check.
+          const expected: MusicGrantAttestation = { ...musicProof, admissionRevision: admitted.revision };
+          searchJsonBytes(expected);
+          const reply = await authorityCall<MusicGrantAttestation>(this.env, "/grant-music/authorize", expected);
+          searchJsonBytes(reply);
+          if (JSON.stringify(reply) !== JSON.stringify(expected)) musicMutationDenied();
+        } else if (searchProof) {
+          // LAST remote wait: role and exact mutation are checked after pool admission.
+          // No hash/preparation/other await may be inserted before the storage commit.
+          const expected: SearchGrantAttestation = { ...searchProof, admissionRevision: admitted.revision };
+          searchJsonBytes(expected);
+          const reply = await authorityCall<SearchGrantAttestation>(this.env, "/grant-search/authorize", expected);
+          searchJsonBytes(reply);
+          if (JSON.stringify(reply) !== JSON.stringify(expected)) miniMaxSearchDenied();
+        }
+        await this.state.storage.put("credential", record);
+        await this.forgetRefreshResult();
         await this.schedule(record);
         await this.publishProjection(record);
         return json({ grant });
       }
+      if (path === "/inspect") {
+        const input = request.body ? await readJson<{ wanOriginal?: true; searchOriginal?: true; videoOriginal?: true }>(request).catch(() => ({} as { wanOriginal?: true; searchOriginal?: true; videoOriginal?: true })) : {};
+        let record = await this.state.storage.get<CredentialRecord>("credential");
+        if (!record) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
+        if (input.videoOriginal) {
+          if (!canonicalRecord(record) || record.poolSyncPending || !miniMaxVideoProjection(metadataGrant(record))) miniMaxVideoDenied();
+          const grant = metadataGrant(record); searchJsonBytes({ grant }); return json({ grant });
+        }
+        if (input.searchOriginal) {
+          if (!canonicalRecord(record) || !miniMaxSearchOwnerBinding(record) || !miniMaxSearchProjection(metadataGrant(record))) miniMaxSearchDenied();
+          const grant = metadataGrant(record); searchJsonBytes({ grant }); return json({ grant });
+        }
+        if (input.wanOriginal) {
+          if (!canonicalRecord(record)) throw new HttpError(503, "prediction_owner_unavailable", "the original Wan owner is unavailable");
+          return json({ grant: metadataGrant(record) });
+        }
+        if (record.nativeMediaBinding?.version === "clawrouter.native-media.v2") {
+          searchJsonBytes(record);
+          if (!canonicalRecord(record) || record.poolSyncPending) musicCoverUnavailable();
+          const result = { grant: metadataGrant(record) }; searchJsonBytes(result); return json(result);
+        }
+        record = await this.diagnoseUnsettled(record);
+        if (canonicalRecord(record) && record.poolSyncPending) {
+          // A derived-index outage must not conceal the owner's diagnosis.
+          try { await this.publishProjection(record); } catch { /* durable pending state retries later */ }
+        }
+        return json({ grant: canonicalRecord(record) ? metadataGrant(record) : credentialProjection(record) });
+      }
       if (path === "/materialize") return json(await this.materialize(await readJson<MaterializeRequest>(request)));
+      if (path === "/quota-refresh") {
+        const { key } = await readJson<{ key: string }>(request);
+        await this.loadRecord(key, undefined, false);
+        const { record } = await this.reconcileAttachment(key);
+        if (!record || !record.providerId) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
+        const provider = snapshot.providers.find(provider => provider.id === record.providerId);
+        if (!provider) throw new HttpError(400, "unknown_provider", "upstream provider is not registered");
+        const before = JSON.stringify(credentialProjection(record));
+        try {
+          const runtime = await this.probeQuota(provider, record);
+          const transport = transportForGrant(provider, materializedGrant(metadataGrant(record), record));
+          if (transport?.maintenance.quotaPoll) record.nextQuotaProbeAt = new Date(Date.now() + quotaInterval(transport, runtime)).toISOString();
+          return json({ refreshed: true });
+        } finally {
+          await this.state.storage.put("credential", record);
+          await this.schedule(record);
+          if (record.poolSyncPending || before !== JSON.stringify(credentialProjection(record))) await this.publishProjection(record);
+        }
+      }
+      if (path === "/reconcile") {
+        const { key } = await readJson<{ key: string }>(request);
+        await this.loadRecord(key, undefined, false);
+        const { record, result } = await this.reconcileAttachment(key);
+        if (record) await this.publishProjection(record);
+        return json(result);
+      }
       if (path === "/revoke") {
-        const { key, metadata } = await readJson<{ key: string; metadata?: GrantRevokeMetadata }>(request);
-        const current = await this.loadRecord(key);
-        const previous = current ? poolMetadata(current) : await legacyGrantMetadata(this.env, key);
+        const { key, metadata, searchActor, musicActor, videoActor } = await readJson<{ key: string; metadata?: GrantRevokeMetadata; searchActor?: PutRequest["searchActor"]; musicActor?: PutRequest["musicActor"]; videoActor?: PutRequest["videoActor"] }>(request);
+        await this.minimaxDevice.invalidate();
+        await this.copilotDevice.invalidate();
+        await this.copilotAccount.invalidate();
+        this.vertexRefresh.invalidate();
+        // An unavailable index must not block deleting an owner's secrets.
+        const current = await this.state.storage.get<CredentialRecord>("credential");
+        const musicMutation = musicMutationRecord(current);
+        const videoMutation = !!current?.minimaxVideoBinding;
+        if (videoMutation && (!videoActor || !current || !canonicalRecord(current) || current.grantKey !== key || current.poolSyncPending)) miniMaxVideoDenied();
+        if (musicMutation && (!musicActor || !current || !canonicalRecord(current) || current.grantKey !== key || current.poolSyncPending)) musicMutationDenied();
+        const legacy = !current || !current.metadata || current.enabled === undefined ? await legacyGrantMetadata(this.env, key, true) : null;
+        // Old owner identity wins over KV and hints. Prepare missing metadata
+        // in memory so the first durable write already contains no secrets.
+        const previous = current ? metadataGrant({ ...current, metadata: current.metadata ?? legacy ?? {}, revokedAt: current.revokedAt ?? legacy?.revokedAt }) : legacy;
         if (!previous) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
         // Legacy CLI hints identify a record that has no owner. Once owned, its
         // canonical identity and an existing tombstone cannot be overwritten.
-        const record = current?.revokedAt ? current : revokedRecord(key, current ? previous : { ...previous, ...metadata }, current?.generation, previous.provider);
+        // A failed reconnect can leave pending admission after a clean revoke.
+        const generation = current?.generation ?? (await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key })).generation;
+        if (!current?.revokedAt) nextCredentialGeneration(generation);
+        const record = current?.revokedAt
+          ? { ...current, metadata: current.metadata ?? stripLegacySecrets(previous) as UpstreamGrant, lineage: current.lineage ?? crypto.randomUUID(), poolSyncPending: true }
+          : revokedRecord(key, current ? previous : { ...previous, ...metadata }, generation);
+        if (videoMutation) {
+          // Retain the private intent on the existing revoked record so repeat
+          // revocation still requires SQL authority. Every projection is NULL.
+          record.minimaxVideoBinding = current!.minimaxVideoBinding;
+          if (musicMutation) record.minimaxMusicTombstone = true;
+          if ([musicActor, searchActor].some(actor => actor && JSON.stringify(actor) !== JSON.stringify(videoActor))) miniMaxVideoDenied();
+          const attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
+          if (attachment.pending || attachment.generation !== current!.generation) miniMaxVideoDenied();
+          const prepared = await videoMutationProof(videoActor!, key, current, record, attachment,
+            current!.revokedAt ? "tombstone" : "revoke", { preserve: false, specified: true, intent: null });
+          const proof: VideoGrantAttestation = { ...prepared, admissionRevision: attachment.revision };
+          searchJsonBytes(proof);
+          const reply = await authorityCall<VideoGrantAttestation>(this.env, "/grant-video/authorize", proof);
+          searchJsonBytes(reply);
+          if (JSON.stringify(reply) !== JSON.stringify(proof)) miniMaxVideoDenied();
+        } else if (musicMutation) {
+          record.minimaxMusicTombstone = true;
+          const attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
+          if (attachment.pending || attachment.generation !== current!.generation) musicMutationDenied();
+          const prepared = await musicMutationProof(musicActor!, key, current, record, attachment,
+            current!.revokedAt ? "tombstone" : "revoke", { preserve: false, intent: null, specified: true });
+          const proof: MusicGrantAttestation = { ...prepared, admissionRevision: attachment.revision };
+          searchJsonBytes(proof);
+          const reply = await authorityCall<MusicGrantAttestation>(this.env, "/grant-music/authorize", proof);
+          searchJsonBytes(reply);
+          if (JSON.stringify(reply) !== JSON.stringify(proof)) musicMutationDenied();
+        } else if (current?.minimaxSearchBinding && !current.revokedAt) {
+          if (!searchActor || !canonicalRecord(current)) miniMaxSearchDenied();
+          searchJsonBytes(record);
+          const fingerprint = await sha256Hex(miniMaxApiKeySecret(current) ?? "");
+          const digest = await sha256Hex(JSON.stringify({ key, generation: current.generation, lineage: current.lineage,
+            fingerprint, provider: current.providerId, account: current.accountId ?? null, kind: current.kind,
+            binding: null, expiry: record.expiresAt ?? null, revoke: true }));
+          const attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
+          if (attachment.pending || attachment.generation !== current.generation) miniMaxSearchDenied();
+          const proof: SearchGrantAttestation = { actor: searchActor, key,
+            original: { exists: true, generation: current.generation, lineage: current.lineage!, revision: attachment.revision },
+            resultGeneration: record.generation, resultLineage: record.lineage!, admissionRevision: attachment.revision, digest };
+          const reply = await authorityCall<SearchGrantAttestation>(this.env, "/grant-search/authorize", proof);
+          searchJsonBytes(reply); if (JSON.stringify(reply) !== JSON.stringify(proof)) miniMaxSearchDenied();
+        }
         // Never erase the tombstone or restore secrets when a derived write fails.
         // Retrying revoke republishes this same generation after partial failure.
         await this.state.storage.put("credential", record);
+        await this.forgetRefreshResult();
         await this.state.storage.deleteAlarm();
-        await syncGrantPoolIndex(this.env, key, previous, metadataGrant(record));
         await this.publishProjection(record);
         return json({ grant: metadataGrant(record) });
       }
       return errorResponse("route_not_found", "route not found", 404);
-    } catch (error) {
+    } catch (error) { return this.credentialError(error); }
+  }
+
+  private async credentialError(error: unknown): Promise<Response> {
+      if (isIdentityFailure(error)) return errorResponse(error.code, error.message, error.status);
       if (error instanceof ReauthorizationRequired) return errorResponse(error.code, error.message, error.status, { projection: error.projection });
       if (error instanceof HttpError) {
         const record = await this.state.storage.get<CredentialRecord>("credential");
         return errorResponse(error.code, error.message, error.status, record ? { projection: credentialProjection(record) } : undefined);
       }
       return errorResponse("credential_owner_error", "grant credential operation failed", 500);
-    }
   }
 
-  private async materialize(input: MaterializeRequest): Promise<OwnerResponse> {
-    let record = await this.loadRecord(input.key);
+  private async beginMiniMaxDevice(key: string, input: Extract<MiniMaxDeviceInput, { operation: "begin" }>): Promise<CredentialRecord> {
+    const current = await this.state.storage.get<CredentialRecord>("credential");
+    // Missing issuer history/legacy metadata never becomes an onboarding owner
+    // by inference. An existing legacy grant needs explicit operator replacement.
+    if (current && (!canonicalRecord(current) || current.grantKey !== key || current.providerId !== "minimax" || current.refreshAttempt)
+      || !current && await legacyGrantMetadata(this.env, key, true))
+      throw new HttpError(409, "minimax_device_owner_unavailable", "Original credential owner is unavailable");
+    if ((current?.generation ?? 0) !== input.expectedGeneration)
+      throw new HttpError(409, "minimax_device_conflict", "Credential generation changed");
+    const { result: attachment } = await this.reconcileAttachment(key);
+    if (attachment.generation !== (current?.generation ?? 0))
+      throw new HttpError(409, "minimax_device_conflict", "Credential attachment changed");
+    const now = new Date().toISOString();
+    const record: CredentialRecord = {
+      version: 1, generation: nextCredentialGeneration(current?.generation ?? 0), lineage: crypto.randomUUID(),
+      grantKey: key, providerId: "minimax", kind: "oauth", enabled: true, status: "reauth_required",
+      updatedAt: now, createdAt: current?.createdAt ?? now, poolSyncPending: true, revokedAt: null,
+      metadata: { provider: "minimax", kind: "oauth", enabled: true, priority: input.priority, weight: input.weight,
+        createdAt: current?.createdAt ?? now, updatedAt: now },
+      nativeMediaBinding: null, minimaxSearchBinding: null, minimaxVideoBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null,
+    };
+    const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", {
+      key, generation: current?.generation ?? 0, revision: attachment.revision, provider: "minimax", status: "reauth_required",
+    });
+    record.poolAdmissionRevision = admitted.revision;
+    return record;
+  }
+
+  private async installMiniMaxDevice(current: CredentialRecord, credential: MiniMaxOAuthCredential, revalidate: () => Promise<void>): Promise<CredentialRecord> {
+    const attempt = current.minimaxDeviceAttempt!;
+    if (credential.region !== attempt.region || credential.ownerBinding !== attempt.session?.ownerBinding)
+      throw new HttpError(409, "minimax_device_conflict", "Device credential binding changed");
+    await claimRefreshOwnership(this.env, current.grantKey!, credential.refresh);
+    const grant: UpstreamGrant = { ...current.metadata, provider: "minimax", kind: "oauth", enabled: true,
+      accessToken: credential.access, refreshToken: credential.refresh, tokenType: "Bearer",
+      expiresAt: new Date(credential.expiresAt).toISOString(), lastManualAuthorizationAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), revokedAt: null };
+    let installed = ownerMetadata(credentialRecord(grant, nextCredentialGeneration(current.generation)), grant, current.grantKey!);
+    installed.credentialProvenance = "clawrouter_oauth";
+    mutateMiniMaxAnthropicBinding(installed, undefined, { version: "clawrouter.minimax-anthropic.v1", kind: "oauth",
+      region: credential.region, issuer: new URL(credential.tokenEndpoint).origin, tokenEndpoint: credential.tokenEndpoint,
+      resource: credential.resource.anthropicBaseUrl }, false);
+    const attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key: current.grantKey });
+    const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", {
+      key: current.grantKey, generation: current.generation, revision: attachment.revision, provider: "minimax", status: "active",
+    });
+    installed.poolAdmissionRevision = admitted.revision;
+    installed.minimaxDeviceAttempt = { ...attempt, phase: "committed", generation: installed.generation, lineage: installed.lineage!,
+      session: undefined, authorization: undefined };
+    await revalidate();
+    if (Date.now() >= attempt.expiresAt) throw new HttpError(409, "minimax_device_expired", "Device attempt expired");
+    // One owner row atomically records the credential AND terminal attempt.
+    // Failed publication can retry this projection, never the token exchange.
+    await this.state.storage.put("credential", installed);
+    return installed;
+  }
+
+  private async saveCopilotDevice(record: CredentialRecord): Promise<void> {
+    if (new TextEncoder().encode(JSON.stringify(record)).byteLength > 32 * 1024)
+      throw new HttpError(503, "copilot_device_unavailable", "Device owner state exceeds its bound");
+    await this.state.storage.put("credential", record);
+  }
+
+  private async beginCopilotDevice(key: string, input: Extract<CopilotDeviceInput, { operation: "begin" }>): Promise<CredentialRecord> {
+    const current = await this.state.storage.get<CredentialRecord>("credential");
+    if (current && (!canonicalRecord(current) || current.grantKey !== key || current.providerId !== "github-copilot" || current.refreshAttempt)
+      || !current && await legacyGrantMetadata(this.env, key, true))
+      throw new HttpError(409, "copilot_device_owner_unavailable", "Original credential owner is unavailable");
+    if ((current?.generation ?? 0) !== input.expectedGeneration)
+      throw new HttpError(409, "copilot_device_conflict", "Credential generation changed");
+    await this.copilotAccount.invalidate();
+    const { result: attachment } = await this.reconcileAttachment(key);
+    if (attachment.generation !== (current?.generation ?? 0)) throw new HttpError(409, "copilot_device_conflict", "Credential attachment changed");
+    const now = new Date().toISOString();
+    const record: CredentialRecord = {
+      version: 1, generation: nextCredentialGeneration(current?.generation ?? 0), lineage: crypto.randomUUID(),
+      grantKey: key, providerId: "github-copilot", kind: "oauth", enabled: true, status: "reauth_required",
+      updatedAt: now, createdAt: current?.createdAt ?? now, poolSyncPending: true, revokedAt: null,
+      metadata: { provider: "github-copilot", kind: "oauth", enabled: true, priority: input.priority, weight: input.weight, createdAt: now, updatedAt: now },
+    };
+    const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", {
+      key, generation: current?.generation ?? 0, revision: attachment.revision, provider: "github-copilot", status: "reauth_required",
+    });
+    record.poolAdmissionRevision = admitted.revision;
+    return record;
+  }
+
+  private async installCopilotDevice(current: CredentialRecord, token: CopilotDeviceCredential, revalidate: () => Promise<void>): Promise<CredentialRecord> {
+    const attempt = current.copilotDeviceAttempt!;
+    if (token.version !== 1 || token.githubDomain !== attempt.githubDomain || token.ownerBinding !== attempt.ownerBinding
+      || !token.accessToken || token.accessToken.length > 8192 || attempt.phase !== "poll_unknown")
+      throw new HttpError(409, "copilot_device_conflict", "Device credential binding changed");
+    // Token acquisition supplies neither account nor inference authority. Keep
+    // the original token solely in the private row, outside generic key slots.
+    const generation = nextCredentialGeneration(current.generation);
+    const installed: CredentialRecord = { ...current, generation, copilotDeviceCredential: { ...token },
+      status: "reauth_required", updatedAt: new Date().toISOString(), poolSyncPending: true,
+      copilotDeviceAttempt: { ...attempt, phase: "committed", generation, authorization: undefined } };
+    const attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key: current.grantKey });
+    const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", {
+      key: current.grantKey, generation: current.generation, revision: attachment.revision, provider: "github-copilot", status: "reauth_required",
+    });
+    installed.poolAdmissionRevision = admitted.revision;
+    await revalidate();
+    if (Date.now() >= attempt.expiresAt) throw new HttpError(409, "copilot_device_expired", "Device attempt expired");
+    await this.saveCopilotDevice(installed); // token AND terminal fence, one write
+    return installed;
+  }
+
+  private async materialize(input: MaterializeRequest & { wanOriginal?: true }, identity?: IdentitySourceBudget): Promise<OwnerResponse> {
+    if (input.wanOriginal) {
+      // This private operation consumes only an already-owned exact revision.
+      // Do not migrate, diagnose/refresh, adopt a replacement, or publish caches.
+      const record = await this.state.storage.get<CredentialRecord>("credential");
+      if (!record || !canonicalRecord(record) || record.grantKey !== input.key
+        || input.providerId !== "alibaba" || record.providerId !== input.providerId
+        || record.kind !== "api_key" || record.kind !== input.grant.kind
+        || record.generation !== input.expectedGeneration || record.generation !== input.grant.credentialGeneration
+        || !record.lineage || record.lineage !== input.grant.credentialLineage
+        || record.enabled !== true || record.status !== "active" || record.refreshAttempt || input.force || input.legacy
+        || record.expiresAt && (!Number.isFinite(Date.parse(record.expiresAt)) || Date.parse(record.expiresAt) <= Date.now()))
+        throw new HttpError(503, "prediction_owner_unavailable", "the original Wan owner revision is unavailable");
+      return { grant: materializedGrant(metadataGrant(record), record) };
+    }
+    if (input.operation === "minimax.video") {
+      const record = await this.state.storage.get<CredentialRecord>("credential");
+      if (!record || !canonicalRecord(record) || record.poolSyncPending || record.grantKey !== input.key || input.providerId !== "minimax"
+        || record.generation !== input.expectedGeneration || record.generation !== input.grant.credentialGeneration
+        || record.lineage !== input.grant.credentialLineage || input.force || input.legacy || input.refresh || record.refreshAttempt
+        || !miniMaxVideoProjection(metadataGrant(record)) || miniMaxVideoIdentity(metadataGrant(record)) !== miniMaxVideoIdentity(input.grant)) miniMaxVideoDenied();
+      searchJsonBytes(record);
+      const grant = materializedGrant(metadataGrant(record), record); searchJsonBytes({ grant });
+      return { grant };
+    }
+    if (input.operation === "minimax.search") {
+      const record = await this.state.storage.get<CredentialRecord>("credential");
+      if (!record || !canonicalRecord(record) || record.grantKey !== input.key || input.providerId !== "minimax"
+        || record.generation !== input.expectedGeneration || record.lineage !== input.grant.credentialLineage
+        || input.force || input.legacy || input.refresh || !miniMaxSearchProjection(metadataGrant(record))) miniMaxSearchDenied();
+      searchJsonBytes(record);
+      const grant = materializedGrant(metadataGrant(record), record); searchJsonBytes({ grant });
+      return { grant };
+    }
+    let record = await this.loadRecord(input.key, undefined, true, identity);
+    if (identity && record) admitIdentity(record, "record");
+    // Unlike generic refresh, this operation may only materialize the exact
+    // already-admitted owner revision and its actual scalar API-key slot.
+    if (input.operation === "minimax.images" && (!record || input.providerId !== "minimax"
+      || !miniMaxImageOwnerBinding(record) || record.grantKey !== input.key
+      || record.generation !== input.expectedGeneration || record.lineage !== input.grant.credentialLineage)) miniMaxImageDenied();
+    if (input.operation === "minimax.music" && (!record || input.providerId !== "minimax"
+      || !miniMaxMediaProjection(metadataGrant(record), "minimax.music") || record.grantKey !== input.key
+      || record.generation !== input.expectedGeneration || record.lineage !== input.grant.credentialLineage))
+      throw new HttpError(403, "minimax_music_authorization_required", "MiniMax music requires the exact original authorized owner revision");
     let migrated = false;
     if (!record && input.legacy && hasPrimaryCredential(input.legacy)) {
-      const metadata = await this.env.POLICY_KV.get<UpstreamGrant>(input.key, "json");
+      const metadata = identity ? await readIdentityKv<UpstreamGrant>(() => this.env.POLICY_KV.get(input.key, "stream"), identity) : await this.env.POLICY_KV.get<UpstreamGrant>(input.key, "json");
       if (metadata?.revokedAt) record = revokedRecord(input.key, metadata);
       else if (metadata && hasPrimaryCredential(metadata)) record = ownerMetadata(credentialRecord(metadata, 1), metadata, input.key);
       if (!record) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
+      if (record.refreshToken) await claimRefreshOwnership(this.env, input.key, record.refreshToken);
       await this.state.storage.put("credential", record);
+      record = (await this.reconcileAttachment(input.key)).record!;
       migrated = true;
     }
     if (!record) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
@@ -187,8 +812,17 @@ export class GrantCredentialObject implements DurableObject {
       if (record.providerId && record.providerId !== input.providerId || record.kind !== input.grant.kind) throw new HttpError(409, "upstream_grant_changed", "upstream grant changed; retry discovery before dispatch");
       if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
 
+      const settling = !!record.refreshAttempt;
+      if (settling) {
+        changed = true;
+        try { record = await this.recoverRefreshResult(record); }
+        catch (error) { record = await this.state.storage.get<CredentialRecord>("credential") ?? record; throw error; }
+        assertCredentialEnabled(record);
+        if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
+      }
+      if (record.refreshAttempt) throw new HttpError(502, "grant_refresh_at_risk", "refresh settlement is blocked; wait for local recovery or replace with a fresh dedicated login, never replay the stored token");
       const expected = input.expectedGeneration;
-      const mayForce = input.force && (expected != null ? expected === record.generation : migrated || !input.legacy);
+      const mayForce = !settling && input.force && (expected != null ? expected === record.generation : migrated || !input.legacy);
       const expiresAtMs = record.expiresAt ? Date.parse(record.expiresAt) : NaN;
       const expiring = Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now() + REFRESH_MARGIN_MS;
       const deferredRefresh = record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) > Date.now() : false;
@@ -201,123 +835,250 @@ export class GrantCredentialObject implements DurableObject {
           try {
             record = await this.refresh(record, input.providerId, input.refresh ?? null);
             changed = true;
+            assertCredentialEnabled(record);
+            if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
           } catch (error) {
             record = await this.state.storage.get<CredentialRecord>("credential") ?? record;
             changed = true;
             if (record.status !== "reauth_required") {
-              record.nextRefreshAttemptAt = new Date(Date.now() + REFRESH_MARGIN_MS).toISOString();
-              await this.state.storage.put("credential", record);
-              await this.schedule(record);
+              await this.deferRefresh(record);
             } else await this.state.storage.deleteAlarm();
             throw error;
           }
         }
       }
       if (changed || migrated) await this.schedule(record);
+      if (identity) admitIdentity(record, "record");
       return { grant: materializedGrant(metadataGrant(record), record) };
     } finally {
       // KV permits one write per key per second. Publish the final owner state
       // once, including failed refreshes and stale disabled/revoked reads.
-      if (stale || changed || migrated) await this.publishProjection(record);
+      if (stale || changed || migrated || record.poolSyncPending) await this.publishProjection(record);
     }
   }
 
   private async refresh(record: CredentialRecord, providerId: string, providerRefresh: RefreshConfig | null): Promise<CredentialRecord> {
-    assertCredentialEnabled(record);
-    const config = record.refresh ?? providerRefresh;
-    if (!config?.tokenUrl) throw new HttpError(400, "grant_refresh_unavailable", "upstream grant has no approved refresh configuration");
-    const clientId = config.clientId ?? (config.clientIdConfig ? envValue(this.env, config.clientIdConfig) : null);
-    const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: record.refreshToken! });
-    if (clientId) form.set("client_id", clientId);
-    if (config.clientSecretConfig) {
-      const secret = envValue(this.env, config.clientSecretConfig);
-      if (!secret) throw new HttpError(503, "provider_not_configured", `missing refresh client secret ${config.clientSecretConfig}`);
-      form.set("client_secret", secret);
-    }
-    for (const [name, value] of Object.entries(config.extraParams ?? {})) form.set(name, value);
+    try { return await this.performRefresh(record, providerId, providerRefresh); }
+    catch (error) { if (error instanceof SupersededRefresh) return error.current; throw error; }
+  }
 
-    const requestFormat = config.requestFormat ?? "form";
+  private async performRefresh(record: CredentialRecord, providerId: string, providerRefresh: RefreshConfig | null): Promise<CredentialRecord> {
+    assertCredentialEnabled(record);
+    // Re-read authority before every attempt; a pending marker after restart is
+    // an ambiguous send, never permission to replay the old refresh token.
+    const current = await this.state.storage.get<CredentialRecord>("credential");
+    if (!current || current.generation !== record.generation) return current ?? record;
+    if (current.refreshAttempt) {
+      const recovered = await this.recoverRefreshResult(current);
+      if (!recovered.refreshAttempt) return recovered;
+      if (!current.refreshDiagnosis?.failure || !["ambiguous", "provider_ok_persist_failed"].includes(current.refreshDiagnosis.failure.failureClass)) {
+        await this.recordRefreshFailure(current, null, "outcome_unknown", "ambiguous");
+      }
+      throw new HttpError(502, "grant_refresh_at_risk", "refresh outcome is uncertain; replace with a fresh dedicated login, do not replay the stored token");
+    }
+    if (timestamp(current.nextRefreshAttemptAt) > Date.now()) throw new HttpError(502, "grant_refresh_failed", "refresh is waiting for its retry window");
+    let nativeCredential: MiniMaxOAuthCredential | undefined;
+    let refreshUrl: string, refreshInit: RequestInit;
+    if (providerId === "minimax") {
+      const credential = miniMaxCredential(record);
+      if (credential.kind !== "oauth") throw new HttpError(400, "grant_refresh_unavailable", "MiniMax refresh requires its original OAuth credential");
+      nativeCredential = credential;
+      const prepared = prepareMiniMaxRefreshRequest(credential, credential.ownerBinding, record.minimaxAnthropicBinding!.resource);
+      refreshUrl = prepared.url; refreshInit = prepared.init;
+    } else {
+      const config = record.refresh ?? providerRefresh;
+      if (!config?.tokenUrl) {
+        await this.recordRefreshFailure(record, null, "invalid_client");
+        throw new HttpError(400, "grant_refresh_unavailable", "upstream grant has no approved refresh configuration");
+      }
+      const clientId = config.clientId ?? (config.clientIdConfig ? envValue(this.env, config.clientIdConfig) : null);
+      const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: record.refreshToken! });
+      if (clientId) form.set("client_id", clientId);
+      if (config.clientSecretConfig) {
+        const secret = envValue(this.env, config.clientSecretConfig);
+        if (!secret) {
+          await this.recordRefreshFailure(record, null, "invalid_client");
+          throw new HttpError(503, "provider_not_configured", `missing refresh client secret ${config.clientSecretConfig}`);
+        }
+        form.set("client_secret", secret);
+      }
+      for (const [name, value] of Object.entries(config.extraParams ?? {})) form.set(name, value);
+
+      const requestFormat = config.requestFormat ?? "form";
+      refreshUrl = config.tokenUrl;
+      refreshInit = { method: "POST", redirect: "manual",
+        headers: { "content-type": requestFormat === "json" ? "application/json" : "application/x-www-form-urlencoded", accept: "application/json" },
+        body: requestFormat === "json" ? JSON.stringify(Object.fromEntries(form)) : form };
+    }
+
+    if (record.grantKey && record.refreshToken) await claimRefreshOwnership(this.env, record.grantKey, record.refreshToken, { current: true, consume: true });
+    record = { ...record, refreshAttempt: { id: crypto.randomUUID(), generation: record.generation } };
+    // Durable before egress. A crash or an unpersistable result leaves a fence.
+    await this.state.storage.put("credential", record);
+    const refreshSignal = AbortSignal.timeout(30_000);
     let response: Response;
     try {
-      response = await fetch(config.tokenUrl, {
-        method: "POST",
-        headers: { "content-type": requestFormat === "json" ? "application/json" : "application/x-www-form-urlencoded", accept: "application/json" },
-        body: requestFormat === "json" ? JSON.stringify(Object.fromEntries(form)) : form,
-        signal: AbortSignal.timeout(30_000),
-      });
+      response = await fetch(refreshUrl, { ...refreshInit, signal: refreshSignal });
     } catch {
+      await this.recordRefreshFailure(record, null, "network_error", "ambiguous");
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request`);
     }
+    // A redirect is a transient endpoint failure, never evidence of token revocation.
+    if (!nativeCredential && response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => undefined);
+      await this.recordRefreshFailure(record, response.status, "invalid_response", "transient", response.headers.get("retry-after"));
+      throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request (HTTP ${response.status} redirect)`);
+    }
     let payload: Record<string, unknown>;
-    try { payload = await boundedRefreshJson(response); }
+    let nativeResult: MiniMaxOAuthCredential | undefined;
+    try {
+      if (nativeCredential) {
+        const text = await readMiniMaxTokenBody(response, refreshSignal);
+        const result = decodeMiniMaxTokenResponse(text, response.status, nativeCredential.region,
+          nativeCredential.ownerBinding, Date.now(), nativeCredential);
+        if (result.status !== "success") throw new Error("invalid_minimax_token_response");
+        nativeResult = result.credential;
+        payload = { access_token: nativeResult.access, refresh_token: nativeResult.refresh };
+      } else payload = await boundedRefreshJson(response);
+    }
     catch (error) {
+      await this.recordRefreshFailure(record, response.status, "invalid_response", nativeCredential || response.ok ? "ambiguous" : undefined, response.headers.get("retry-after"));
       if (error instanceof HttpError) throw error;
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} returned an invalid refresh response`);
     }
     if (!response.ok || typeof payload.access_token !== "string" || !payload.access_token) {
-      if (permanentRefreshFailure(response.status, payload.error)) {
-        const rejected = { ...record, status: "reauth_required" as const, generation: record.generation + 1, updatedAt: new Date().toISOString() };
-        await this.state.storage.put("credential", rejected);
+      const rejected = await this.recordRefreshFailure(record, response.status, payload.error ?? "invalid_response", response.ok ? "ambiguous" : undefined, response.headers.get("retry-after"));
+      if (rejected.status === "reauth_required") {
         throw new ReauthorizationRequired(`provider ${providerId} requires grant reauthorization`, credentialProjection(rejected));
       }
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request`);
     }
 
-    const updated: CredentialRecord = {
-      ...record,
-      status: "active",
-      generation: record.generation + 1,
+    let credentials: PendingRefreshResult["credentials"];
+    try { credentials = {
       accessToken: boundedSecret(payload.access_token, "access token"),
       refreshToken: typeof payload.refresh_token === "string" && payload.refresh_token
         ? boundedSecret(payload.refresh_token, "refresh token")
         : record.refreshToken,
       tokenType: typeof payload.token_type === "string" && payload.token_type ? payload.token_type : record.tokenType,
       scopes: typeof payload.scope === "string" ? payload.scope.split(/\s+/).filter(Boolean).slice(0, 128) : record.scopes,
-      expiresAt: typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in) && payload.expires_in > 0
+      expiresAt: nativeResult ? new Date(nativeResult.expiresAt).toISOString() : typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in) && payload.expires_in > 0
         ? new Date(Date.now() + payload.expires_in * 1_000).toISOString()
         : record.expiresAt,
-      nextRefreshAttemptAt: null,
-      updatedAt: new Date().toISOString(),
-    };
-    await this.state.storage.put("credential", updated);
-    return updated;
+      // Claude Code preserves the known absolute deadline when a rotation
+      // omits it. Missing/invalid metadata must not invent a new lifetime.
+      refreshTokenExpiresAt: refreshExpiryFromSeconds(payload.refresh_token_expires_in) ?? record.refreshTokenExpiresAt ?? null,
+      updatedAt: new Date(Date.now()).toISOString(),
+    }; } catch {
+      await this.recordRefreshFailure(record, response.status, "invalid_response", response.ok ? "ambiguous" : undefined, response.headers.get("retry-after"));
+      throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} returned an invalid refresh response`);
+    }
+    return this.settleRefreshResult(record, { attempt: record.refreshAttempt!, grantKey: record.grantKey, lineage: record.lineage,
+      httpStatus: response.status, credentials });
+  }
+
+  private async forgetRefreshResult(): Promise<void> {
+    this.pendingRefresh = undefined;
+    await this.state.storage.delete("refresh-result");
+  }
+
+  private async recoverRefreshResult(record: CredentialRecord): Promise<CredentialRecord> {
+    const pending = this.pendingRefresh ?? await this.state.storage.get<PendingRefreshResult>("refresh-result");
+    if (!matchesRefreshResult(record, pending)) {
+      if (pending) await this.forgetRefreshResult();
+      return record;
+    }
+    if (timestamp(record.nextRefreshAttemptAt) > Date.now()) return record;
+    return this.settleRefreshResult(record, pending!);
+  }
+
+  private async settleRefreshResult(record: CredentialRecord, pending: PendingRefreshResult): Promise<CredentialRecord> {
+    // One replacement pair, in the SAME private owner. Retain before any remote
+    // ownership claim or fallible current-record read; never overwrite authority
+    // merely to save a result. Memory also retains it if this first write fails.
+    this.pendingRefresh = pending;
+    let stage: NonNullable<RefreshSettlement>["stage"] = "result_store";
+    try {
+      await this.state.storage.put("refresh-result", pending);
+      stage = "credential_read";
+      let current = await this.state.storage.get<CredentialRecord>("credential");
+      if (!matchesRefreshResult(current, pending)) { await this.forgetRefreshResult(); return current ?? record; }
+      assertCredentialEnabled(current!);
+      stage = "ownership_claim";
+      const token = pending.credentials.refreshToken;
+      if (pending.grantKey && token) await claimRefreshOwnership(this.env, pending.grantKey, token, { current: token === current!.refreshToken });
+      stage = "credential_read";
+      current = await this.state.storage.get<CredentialRecord>("credential");
+      if (!matchesRefreshResult(current, pending)) { await this.forgetRefreshResult(); return current ?? record; }
+      const updated: CredentialRecord = { ...current!, ...pending.credentials,
+        generation: current!.generation + 1, status: "active", refreshAttempt: null, nextRefreshAttemptAt: null, poolSyncPending: true,
+        refreshDiagnosis: { lastSuccessfulRefreshAt: pending.credentials.updatedAt, failure: null } };
+      stage = "credential_write";
+      await this.state.storage.put("credential", updated);
+      // A failed cleanup cannot undo a committed pair. Its old fence is inert
+      // and the next owner read removes it, without a second provider exchange.
+      await this.forgetRefreshResult().catch(() => undefined);
+      return updated;
+    } catch (error) {
+      const code = stage === "ownership_claim" && error instanceof HttpError
+        && ["refresh_ownership_unavailable", "refresh_token_already_owned", "refresh_token_previously_used"].includes(error.code)
+        ? error.code : stage === "ownership_claim" ? "refresh_ownership_unavailable" : "storage_unavailable";
+      try { await this.recordRefreshFailure(record, pending.httpStatus, "persistence_failed", "provider_ok_persist_failed", undefined,
+        { stage, code, correlationId: pending.attempt.id }); }
+      catch (failure) {
+        if (failure instanceof SupersededRefresh) return failure.current;
+        // Diagnosis persistence is not the owner of recovery liveness. Keep a
+        // local wakeup even on paths whose caller cannot persist cleanup state.
+        const current = await this.state.storage.get<CredentialRecord>("credential");
+        if (current) await this.schedule(current);
+      }
+      const ownershipConflict = code === "refresh_token_already_owned" || code === "refresh_token_previously_used";
+      throw new HttpError(502, "grant_refresh_persist_failed", ownershipConflict
+        ? "provider refreshed credentials but replacement ownership is blocked; use a fresh dedicated login, do not replay the stored token"
+        : "provider refreshed credentials; local settlement will retry without another provider refresh");
+    }
   }
 
   private async maintain(): Promise<void> {
     let record = await this.state.storage.get<CredentialRecord>("credential");
     if (!record) return;
     const previous = record;
+    const before = JSON.stringify(credentialProjection(record));
     record = await this.loadRecord(record.grantKey ?? "", record) ?? record;
     if (!record.enabled || !record.grantKey || !record.providerId || !record.kind || record.status === "reauth_required") {
       await this.state.storage.deleteAlarm();
-      if (record !== previous) await this.publishProjection(record);
+      if (record !== previous || record.poolSyncPending) await this.publishProjection(record);
+      return;
+    }
+    if (record.refreshAttempt) {
+      try { record = await this.recoverRefreshResult(record); }
+      catch { record = await this.state.storage.get<CredentialRecord>("credential") ?? record; }
+      await this.schedule(record);
+      if (record.poolSyncPending) await this.publishProjection(record);
       return;
     }
     const provider = snapshot.providers.find((candidate) => candidate.id === record!.providerId);
     const transport = provider ? transportForGrant(provider, materializedGrant({ provider: record.providerId, kind: record.kind }, record)) : null;
-    if (!provider || !transport) return;
+    if (!provider || !transport && miniMaxOwnerBinding(record)?.kind !== "oauth") return;
     const now = Date.now();
     const quotaProbe = quotaProbeForGrant(provider, materializedGrant({ provider: provider.id, kind: record.kind }, record));
     if (!quotaProbe) record.nextQuotaProbeAt = null;
     const refreshAt = record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN;
-    if (record.refreshToken && Number.isFinite(refreshAt) && refreshAt <= now) {
+    if (record.refreshToken && !record.refreshAttempt && Number.isFinite(refreshAt) && refreshAt <= now) {
       try { record = { ...await this.refresh(record, provider.id, provider.auth.refresh), nextRefreshAttemptAt: null }; }
       catch {
         record = await this.state.storage.get<CredentialRecord>("credential") ?? record;
-        if (record.status !== "reauth_required") {
-          record.nextRefreshAttemptAt = new Date(now + REFRESH_MARGIN_MS).toISOString();
-          await this.state.storage.put("credential", record);
-        }
+        if (record.status !== "reauth_required") await this.deferRefresh(record);
       }
-      await this.publishProjection(record);
       if (record.status === "reauth_required") {
+        await this.publishProjection(record);
         await this.state.storage.deleteAlarm();
         return;
       }
     }
-    if (due(record.nextQuotaProbeAt, now) && transport.maintenance.quotaPoll && quotaProbe) {
+    if (due(record.nextQuotaProbeAt, now) && transport?.maintenance.quotaPoll && quotaProbe) {
       try {
-        const state = await probeQuota(this.env, provider, record);
+        const state = await this.probeQuota(provider, record);
         record.quotaFailureCount = 0;
         record.nextQuotaProbeAt = new Date(now + quotaInterval(transport, state)).toISOString();
       } catch {
@@ -326,26 +1087,176 @@ export class GrantCredentialObject implements DurableObject {
         record.nextQuotaProbeAt = new Date(now + Math.min(transport.maintenance.quotaPoll.exhaustedIntervalSeconds * 1_000, normal * 2 ** record.quotaFailureCount)).toISOString();
       }
     }
-    if (record.maintenance?.keepWarm && due(record.nextKeepWarmAt, now) && transport.maintenance.keepWarm) {
+    if ((record as CredentialRecord).status === "reauth_required") {
+      await this.state.storage.put("credential", record);
+      await this.publishProjection(record);
+      await this.state.storage.deleteAlarm();
+      return;
+    }
+    if (record.maintenance?.keepWarm && due(record.nextKeepWarmAt, now) && transport?.maintenance.keepWarm) {
       try { await keepWarm(this.env, provider, transport, record); }
       catch { /* the next regular interval retries without making alarm delivery hot-loop */ }
       record.nextKeepWarmAt = new Date(now + transport.maintenance.keepWarm.intervalSeconds * 1_000).toISOString();
     }
     await this.state.storage.put("credential", record);
     await this.schedule(record);
+    if (record.poolSyncPending || before !== JSON.stringify(credentialProjection(record))) await this.publishProjection(record);
+  }
+
+  private async probeQuota(provider: CompiledProvider, record: CredentialRecord): Promise<GrantRuntimeState> {
+    assertCredentialEnabled(record);
+    if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
+    if (record.refreshAttempt) {
+      try { Object.assign(record, await this.recoverRefreshResult(record)); }
+      catch (error) {
+        // /quota-refresh and maintenance persist this same object in cleanup.
+        // A failed settlement may already have advanced its durable diagnosis.
+        Object.assign(record, await this.state.storage.get<CredentialRecord>("credential") ?? record);
+        throw error;
+      }
+      if (record.refreshAttempt) throw new HttpError(502, "grant_refresh_at_risk", "refresh settlement is blocked; do not replay the stored token");
+    }
+    // Already inside the owner tail: do not recursively call /materialize.
+    return probeQuota(this.env, provider, record, async () => {
+      const current = await this.state.storage.get<CredentialRecord>("credential");
+      if (!current) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
+      assertCredentialEnabled(current);
+      if (current.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(current));
+      try {
+        const recovered = current.generation === record.generation
+          ? await this.refresh(current, provider.id, provider.auth.refresh)
+          : current;
+        Object.assign(record, recovered);
+      } catch (error) {
+        // The refresh failure and its diagnosis are durable already. Never let
+        // the quota caller's finally block write the rejected snapshot over it.
+        Object.assign(record, await this.state.storage.get<CredentialRecord>("credential") ?? current);
+        if (record.status !== "reauth_required") await this.deferRefresh(record);
+        throw error;
+      }
+    });
+  }
+
+  private async diagnoseUnsettled(record: CredentialRecord): Promise<CredentialRecord> {
+    if (this.vertexRefresh.live(record)) return record;
+    const pending = this.pendingRefresh ?? await this.state.storage.get<PendingRefreshResult>("refresh-result");
+    const retained = matchesRefreshResult(record, pending);
+    if (pending && !retained) await this.forgetRefreshResult();
+    if (!retained && record.refreshAttempt && record.refreshDiagnosis?.failure?.settlement && record.nextRefreshAttemptAt) {
+      record = { ...record, nextRefreshAttemptAt: null, poolSyncPending: true,
+        refreshDiagnosis: { ...record.refreshDiagnosis, failure: { ...record.refreshDiagnosis.failure, nextRetryAt: null } } };
+      await this.state.storage.put("credential", record);
+      await this.schedule(record);
+    }
+    // Only reached inside the owner tail, after any live refresh finished. A
+    // remaining pending marker means its result was not durably settled.
+    if (record.refreshAttempt && !["ambiguous", "provider_ok_persist_failed"].includes(record.refreshDiagnosis?.failure?.failureClass ?? "")) {
+      if (!retained) return this.recordRefreshFailure(record, null, "outcome_unknown", "ambiguous");
+      try {
+        return await this.recordRefreshFailure(record, pending!.httpStatus, "persistence_failed", "provider_ok_persist_failed", undefined,
+          { stage: "settlement_resume", code: "settlement_interrupted", correlationId: pending!.attempt.id });
+      } catch (error) {
+        if (error instanceof SupersededRefresh) throw error;
+        // Diagnosis cannot gate local settlement. Revalidate authority before
+        // continuing, and retain a bounded wakeup if installation also fails.
+        const current = await this.state.storage.get<CredentialRecord>("credential");
+        if (!matchesRefreshResult(current, pending)) throw error;
+        await this.schedule(current!);
+        return current!;
+      }
+    }
+    // Older canonical owners already diagnosed the failure, but neither pool
+    // index knows the new availability field. Repair both once, before use.
+    if (!record.refreshRoutingPublished && canonicalRecord(record) && (record.refreshAttempt || record.nextRefreshAttemptAt)) {
+      record = { ...record, poolSyncPending: true };
+      await this.state.storage.put("credential", record);
+    }
+    return record;
+  }
+
+  private async deferRefresh(record: CredentialRecord): Promise<void> {
+    if (!record.refreshAttempt && !(timestamp(record.nextRefreshAttemptAt) > Date.now())) {
+      record.poolSyncPending = true;
+      record.nextRefreshAttemptAt = refreshRetryAt(record.refreshDiagnosis?.failure?.attemptCount ?? 1, record.expiresAt);
+      if (record.refreshDiagnosis?.failure) record.refreshDiagnosis.failure.nextRetryAt = record.nextRefreshAttemptAt;
+      await this.state.storage.put("credential", record);
+    }
+    await this.schedule(record);
+  }
+
+  private async recordRefreshFailure(record: CredentialRecord, status: number | null, code: unknown,
+    outcome?: NonNullable<NonNullable<UpstreamGrant["refreshDiagnosis"]>["failure"]>["failureClass"], retryAfter?: string | null, settlement?: RefreshSettlement): Promise<CredentialRecord> {
+    const current = await this.state.storage.get<CredentialRecord>("credential");
+    if (!current) throw new HttpError(409, "grant_credential_missing", "refresh owner no longer exists");
+    if (current.generation !== record.generation || record.refreshAttempt && !sameRefreshAttempt(current, record)) throw new SupersededRefresh(current);
+    const permanent = status !== null && permanentRefreshFailure(status, code);
+    const failureClass = outcome ?? (permanent ? "permanent" : status === 429 || retryAfter ? "retry_after" : "transient");
+    const atRisk = failureClass === "ambiguous" || failureClass === "provider_ok_persist_failed";
+    const now = new Date(Date.now()).toISOString();
+    const previous = current.refreshDiagnosis?.failure;
+    const attemptCount = Math.min(Number.MAX_SAFE_INTEGER, (previous?.attemptCount ?? 0) + 1);
+    const ownershipConflict = settlement?.code === "refresh_token_already_owned" || settlement?.code === "refresh_token_previously_used";
+    const nextRetryAt = permanent || atRisk && (!settlement || ownershipConflict) ? null : refreshRetryAt(attemptCount, current.expiresAt, retryAfter);
+    const rejected: CredentialRecord = {
+      ...current,
+      status: permanent ? "reauth_required" : current.status,
+      generation: permanent ? current.generation + 1 : current.generation,
+      refreshAttempt: atRisk ? current.refreshAttempt : null,
+      poolSyncPending: true,
+      updatedAt: permanent ? now : current.updatedAt,
+      nextRefreshAttemptAt: nextRetryAt,
+      refreshDiagnosis: {
+        lastSuccessfulRefreshAt: current.refreshDiagnosis?.lastSuccessfulRefreshAt ?? null,
+        failure: { oauthError: safeOAuthError(code), httpStatus: status, failureClass,
+          firstFailureAt: previous?.firstFailureAt ?? now, lastFailureAt: now, attemptCount, nextRetryAt, ...(settlement ? { settlement } : {}) },
+      },
+    };
+    await this.state.storage.put("credential", rejected);
+    await this.schedule(rejected);
+    return rejected;
   }
 
   private async publishProjection(record: CredentialRecord): Promise<void> {
     if (!record.grantKey) return;
+    if (record.poolSyncPending) await this.reconcileAttachment(record.grantKey);
     await this.env.POLICY_KV.put(record.grantKey, JSON.stringify(metadataGrant(record)));
+    // Authority ACK alone cannot retire publication: KV-backed selection must
+    // also see the outcome, including newly diagnosed abandoned attempts.
+    if (record.poolSyncPending || !record.refreshRoutingPublished) {
+      record.poolSyncPending = false;
+      record.refreshRoutingPublished = true;
+      await this.state.storage.put("credential", record);
+    }
+  }
+
+  private async reconcileAttachment(key: string): Promise<{ record: CredentialRecord | undefined; result: GrantAttachmentResult }> {
+    // Reread inside the owner tail. A failed owner read is unknown, never
+    // permission to cancel pending admission or infer absence from KV.
+    const record = await this.state.storage.get<CredentialRecord>("credential");
+    const indexed = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
+    const result = record
+      ? await authorityCall<GrantAttachmentResult>(this.env, "/grant-pools/publish", { key, generation: record.generation, revision: indexed.revision, admissionRevision: record.poolAdmissionRevision, provider: record.providerId ?? null, status: attachmentStatus(record), projection: routingProjection(metadataGrant(record)) })
+      : await authorityCall<GrantAttachmentResult>(this.env, "/grant-pools/cancel-pending", { key, revision: indexed.revision });
+    return { record, result };
   }
 
   private async schedule(record: CredentialRecord): Promise<void> {
-    const next = [
-      record.refreshToken && record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : record.refreshToken && record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN,
+    const refreshable = !!record.refreshToken || vertexOwnerBinding(record)?.source === "service_account";
+    // If both credential and diagnosis writes failed, the pre-egress fence has
+    // no future retry timestamp. A matching retained result needs a local wakeup;
+    // lost results and diagnosed ownership stops must not regain automatic work.
+    const failure = record.refreshDiagnosis?.failure;
+    const stopped = failure?.failureClass === "ambiguous"
+      || ["refresh_token_already_owned", "refresh_token_previously_used"].includes(failure?.settlement?.code ?? "");
+    const needsLocalRetry = record.refreshAttempt && !(timestamp(record.nextRefreshAttemptAt) > Date.now()) && !stopped;
+    const pending = needsLocalRetry ? this.pendingRefresh ?? await this.state.storage.get<PendingRefreshResult>("refresh-result") : undefined;
+    const localRetry = matchesRefreshResult(record, pending)
+      ? timestamp(refreshRetryAt(record.refreshDiagnosis?.failure?.attemptCount ?? 1, record.expiresAt)) : NaN;
+    const next = (record.refreshAttempt ? [Number.isFinite(localRetry) ? localRetry : timestamp(record.nextRefreshAttemptAt)] : [
+      refreshable && record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : refreshable && record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN,
       timestamp(record.nextQuotaProbeAt),
       record.maintenance?.keepWarm ? timestamp(record.nextKeepWarmAt) : NaN,
-    ].filter(Number.isFinite);
+    ]).filter(Number.isFinite);
     if (!record.enabled || !next.length || record.status === "reauth_required") {
       await this.state.storage.deleteAlarm();
       return;
@@ -353,23 +1264,93 @@ export class GrantCredentialObject implements DurableObject {
     await this.state.storage.setAlarm(Math.max(Date.now() + MIN_ALARM_DELAY_MS, Math.min(...next)));
   }
 
-  private async loadRecord(key: string, stored?: CredentialRecord): Promise<CredentialRecord | undefined> {
+  private async loadRecord(key: string, stored?: CredentialRecord, repair = true, identity?: IdentitySourceBudget): Promise<CredentialRecord | undefined> {
     let record = stored ?? await this.state.storage.get<CredentialRecord>("credential");
-    if (!record || record.metadata && record.enabled !== undefined) return record;
-    const metadata = key ? await legacyGrantMetadata(this.env, key) : null;
-    const previous = metadataGrant(record);
-    record = { ...record, grantKey: key || record.grantKey, metadata: metadata ?? {}, enabled: record.enabled ?? (metadata !== null && metadata.enabled !== false) };
-    // Pre-owner CLI commands revoked only KV. Import negative lifecycle facts
-    // once, before any provider I/O; later KV reads never regain authority.
-    if (metadata?.revokedAt) record = revokedRecord(key, { ...metadataGrant(record), revokedAt: metadata.revokedAt }, record.generation);
-    else if (metadata?.enabled === false) record = { ...record, enabled: false, generation: record.generation + (record.enabled === false ? 0 : 1) };
-    // Keep the migration marker absent until index removal succeeds. A failed
-    // sync or owner write retries from the durable KV denial before dispatch.
-    if (metadata?.revokedAt || metadata?.enabled === false) await syncGrantPoolIndex(this.env, key, previous, metadataGrant(record));
+    if (!record) return record;
+    if (identity) admitIdentity(record, "record");
+    // Cover has a separate canonical owner path. Generic materialization and
+    // maintenance cannot diagnose, repair or adopt this inactive profile.
+    if (record.nativeMediaBinding?.version === "clawrouter.native-media.v2") musicCoverUnavailable(403);
+    record = await this.diagnoseUnsettled(record);
+    if (canonicalRecord(record)) return repair && record.poolSyncPending ? (await this.reconcileAttachment(key)).record : record;
+    if (!record.metadata || record.enabled === undefined) {
+      const metadata = key ? await legacyGrantMetadata(this.env, key, false, identity) : null;
+      record = { ...record, grantKey: key || record.grantKey, metadata: metadata ?? {}, enabled: record.enabled ?? (metadata !== null && metadata.enabled !== false), poolSyncPending: true };
+      // Pre-owner CLI commands revoked only KV. Import negative lifecycle facts
+      // once, before any provider I/O; later KV reads never regain authority.
+      if (metadata?.revokedAt) record = revokedRecord(key, { ...metadataGrant(record), revokedAt: metadata.revokedAt }, record.generation);
+      else if (metadata?.enabled === false) record = { ...record, enabled: false, generation: record.generation + (record.enabled === false ? 0 : 1) };
+    }
+    // Existing owner records acquire a lineage once; caller/KV lineage values
+    // never establish identity. Refresh preserves this owner-issued value.
+    record = { ...record, lineage: record.lineage ?? crypto.randomUUID() };
+    // Commit the denial before derived publication. The dirty flag survives
+    // failure and retries reconciliation before any later provider I/O.
     await this.state.storage.put("credential", record);
     if (!record.enabled) await this.state.storage.deleteAlarm();
-    return record;
+    return repair && record.poolSyncPending ? (await this.reconcileAttachment(key)).record : record;
   }
+}
+
+function canonicalRecord(record: CredentialRecord): boolean {
+  return !!record.metadata && record.enabled !== undefined && !!record.lineage;
+}
+
+function musicMutationRecord(record: CredentialRecord | undefined): boolean {
+  return record?.nativeMediaBinding?.operation === "minimax.music" || record?.minimaxMusicTombstone === true;
+}
+
+function musicMutationDenied(): never {
+  throw new HttpError(403, "minimax_music_admin_required", "Current Music mutation authority is required");
+}
+
+async function videoMutationProof(actor: NonNullable<PutRequest["videoActor"]>, key: string,
+  current: CredentialRecord | undefined, record: CredentialRecord, attachment: GrantAttachmentSnapshot,
+  mode: VideoGrantAttestation["mode"], intent: { preserve: boolean; specified: boolean; intent: PutRequest["minimaxVideoIntent"] },
+): Promise<Omit<VideoGrantAttestation, "admissionRevision">> {
+  // Reuse the qualified complete-result fingerprint, then domain-separate and
+  // bind both the old video intent and exact requested/new video authority.
+  const prepared = await musicMutationProof(actor, key, current, record, attachment, mode,
+    { preserve: intent.preserve, specified: true, intent: record.nativeMediaBinding ?? null });
+  const domain = "clawrouter.minimax-video-mutation.v1" as const;
+  const mutation = { ...prepared, domain, originalVideoBinding: current?.minimaxVideoBinding ?? null,
+    binding: record.minimaxVideoBinding ?? null, ...intent };
+  searchJsonBytes(mutation);
+  const digest = await sha256Hex(JSON.stringify(mutation));
+  return { ...prepared, domain, digest };
+}
+
+async function musicMutationProof(actor: NonNullable<PutRequest["musicActor"]>, key: string,
+  current: CredentialRecord | undefined, record: CredentialRecord, attachment: GrantAttachmentSnapshot,
+  mode: MusicGrantAttestation["mode"], intent: { preserve: boolean; specified: boolean; intent: PutRequest["nativeMediaIntent"] },
+): Promise<Omit<MusicGrantAttestation, "admissionRevision">> {
+  if (!canonicalRecord(record) || record.grantKey !== key) musicMutationDenied();
+  const parts = key.split("/");
+  const scope: MusicGrantAttestation["scope"] = parts.length === 4 && parts[1] === "tenants"
+    ? ["tenants", parts[2], parts[3]] : ["policies", parts[1], parts[2]];
+  if (parts[0] !== "oauth" || parts.length !== (scope[0] === "tenants" ? 4 : 3)
+    || scope[0] === "policies" && scope[1] === "tenants" || !validGrantSegment(scope[1]) || !validGrantSegment(scope[2])) musicMutationDenied();
+  searchJsonBytes(record);
+  const secrets = { credential: record.credential ?? null, credentials: record.credentials ?? null,
+    accessToken: record.accessToken ?? null, refreshToken: record.refreshToken ?? null, vertexPrivateKey: record.vertexPrivateKey ?? null };
+  searchJsonBytes(secrets);
+  const credentialFingerprint = await sha256Hex(JSON.stringify(secrets));
+  const original = { exists: !!current, generation: current?.generation ?? 0, lineage: current?.lineage ?? null, revision: attachment.revision };
+  const domain = "clawrouter.minimax-music-mutation.v1" as const;
+  const mutation = { domain, actor, key, scope, original, resultGeneration: record.generation, resultLineage: record.lineage!, mode,
+    credentialFingerprint, account: record.accountId ?? null, provider: record.providerId ?? null, kind: record.kind ?? null,
+    expiry: record.expiresAt ?? null, enabled: record.enabled, revokedAt: record.revokedAt ?? null,
+    binding: record.nativeMediaBinding ?? null, searchBinding: record.minimaxSearchBinding ?? null,
+    ...(current?.nativeMediaBinding?.version === "clawrouter.native-media.v2" || record.nativeMediaBinding?.version === "clawrouter.native-media.v2"
+      ? { originalBinding: current?.nativeMediaBinding ?? null } : {}), ...intent };
+  searchJsonBytes(mutation);
+  const digest = await sha256Hex(JSON.stringify(mutation));
+  return { domain, actor, key, scope, original, resultGeneration: record.generation, resultLineage: record.lineage!, mode, digest };
+}
+
+function nextCredentialGeneration(generation: number): number {
+  if (!Number.isSafeInteger(generation) || generation < 0 || generation >= Number.MAX_SAFE_INTEGER - 1) throw new HttpError(409, "grant_generation_exhausted", "account generation is exhausted; operator recovery is required");
+  return generation + 1;
 }
 
 function ownerMetadata(record: CredentialRecord, grant: UpstreamGrant, key: string): CredentialRecord {
@@ -404,52 +1385,106 @@ function metadataGrant(record: CredentialRecord): UpstreamGrant {
   return { ...record.metadata, ...credentialProjection(record), enabled: record.enabled === true, provider: record.providerId, kind: record.kind, maintenance: record.maintenance, revokedAt: record.revokedAt ?? null };
 }
 
-function poolMetadata(record: CredentialRecord): UpstreamGrant {
-  const grant = metadataGrant(record);
-  // A failed legacy revoke may have changed its identifying provider hint.
-  // Retries and reconnects must still remove membership from the original pool.
-  return record.revokedAt ? { ...grant, provider: record.revokedProviderId ?? grant.provider } : grant;
+function attachmentStatus(record: CredentialRecord): GrantAttachmentStatus | null {
+  if (record.revokedAt) return null;
+  if (!record.enabled) return "paused";
+  return record.status === "reauth_required" || !hasPrimaryCredential(record) && vertexOwnerBinding(record)?.source !== "service_account"
+    ? "reauth_required" : "active";
 }
 
-function revokedRecord(key: string, metadata: UpstreamGrant | null, generation = metadata?.credentialGeneration ?? 0, previousProviderId = metadata?.provider): CredentialRecord {
+function revokedRecord(key: string, metadata: UpstreamGrant | null, generation = metadata?.credentialGeneration ?? 0): CredentialRecord {
   // Tagged CLI grants could contain nested secret fields in refresh metadata.
   // A tombstone must discard these too, including when the owner predates it.
   metadata = stripLegacySecrets(metadata) as UpstreamGrant | null;
   const revokedAt = metadata?.revokedAt ?? new Date().toISOString();
   return {
-    version: 1, generation: generation + 1, enabled: false, status: "active",
+    version: 1, generation: generation + 1, lineage: crypto.randomUUID(), enabled: false, status: "active", poolSyncPending: true,
     grantKey: key, providerId: metadata?.provider, kind: metadata?.kind,
+    refreshTokenExpiresAt: metadata?.refreshTokenExpiresAt, lastManualAuthorizationAt: metadata?.lastManualAuthorizationAt,
     tokenType: metadata?.tokenType, expiresAt: metadata?.expiresAt, scopes: metadata?.scopes,
     accountId: metadata?.accountId, subscription: metadata?.subscription, refresh: metadata?.refresh,
     maintenance: { keepWarm: metadata?.maintenance?.keepWarm === true },
-    createdAt: metadata?.createdAt, updatedAt: revokedAt, revokedAt, revokedProviderId: previousProviderId, metadata: secretlessGrant(metadata ?? {}),
+    createdAt: metadata?.createdAt, updatedAt: revokedAt, revokedAt, metadata: secretlessGrant(metadata ?? {}),
   };
 }
 
-async function probeQuota(env: Env, provider: CompiledProvider, record: CredentialRecord): Promise<GrantRuntimeState> {
+async function probeQuota(env: Env, provider: CompiledProvider, record: CredentialRecord, recover: () => Promise<void>): Promise<GrantRuntimeState> {
   assertCredentialEnabled(record);
-  const grant = materializedGrant({ provider: provider.id, kind: record.kind, maintenance: record.maintenance }, record);
-  const probe = quotaProbeForGrant(provider, grant);
-  if (!probe) throw new HttpError(400, "grant_quota_probe_unavailable", `provider ${provider.id} has no quota probe for this grant kind`);
-  const headers = new Headers({ accept: "application/json" });
-  const url = new URL(probe.url);
-  applyProviderCredential(provider, grant, env, headers, url.searchParams);
-  for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant, "grant_quota_probe_unavailable"));
-  let response: Response;
-  try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000) }); }
-  catch { throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe failed`); }
-  if (!response.ok) {
-    const failure = observeGrantQuota(response, { responseHeaders: [], probes: [] });
-    if (failure) await publishRuntime(env, record, { ...failure, source: "provider_probe" });
-    await response.body?.cancel().catch(() => undefined);
-    throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe returned ${response.status}`);
+  let grant = materializedGrant({ provider: provider.id, kind: record.kind, maintenance: record.maintenance }, record);
+  const probes = quotaProbesForGrant(provider, grant);
+  if (!probes.length) throw new HttpError(400, "grant_quota_probe_unavailable", `provider ${provider.id} has no quota probe for this grant kind`);
+  const states = await authorityCall<{ states: Record<string, GrantRuntimeState> }>(env, "/grant-pools/states", { keys: [record.grantKey] });
+  const stored = states.states[record.grantKey!];
+  const previous = stored?.grantRevision === record.updatedAt ? stored : undefined;
+  let windows = previous?.windows ?? [];
+  const windowSnapshots: NonNullable<GrantRuntimeState["windowSnapshots"]> = {};
+  let facts = previous ? { account: previous.account, extraUsage: previous.extraUsage } : {};
+  let quotaUpdated = false;
+  let quotaObservedAt: string | undefined;
+  let successful = false;
+  let recovered = false;
+  for (const probe of probes) {
+    if (Date.parse(record.quotaRetryAt?.[probe.url] ?? "") > Date.now()) continue;
+    const headers = new Headers({ accept: "application/json" });
+    const url = new URL(probe.url);
+    applyProviderCredential(provider, grant, env, headers, url.searchParams);
+    for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant, "grant_quota_probe_unavailable"));
+    const probeStartedAt = Date.now();
+    let response: Response;
+    try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000), redirect: "manual" }); }
+    catch { if (probe.windows.length) throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe failed`); else continue; }
+    if (response.status === 401 && record.refreshToken && !recovered) {
+      recovered = true;
+      await response.body?.cancel().catch(() => undefined);
+      await recover();
+      grant = materializedGrant({ provider: provider.id, kind: record.kind, maintenance: record.maintenance }, record);
+      applyProviderCredential(provider, grant, env, headers, url.searchParams);
+      for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant, "grant_quota_probe_unavailable"));
+      try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000), redirect: "manual" }); }
+      catch { throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe failed`); }
+    }
+    if (response.status === 429) {
+      const retry = response.headers.get("retry-after");
+      const until = retry && /^\d+(?:\.\d+)?$/.test(retry) ? Date.now() + Number(retry) * 1000 : Date.parse(retry ?? "");
+      (record.quotaRetryAt ??= {})[probe.url] = new Date(Number.isFinite(until) ? Math.max(Date.now() + 1000, until) : Date.now() + 60_000).toISOString();
+      await response.body?.cancel().catch(() => undefined);
+      continue; // Poll throttling says nothing about inference quota; retain the reading.
+    }
+    if (!response.ok) {
+      const failure = observeGrantQuota(response, { responseHeaders: [], probes: [] });
+      if (failure) await publishRuntime(env, record, { ...failure, source: "provider_probe", windows });
+      await response.body?.cancel().catch(() => undefined);
+      if (response.status === 401 && !record.refreshToken) record.status = "reauth_required";
+      if (probe.windows.length || response.status === 401 || response.status === 403) throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe returned ${response.status}`);
+      continue;
+    }
+    let payload: unknown;
+    try { payload = await boundedResponseJson(response, MAX_REFRESH_RESPONSE_BYTES); }
+    catch (error) { if (probe.windows.length) throw error; else continue; }
+    if (!validGrantQuotaSnapshot(payload, probe, probeStartedAt)) throw new HttpError(502, "grant_quota_probe_invalid", "provider " + provider.id + " quota probe returned a malformed window");
+    const state = observeGrantQuotaProbe(payload, probe, probeStartedAt);
+    if (!state) { if (probe.windows.length) throw new HttpError(502, "grant_quota_probe_empty", `provider ${provider.id} quota probe returned no recognized windows`); else continue; }
+    successful = true;
+    delete record.quotaRetryAt?.[probe.url];
+    facts = { ...facts, ...(state.account ? { account: state.account } : {}), ...(state.extraUsage ? { extraUsage: state.extraUsage } : {}) };
+    if (state.windows.length) {
+      for (const definition of probe.windows) {
+        const scope = definition.collection?.modelPointer ? `${definition.id}-*` : definition.id;
+        windowSnapshots[scope] = { observedAt: state.observedAt, ids: state.windows.filter(window => definition.collection?.modelPointer ? window.id.startsWith(`${definition.id}-`) : window.id === definition.id).map(window => window.id) };
+      }
+      windows = [...windows.filter(window => !probe.windows.some(definition => definition.collection?.modelPointer ? window.id.startsWith(`${definition.id}-`) : window.id === definition.id)), ...state.windows];
+      quotaUpdated = true;
+      quotaObservedAt = state.observedAt;
+    }
   }
-  const payload = await boundedResponseJson(response, MAX_REFRESH_RESPONSE_BYTES);
-  const state = observeGrantQuotaProbe(payload, probe);
-  if (!state) throw new HttpError(502, "grant_quota_probe_empty", `provider ${provider.id} quota probe returned no recognized windows`);
-  const observed = { ...state, grantRevision: record.updatedAt };
-  await publishRuntime(env, record, observed);
+  const observed = { ...quotaRuntime(windows.slice(0, 128), "provider_probe", quotaObservedAt ? Date.parse(quotaObservedAt) : Date.now()), ...facts, ...(quotaUpdated ? { windowSnapshots } : {}), grantRevision: record.updatedAt };
+  if (!quotaUpdated && previous) Object.assign(observed, { observedAt: previous.observedAt, status: previous.status, cooldownUntil: previous.cooldownUntil, lastSignal: previous.lastSignal });
+  if (successful) await publishRuntime(env, record, observed);
   return observed;
+}
+
+export async function refreshGrantQuota(env: Env, key: string): Promise<void> {
+  await ownerCall(env, key, "/quota-refresh", { key });
 }
 
 async function keepWarm(env: Env, provider: CompiledProvider, transport: CompiledGrantTransport, record: CredentialRecord): Promise<void> {
@@ -458,7 +1493,8 @@ async function keepWarm(env: Env, provider: CompiledProvider, transport: Compile
   if (!config || !record.grantKey) return;
   const states = await authorityCall<{ states: Record<string, GrantRuntimeState> }>(env, "/grant-pools/states", { keys: [record.grantKey] });
   const runtime = states.states[record.grantKey];
-  if (grantCoolingDown(runtime) || (grantQuotaRatio(runtime) ?? 1) <= 0.1) return;
+  const model = typeof config.body.model === "string" ? config.body.model : null;
+  if (grantCoolingDown(runtime) || grantQuotaExhausted(runtime, model) || (grantQuotaRatio(runtime, Date.now(), undefined, model) ?? 1) <= 0.1) return;
   const endpoint = provider.endpoints.find((candidate) => candidate.id === config.endpoint);
   if (!endpoint) throw new HttpError(500, "grant_maintenance_invalid", `provider ${provider.id} keep-warm endpoint is unavailable`);
   const grant = materializedGrant({ provider: provider.id, kind: record.kind, maintenance: record.maintenance }, record);
@@ -473,9 +1509,13 @@ async function keepWarm(env: Env, provider: CompiledProvider, transport: Compile
   query.forEach((value, name) => url.searchParams.set(name, value));
   const body = transformTransportBody(transport, structuredClone(config.body));
   let response: Response;
-  try { response = await fetch(url, { method: endpoint.method, headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) }); }
+  try { response = await fetch(url, { method: endpoint.method, headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000), redirect: "manual" }); }
   catch { throw new HttpError(502, "grant_keep_warm_failed", `provider ${provider.id} keep-warm request failed`); }
-  const state = observeGrantQuota(response, provider.quota);
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new HttpError(502, "grant_keep_warm_failed", `provider ${provider.id} keep-warm request returned ${response.status}`);
+  }
+  const state = observeProviderGrantQuota(provider.id, response, provider.quota, model);
   if (state) await publishRuntime(env, record, state);
   await response.body?.cancel().catch(() => undefined);
   if (!response.ok) throw new HttpError(502, "grant_keep_warm_failed", `provider ${provider.id} keep-warm request returned ${response.status}`);
@@ -506,8 +1546,16 @@ function assertCredentialEnabled(record: CredentialRecord): void {
   if (record.enabled !== true) throw new HttpError(409, "grant_disabled", "upstream grant is disabled");
 }
 
-export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets })).grant;
+export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/inspect", cover ? { coverOriginal: musicCoverControlVersion, key } : video ? { videoOriginal: true } : search ? { searchOriginal: true } : wan ? { wanOriginal: true } : {}, signal, wan, search, video, cover)).grant;
+}
+
+export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string, minimaxImageIntent?: PutRequest["minimaxImageIntent"], minimaxSearchIntent?: PutRequest["minimaxSearchIntent"], searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"], minimaxVideoIntent?: PutRequest["minimaxVideoIntent"], videoActor?: PutRequest["videoActor"]): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent, vertexAnthropicIntent, vertexPrivateKey, minimaxImageIntent, minimaxSearchIntent, searchActor, musicActor, minimaxVideoIntent, videoActor })).grant;
+}
+
+export async function reconcileGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult> {
+  return ownerCall<GrantAttachmentResult>(env, key, "/reconcile", { key });
 }
 
 export async function materializeGrantCredentials(
@@ -517,8 +1565,15 @@ export async function materializeGrantCredentials(
   providerId: string,
   refresh: RefreshConfig | null,
   force: boolean,
+  signal?: AbortSignal,
+  operation?: MaterializeRequest["operation"],
+  wan?: WanManagedOperation,
+  search?: MiniMaxSearchOperation,
+  video?: MiniMaxVideoOperation,
+  cover?: MiniMaxMusicCoverControl,
 ): Promise<UpstreamGrant> {
-  const legacy = hasRawCredential(grant) ? grant : null;
+  if (!cover && !video && !wan && !search) admitIdentity(grant, "record");
+  const legacy = !cover && !video && !wan && !search && hasRawCredential(grant) ? grant : null;
   return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
     key,
     grant,
@@ -527,29 +1582,35 @@ export async function materializeGrantCredentials(
     refresh,
     force,
     expectedGeneration: grant.credentialGeneration ?? null,
-  })).grant;
+    operation,
+    ...(wan ? { wanOriginal: true } : {}),
+    ...(cover ? { coverOriginal: musicCoverControlVersion } : {}),
+  }, signal, wan, search, video, cover)).grant;
 }
 
-export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/revoke", { key, metadata })).grant;
+export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata, searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"], videoActor?: PutRequest["videoActor"]): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/revoke", { key, metadata, searchActor, musicActor, videoActor })).grant;
 }
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
   const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
-  return projection ? { ...safe, ...projection } : safe;
+  for (const name of ["videoActor", "videoAttestation", "minimaxVideoIntent", "musicActor", "musicAttestation", "minimaxMusicTombstone", "minimaxDeviceAttempt", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
+  return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxSearchBinding: null, minimaxVideoBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null, vertexAnthropicBinding: null };
 }
 
 export function hasRawCredential(grant: UpstreamGrant): boolean {
   return grant.credential != null || grant.accessToken != null || grant.refreshToken != null || Object.keys(grant.credentials ?? {}).length > 0;
 }
 
-function credentialRecord(grant: UpstreamGrant, generation: number): CredentialRecord {
-  if (!hasPrimaryCredential(grant)) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
+function credentialRecord(grant: UpstreamGrant, generation: number, vertexSigningIntent = false): CredentialRecord {
+  if (!hasPrimaryCredential(grant) && !vertexSigningIntent) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
   const now = new Date().toISOString();
   const credentials = grant.credentials && Object.keys(grant.credentials).length ? normalizedCredentials(grant.credentials) : undefined;
   return {
     version: 1,
     generation,
+    lineage: crypto.randomUUID(),
+    poolSyncPending: true,
     enabled: grant.enabled ?? true,
     status: "active",
     credential: optionalSecret(grant.credential, "credential"),
@@ -558,6 +1619,8 @@ function credentialRecord(grant: UpstreamGrant, generation: number): CredentialR
     refreshToken: optionalSecret(grant.refreshToken, "refresh token"),
     tokenType: grant.tokenType,
     expiresAt: validTimestamp(grant.expiresAt),
+    refreshTokenExpiresAt: validAuthorizationTimestamp(grant.refreshTokenExpiresAt),
+    lastManualAuthorizationAt: validAuthorizationTimestamp(grant.lastManualAuthorizationAt),
     scopes: normalizedScopes(grant.scopes),
     accountId: grant.accountId,
     subscription: grant.subscription,
@@ -567,72 +1630,67 @@ function credentialRecord(grant: UpstreamGrant, generation: number): CredentialR
   };
 }
 
-function updatedCredentialRecord(current: CredentialRecord | undefined, grant: UpstreamGrant): CredentialRecord {
+function updatedCredentialRecord(current: CredentialRecord | undefined, grant: UpstreamGrant, vertexSigningIntent = false): CredentialRecord {
   if (!current) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
   const updated: CredentialRecord = {
     ...current,
     generation: current.generation + 1,
+    poolSyncPending: true,
     enabled: grant.enabled ?? current.enabled ?? true,
-    status: "active",
+    status: current.status,
     credential: grant.credential === undefined ? current.credential : optionalSecret(grant.credential, "credential"),
     credentials: grant.credentials && Object.keys(grant.credentials).length ? normalizedCredentials(grant.credentials) : current.credentials,
     accessToken: grant.accessToken === undefined ? current.accessToken : optionalSecret(grant.accessToken, "access token"),
     refreshToken: grant.refreshToken === undefined ? current.refreshToken : optionalSecret(grant.refreshToken, "refresh token"),
     tokenType: grant.tokenType ?? current.tokenType,
     expiresAt: grant.expiresAt === undefined ? current.expiresAt : validTimestamp(grant.expiresAt),
+    refreshTokenExpiresAt: grant.refreshTokenExpiresAt === undefined ? current.refreshTokenExpiresAt : validAuthorizationTimestamp(grant.refreshTokenExpiresAt),
+    lastManualAuthorizationAt: grant.lastManualAuthorizationAt === undefined ? current.lastManualAuthorizationAt : validAuthorizationTimestamp(grant.lastManualAuthorizationAt),
     scopes: grant.scopes === undefined ? current.scopes : normalizedScopes(grant.scopes),
     accountId: grant.accountId === undefined ? current.accountId : grant.accountId,
     subscription: grant.subscription === undefined ? current.subscription : grant.subscription,
     refresh: grant.refresh === undefined ? current.refresh : grant.refresh,
     updatedAt: grant.updatedAt ?? new Date().toISOString(),
   };
-  if (![updated.credential, updated.accessToken, ...Object.values(updated.credentials ?? {})].some((value) => typeof value === "string" && value.length > 0)) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
+  if (!vertexSigningIntent && ![updated.credential, updated.accessToken, ...Object.values(updated.credentials ?? {})].some((value) => typeof value === "string" && value.length > 0)) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
+  const replaced = ["credential", "accessToken", "refreshToken"].some(key => {
+    const value = updated[key as keyof CredentialRecord];
+    return typeof value === "string" && value !== current[key as keyof CredentialRecord];
+  }) || JSON.stringify(Object.entries(updated.credentials ?? {}).sort()) !== JSON.stringify(Object.entries(current.credentials ?? {}).sort());
+  if (replaced && (!current.refreshAttempt || updated.refreshToken !== current.refreshToken || !updated.refreshToken && hasFreshPrimaryCredentials(current, updated))) { updated.status = "active"; updated.refreshDiagnosis = null; updated.refreshAttempt = null; updated.nextRefreshAttemptAt = null; }
+  // Explicit credential/account replacement is not a refresh, even when the
+  // operator keeps the same account label. Refresh-token replacement also can
+  // change the next upstream account, so it invalidates continuation ownership.
+  if (["credential", "accessToken", "refreshToken", "accountId"].some(key => updated[key as keyof CredentialRecord] !== current[key as keyof CredentialRecord])
+    || JSON.stringify(Object.entries(updated.credentials ?? {}).sort()) !== JSON.stringify(Object.entries(current.credentials ?? {}).sort())
+    || updated.subscription?.subject !== current.subscription?.subject
+    || JSON.stringify(updated.refresh) !== JSON.stringify(current.refresh)
+    || grant.provider !== undefined && grant.provider !== current.providerId || grant.kind !== undefined && grant.kind !== current.kind) updated.lineage = crypto.randomUUID();
+  if (updated.refreshToken !== current.refreshToken) {
+    // Replacing refresh authority cannot inherit dates from the old login.
+    // Access-only edits retain the existing refresh token and its deadline.
+    updated.refreshTokenExpiresAt = validAuthorizationTimestamp(grant.refreshTokenExpiresAt);
+    updated.lastManualAuthorizationAt = validAuthorizationTimestamp(grant.lastManualAuthorizationAt);
+  }
   return updated;
 }
 
-function credentialProjection(record: CredentialRecord): CredentialProjection {
-  return {
-    credentialStore: "durable_object",
-    credentialGeneration: record.generation,
-    credentialStatus: record.status,
-    hasCredential: !!record.credential || Object.keys(record.credentials ?? {}).length > 0,
-    credentialFields: Object.keys(record.credentials ?? {}).sort(),
-    hasAccessToken: !!record.accessToken,
-    hasRefreshToken: !!record.refreshToken,
-    tokenType: record.tokenType,
-    expiresAt: record.expiresAt,
-    scopes: record.scopes,
-    accountId: record.accountId,
-    subscription: record.subscription,
-    refresh: record.refresh,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
-  };
-}
 
-function materializedGrant(metadata: UpstreamGrant, record: CredentialRecord): UpstreamGrant {
-  return {
-    ...metadata,
-    credential: record.credential,
-    credentials: record.credentials,
-    accessToken: record.accessToken,
-    refreshToken: record.refreshToken,
-    tokenType: record.tokenType,
-    expiresAt: record.expiresAt,
-    scopes: record.scopes,
-    accountId: record.accountId,
-    subscription: record.subscription,
-    refresh: record.refresh,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
-    credentialGeneration: record.generation,
-    credentialStatus: record.status,
-  };
-}
 
-async function ownerCall<T>(env: Env, key: string, path: string, body: unknown): Promise<T> {
+async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<T> {
+  if (cover && (!isMusicCoverControl(cover) || wan || search || video || !["/inspect", "/materialize"].includes(path))) musicCoverUnavailable();
   const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
-  const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body) });
+  if (cover) return cover.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), false, signal);
+  if (video) return video.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [videoControlHeader]: videoControlVersion } }), false, signal);
+  if (search) return search.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [searchControlHeader]: searchControlVersion } }), false, signal);
+  if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);
+  if (path === "/materialize") {
+    admitIdentity((body as MaterializeRequest).grant, "record");
+    const text = identityJson(body);
+    return readIdentityResponse<T>(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal, headers: { [identityHeader]: "v1" } }), identitySourceBudget(), signal,
+      (status, value) => { const payload = value as { error?: { code?: string; message?: string } }; throw new HttpError(status, payload.error?.code ?? "credential_owner_error", payload.error?.message ?? "grant credential operation failed"); }, "grant");
+  }
+  const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();
   if (!response.ok) {
     let payload: { error?: { code?: string; message?: string; detail?: { projection?: CredentialProjection } } } = {};
@@ -646,14 +1704,24 @@ export function hasPrimaryCredential(grant: UpstreamGrant): boolean {
   return [grant.credential, grant.accessToken, ...Object.values(grant.credentials ?? {})].some((value) => typeof value === "string" && value.length > 0);
 }
 
-async function legacyGrantMetadata(env: Env, key: string): Promise<UpstreamGrant | null> {
-  const raw = await env.POLICY_KV.get(key, "text");
+async function legacyGrantMetadata(env: Env, key: string, recover = false, identity?: IdentitySourceBudget): Promise<UpstreamGrant | null> {
+  const raw = identity ? await readIdentityRaw(() => env.POLICY_KV.get(key, "stream"), identity) : await env.POLICY_KV.get(key, "text");
   if (raw === null) return null;
-  if (new TextEncoder().encode(raw).byteLength > MAX_LEGACY_GRANT_BYTES) throw new HttpError(400, "invalid_upstream_grant", "legacy grant metadata exceeds the migration limit");
+  // Explicit replacement/revocation needs only proof that an old record exists.
+  // A failed read remains unknown; corrupt bytes never become owner metadata.
+  if ((identity ? identityUtf8(raw) : new TextEncoder().encode(raw).byteLength) > MAX_LEGACY_GRANT_BYTES) {
+    if (recover) return {};
+    throw new HttpError(400, "invalid_upstream_grant", "legacy grant metadata exceeds the migration limit");
+  }
   let value: unknown = {};
+  if (identity && !raw.trim().startsWith("{")) admitIdentityText(raw, identity);
   if (raw.trim().startsWith("{")) {
-    try { value = JSON.parse(raw); }
-    catch { throw new HttpError(400, "invalid_upstream_grant", "legacy grant metadata is invalid JSON"); }
+    try { value = identity ? parseIdentity(raw, identity) : JSON.parse(raw); }
+    catch (error) {
+      if (isIdentityFailure(error)) throw error;
+      if (recover) return {};
+      throw new HttpError(400, "invalid_upstream_grant", "legacy grant metadata is invalid JSON");
+    }
   }
   const metadata = stripLegacySecrets(value) as Record<string, unknown>;
   const legacy = value as UpstreamGrant;
@@ -674,7 +1742,7 @@ async function legacyGrantMetadata(env: Env, key: string): Promise<UpstreamGrant
 function stripLegacySecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripLegacySecrets);
   if (!value || typeof value !== "object") return value;
-  const secrets = new Set(["accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
+  const secrets = new Set(["videoActor", "videoAttestation", "minimaxVideoIntent", "musicActor", "musicAttestation", "minimaxMusicTombstone", "minimaxVideoBinding", "minimaxSearchBinding", "minimaxSearchIntent", "searchActor", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
   return Object.fromEntries(Object.entries(value).filter(([name]) => !secrets.has(name)).map(([name, item]) => [name, stripLegacySecrets(item)]));
 }
 
@@ -688,70 +1756,19 @@ function normalizedCredentials(value: Record<string, string>): Record<string, st
   }));
 }
 
-function normalizedScopes(value: string[] | undefined): string[] | undefined {
-  if (value == null) return undefined;
-  if (!Array.isArray(value) || value.length > 128 || value.some((scope) => typeof scope !== "string" || !scope || scope.length > 512)) throw new HttpError(400, "invalid_upstream_grant", "grant scopes are invalid");
-  return [...new Set(value)];
+function matchesRefreshResult(record: CredentialRecord | undefined, pending: PendingRefreshResult | undefined): boolean {
+  return !!record && !!pending && record.enabled === true && !record.revokedAt && record.status === "active"
+    && record.grantKey === pending.grantKey && record.lineage === pending.lineage
+    && record.generation === pending.attempt.generation && record.refreshAttempt?.generation === pending.attempt.generation
+    && record.refreshAttempt.id === pending.attempt.id;
 }
 
-function optionalSecret(value: string | null | undefined, name: string): string | null | undefined {
-  return value == null ? value : boundedSecret(value, name);
+function sameRefreshAttempt(current: CredentialRecord | undefined, attempted: CredentialRecord): boolean {
+  return !!current && current.generation === attempted.generation && current.refreshAttempt?.id === attempted.refreshAttempt?.id;
 }
 
-function boundedSecret(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value || new TextEncoder().encode(value).byteLength > MAX_SECRET_BYTES) throw new HttpError(400, "invalid_upstream_grant", `${name} must be a non-empty bounded string`);
-  return value;
-}
-
-function validTimestamp(value: string | null | undefined): string | null | undefined {
-  if (value == null) return value;
-  if (!Number.isFinite(Date.parse(value))) throw new HttpError(400, "invalid_upstream_grant", "grant expiry is invalid");
-  return new Date(value).toISOString();
-}
-
-function envValue(env: Env, key: string): string | null {
-  const value = env[key];
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
-async function boundedRefreshJson(response: Response): Promise<Record<string, unknown>> {
-  try {
-    const value = await boundedResponseJson(response, MAX_REFRESH_RESPONSE_BYTES);
-    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  } catch {
-    throw new HttpError(502, "grant_refresh_failed", "provider refresh response was invalid");
-  }
-}
-
-async function boundedResponseJson(response: Response, limit: number): Promise<unknown> {
-  const length = Number(response.headers.get("content-length"));
-  if (Number.isFinite(length) && length > limit) throw new HttpError(502, "grant_response_invalid", "provider response was invalid");
-  const reader = response.body?.getReader();
-  if (!reader) return null;
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > limit) {
-      await reader.cancel();
-      throw new HttpError(502, "grant_response_invalid", "provider response was invalid");
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  const text = new TextDecoder().decode(bytes);
-  try {
-    const value = JSON.parse(text);
-    return value;
-  } catch {
-    return null;
-  }
-}
-
-function permanentRefreshFailure(status: number, code: unknown): boolean {
-  return [400, 401].includes(status) && typeof code === "string" && ["invalid_grant", "invalid_token", "refresh_token_reused"].includes(code);
+function validAuthorizationTimestamp(value: unknown): string | null {
+  const timestamp = authorizationTimestamp(value);
+  if (value != null && timestamp === null) throw new HttpError(400, "invalid_upstream_grant", "authorization timestamp must be ISO-8601 or epoch milliseconds");
+  return timestamp;
 }

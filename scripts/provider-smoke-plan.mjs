@@ -1,51 +1,13 @@
-import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { parse } from "yaml";
+import { compileProviderSnapshot as compileManifests } from "./provider-compiler.mjs";
+import { runWithinDeadline } from "./smoke-readiness.mjs";
+import { buildProviderSmokePlan, selectLiveProviderPlans, liveProviderList, summarizePlan } from "./provider-smoke-planning.mjs";
+export { buildProviderSmokePlan, selectLiveProviderPlans, liveProviderList, summarizePlan };
 
 export class SmokeKeyInspectionUnavailableError extends Error {}
-
-export function buildProviderSmokePlan(snapshot, env = process.env) {
-  const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
-  const providerPlans = providers.map((provider) => {
-    const optionalConfigKeys = new Set([
-      ...(provider.optional_config_keys ?? []),
-      ...splitCsv(env.CLAWROUTER_OPTIONAL_CONFIG_KEYS),
-    ]);
-    const optionalConfig = provider.config_keys.filter(
-      (key) => optionalConfigKeys.has(key) || optionalAuthConfig(provider, key),
-    );
-    const requiredConfig = provider.config_keys.filter((key) => !optionalConfig.includes(key));
-    const missingConfig = requiredConfig.filter((key) => !env[key]);
-    const target = smokeTarget(provider, env);
-    const oauth = provider.auth_schemes.some((scheme) => scheme.startsWith("oauth:"));
-    const oauthGrantReady =
-      !oauth || env[`CLAWROUTER_OAUTH_READY_${envName(provider.id)}`] === "1";
-    const configPresent = missingConfig.length === 0;
-    return {
-      id: provider.id,
-      class: provider.class,
-      servicePlatform: provider.service_platform,
-      serviceKind: provider.service_kind,
-      meter: provider.meter ?? null,
-      authSchemes: provider.auth_schemes,
-      requiredConfig,
-      optionalConfig,
-      missingConfig,
-      configPresent,
-      configured: configPresent && oauthGrantReady,
-      oauthGrantRequired: oauth,
-      oauthGrantReady,
-      target,
-    };
-  });
-  return {
-    version: "clawrouter.provider-smoke-plan.v1",
-    providerCount: providerPlans.length,
-    targetCount: providerPlans.filter((plan) => plan.target).length,
-    configuredCount: providerPlans.filter((plan) => plan.configured).length,
-    providers: providerPlans,
-  };
-}
 
 export async function runLiveProviderSmokes({
   baseUrl,
@@ -72,6 +34,12 @@ export async function runLiveProviderSmokes({
     }
     if (result.status !== "verified") {
       failures.push(`${provider.id} smoke failed: ${result.error}`);
+    } else {
+      try {
+        result.usageEventId = await waitForSmokeUsage({ baseUrl, smokeKey, result });
+      } catch (error) {
+        failures.push(`${provider.id} usage visibility failed: ${errorMessage(error)}`);
+      }
     }
   }
   if (failures.length > 0) {
@@ -80,26 +48,69 @@ export async function runLiveProviderSmokes({
   return results;
 }
 
-export function selectLiveProviderPlans(plan, liveProviders) {
-  const allowAll = liveProviders.includes("all");
-  if (!allowAll) {
-    const planById = new Map(plan.providers.map((provider) => [provider.id, provider]));
-    const invalid = liveProviders.filter((id) => !planById.get(id)?.target);
-    if (invalid.length > 0) {
-      throw new Error(`unknown or unsmokable live providers: ${invalid.join(",")}`);
+export async function waitForSmokeUsage({
+  baseUrl,
+  smokeKey,
+  result,
+  // Queue delivery has stalled ~60 s in production; readiness (180 s), the POST
+  // (10 s) and this wait stay inside the train's five-minute smoke command limit.
+  timeoutMs = 100_000,
+  fetchImpl = fetch,
+  sleepImpl = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+  nowImpl = Date.now,
+}) {
+  const deadline = nowImpl() + timeoutMs;
+  let lastFailure = "matching event is not visible";
+  while (nowImpl() < deadline) {
+    let terminalError;
+    let readFailure = "usage request failed or exceeded its deadline";
+    try {
+      const events = await runWithinDeadline(async (signal) => {
+        const response = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/v1/usage`, {
+          headers: { authorization: `Bearer ${smokeKey}`, accept: "application/json" },
+          redirect: "manual",
+          signal,
+        });
+        if (!response.ok) {
+          readFailure = `GET /v1/usage returned HTTP ${response.status}`;
+          if (![408, 429].includes(response.status) && response.status < 500) terminalError = new Error(readFailure);
+          // Record terminal protocol/auth failures before disposal: a stalled
+          // cancellation must not turn them into a retryable transport failure.
+          await response.body?.cancel();
+          throw new Error(readFailure);
+        }
+        if (response.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") {
+          terminalError = new Error("GET /v1/usage returned non-JSON content");
+          await response.body?.cancel();
+          throw terminalError;
+        }
+        let payload;
+        try { payload = await response.json(); }
+        catch (error) {
+          if (error instanceof SyntaxError) terminalError = new Error("GET /v1/usage returned invalid JSON");
+          throw error;
+        }
+        if (!Array.isArray(payload?.usage?.events) || payload.usage.events.some((event) => !event || typeof event !== "object" || Array.isArray(event))) {
+          throw terminalError = new Error("GET /v1/usage returned an invalid usage.events envelope");
+        }
+        return payload.usage.events;
+      }, Math.max(1, Math.min(10_000, deadline - nowImpl())), "usage request deadline elapsed");
+      const event = events.find((entry) => entry.request_id === result.requestId);
+      if (event) {
+        if (typeof event.id !== "string" || !event.id.trim() || !Number.isFinite(event.occurred_at_ms) || event.provider !== result.provider || event.status !== "success" || event.status_code !== result.statusCode) {
+          throw terminalError = new Error(`usage event for ${result.requestId} does not match the successful provider response`);
+        }
+        return event.id;
+      }
+      lastFailure = "matching event is not visible";
+    } catch {
+      if (terminalError) throw terminalError;
+      lastFailure = readFailure;
     }
+    const remainingMs = deadline - nowImpl();
+    if (remainingMs > 0) await sleepImpl(Math.min(2_000, remainingMs));
   }
-  return plan.providers.filter((provider) => {
-    return provider.target && (allowAll || liveProviders.includes(provider.id));
-  });
-}
-
-export function liveProviderList(env = process.env) {
-  const providers = splitCsv(env.CLAWROUTER_SMOKE_LIVE_PROVIDERS);
-  if (env.CLAWROUTER_SMOKE_OPENAI === "1" && !providers.includes("openai")) {
-    providers.push("openai");
-  }
-  return providers;
+  throw new Error(`usage visibility unconfirmed for ${result.requestId} after ${timeoutMs}ms: ${lastFailure}; the latest 100 caller-visible events may have evicted it. Inspect usage and queue delivery; do not repeat the provider POST`);
 }
 
 export async function inspectSmokeKeyProviderAccess({
@@ -171,446 +182,18 @@ export function compileProviderSnapshot() {
     .filter((file) => file.endsWith(".provider.yaml"))
     .sort()
     .map((file) => `providers/${file}`);
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/compile-providers.mjs", ...providerFiles],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "inherit"],
-    },
-  );
-  if (result.status !== 0) {
-    throw new Error("provider snapshot compile failed");
-  }
-  return JSON.parse(result.stdout);
-}
-
-export function summarizePlan(plan) {
-  const lines = [
-    `providers=${plan.providerCount} smokeTargets=${plan.targetCount} configured=${plan.configuredCount}`,
-  ];
-  for (const provider of plan.providers) {
-    const config = provider.configPresent
-      ? "configured"
-      : `missing=${provider.missingConfig.join(",")}`;
-    const target = provider.target
-      ? `${provider.target.kind}:${provider.target.route}`
-      : "no-target";
-    const grant = provider.oauthGrantRequired
-      ? provider.oauthGrantReady
-        ? " oauth=ready"
-        : " oauth=grant-required"
-      : "";
-    lines.push(`${provider.id}\t${provider.class}\t${config}${grant}\t${target}`);
-  }
-  return lines.join("\n");
-}
-
-function smokeTarget(provider, env) {
-  const chatEndpointId = provider.capabilities.find((capability) => capability.id === "llm.chat")?.endpoint;
-  const chatEndpoint = provider.endpoints.find((endpoint) => endpoint.id === chatEndpointId);
-  if (chatEndpoint && supportsOpenAiCompatibleProxy(provider)) {
-    const model = smokeModel(provider, chatEndpoint, env);
-    if (model) {
-      return {
-        kind: "openai_chat",
-        route: "/v1/chat/completions",
-        method: "POST",
-        model,
-        body: {
-          model,
-          messages: [{ role: "user", content: "reply with ok" }],
-          max_tokens: 16,
-        },
-      };
-    }
-  }
-
-  const endpoint = smokeEndpoint(provider);
-  if (!endpoint || !supportsManifestProxy(provider, endpoint)) {
-    return null;
-  }
-  const model = manifestSmokeModelOverride(provider, endpoint, env)
-    ?? modelsForEndpoint(provider, endpoint).find((model) => !model.upstream.includes("${"))?.upstream;
-  if (provider.service_kind === "model_provider" && !model) return null;
-  const pathParams = Object.fromEntries(
-    endpoint.path_params.map((param) => [param, samplePathParam(param, model, env)]),
-  );
-  const upstreamMethod = smokeMethod(endpoint);
-  return {
-    kind: "manifest_proxy",
-    route: `/v1/proxy/${provider.id}/${endpoint.id}`,
-    method: "POST",
-    upstreamMethod,
-    endpoint: endpoint.id,
-    envelope: {
-      method: upstreamMethod,
-      pathParams,
-      query: {},
-      body: sampleBody(provider, endpoint, upstreamMethod, model, env),
-    },
-  };
-}
-
-function modelsForEndpoint(provider, endpoint) {
-  const capabilities = provider.capabilities.filter((capability) => capability.endpoint === endpoint.id);
-  return provider.models.filter((model) => capabilities.some((capability) => model.capabilities.includes(capability.id)));
-}
-
-function smokeModel(provider, endpoint, env) {
-  const override = providerSmokeModelOverride(provider, endpoint, env);
-  if (override) {
-    return override;
-  }
-  const models = modelsForEndpoint(provider, endpoint);
-  return (models.find((model) => !model.upstream.includes("${")) ?? models[0])?.id ?? null;
-}
-
-function providerSmokeModelOverride(provider, endpoint, env) {
-  const providerName = envName(provider.id);
-  const override =
-    env[`CLAWROUTER_SMOKE_MODEL_${providerName}`] ||
-    env[`${providerName}_SMOKE_MODEL`] ||
-    null;
-  if (!override) {
-    return null;
-  }
-  const catalogModel = provider.models.find((model) => model.id === override);
-  if (catalogModel) {
-    if (!modelsForEndpoint(provider, endpoint).includes(catalogModel)) {
-      throw new Error(`smoke model override for ${provider.id} must support ${endpoint.id}`);
-    }
-    return override;
-  }
-  const matchesPrefix = (provider.routing.modelPrefixes ?? []).some((prefix) => {
-    return override.startsWith(prefix) && override.length > prefix.length;
-  });
-  if (!matchesPrefix) {
-    throw new Error(
-      `smoke model override for ${provider.id} must match a catalog id or provider model prefix`,
-    );
-  }
-  return override;
-}
-
-function smokeEndpoint(provider) {
-  const preferredId = preferredEndpointId(provider.id);
-  if (preferredId) {
-    const preferred = provider.endpoints.find((endpoint) => endpoint.id === preferredId);
-    if (preferred) {
-      return preferred;
-    }
-  }
-  const nonStreaming = provider.endpoints.filter((endpoint) => !endpoint.streaming);
-  return (
-    nonStreaming.find((endpoint) => endpoint.method === "GET") ??
-    nonStreaming.find((endpoint) => endpoint.methods.includes("GET")) ??
-    nonStreaming[0] ??
-    provider.endpoints[0] ??
-    null
-  );
-}
-
-function smokeMethod(endpoint) {
-  return endpoint.methods.includes("GET") ? "GET" : endpoint.method ?? "POST";
-}
-
-function preferredEndpointId(providerId) {
-  return {
-    "aws-bedrock": "invoke_model",
-    cohere: "chat",
-    tavily: "search",
-  }[providerId];
-}
-
-function supportsOpenAiCompatibleProxy(provider) {
-  return (
-    provider.class === "openai_compatible" &&
-    provider.adapter.request === "openai" &&
-    provider.adapter.response === "openai" &&
-    templatesSupportedByConfig(provider, provider.base_urls.default ?? "") &&
-    provider.endpoints.every(openAiEndpointPathSupported) &&
-    Object.values(provider.adapter.injectQuery ?? {}).every((value) =>
-      templatesSupportedByConfig(provider, value),
-    ) &&
-    Object.values(provider.adapter.injectHeaders ?? {}).every((value) =>
-      templatesSupportedByConfig(provider, value),
-    ) &&
-    supportsEdgeAuth(provider)
-  );
-}
-
-function supportsManifestProxy(provider, endpoint) {
-  return (
-    templatesSupportedByConfig(provider, provider.base_urls.default ?? "") &&
-    Object.values(provider.adapter.injectHeaders ?? {}).every((value) =>
-      templatesSupportedByConfig(provider, value),
-    ) &&
-    Object.values(provider.adapter.injectQuery ?? {}).every((value) =>
-      templatesSupportedByConfig(provider, value),
-    ) &&
-    Object.values(endpoint.headers ?? {}).every((value) =>
-      templatesSupportedByConfig(provider, value),
-    ) &&
-    Object.values(endpoint.query ?? {}).every((value) =>
-      templatesSupportedByConfig(provider, value),
-    ) &&
-    supportsEdgeAuth(provider)
-  );
-}
-
-function supportsEdgeAuth(provider) {
-  return provider.auth.schemes.every((scheme) => {
-    if (scheme.type === "bearer") {
-      return scheme.required === false || providerHasSecretCandidate(provider, scheme.secretKind);
-    }
-    if (["api_key", "query_api_key"].includes(scheme.type)) {
-      return providerHasSecretCandidate(provider, scheme.secretKind);
-    }
-    if (scheme.type === "cloudflare_binding") {
-      return true;
-    }
-    if (scheme.type === "oauth") {
-      return Boolean(scheme.provider || scheme.tokenRef);
-    }
-    if (scheme.type === "sig_v4") {
-      const regionParam = scheme.regionParam ?? "region";
-      return (
-        Boolean(scheme.service) &&
-        templateHasConfigKey(provider, "access_key_id") &&
-        templateHasConfigKey(provider, "secret_access_key") &&
-        templateHasConfigKey(provider, regionParam)
-      );
-    }
-    return false;
-  });
-}
-
-function optionalAuthConfig(provider, key) {
-  return (provider.auth?.schemes ?? []).some((scheme) => {
-    return (
-      scheme.type === "bearer" &&
-      scheme.required === false &&
-      secretBindingCandidates(provider, scheme.secretKind).includes(key)
-    );
-  });
-}
-
-function templatesSupportedByConfig(provider, value) {
-  return templatePlaceholders(value).every((name) => templateHasConfigKey(provider, name));
-}
-
-function templateHasConfigKey(provider, name) {
-  return templateBindingCandidates(provider, name).some((candidate) => {
-    return provider.config_keys.includes(candidate);
-  });
-}
-
-function templateBindingCandidates(provider, name) {
-  const normalizedName = normalizeBindingSegment(name);
-  const candidates = [];
-  pushDeclaredTemplateCandidate(provider, candidates, normalizedName);
-  pushDeclaredTemplateCandidate(
-    provider,
-    candidates,
-    `${normalizeBindingSegment(provider.id)}_${normalizedName}`,
-  );
-  pushDeclaredTemplateCandidate(
-    provider,
-    candidates,
-    `${normalizeBindingSegment(provider.service_platform)}_${normalizedName}`,
-  );
-  for (const key of provider.config_keys) {
-    if (key === normalizedName || key.endsWith(`_${normalizedName}`)) {
-      pushUnique(candidates, key);
-    }
-  }
-  return candidates;
-}
-
-function pushDeclaredTemplateCandidate(provider, candidates, candidate) {
-  if (provider.config_keys.includes(candidate)) {
-    pushUnique(candidates, candidate);
-  }
-}
-
-function providerHasSecretCandidate(provider, secretKind) {
-  return secretBindingCandidates(provider, secretKind).some((candidate) => {
-    return provider.config_keys.includes(candidate);
-  });
-}
-
-function secretBindingCandidates(provider, secretKind) {
-  const candidates = [];
-  for (const key of provider.config_keys) {
-    if (configKeyMatchesSecretKind(key, secretKind)) {
-      candidates.push(key);
-    }
-  }
-  candidates.push(secretBindingName(provider.id, secretKind));
-  return [...new Set(candidates)].sort();
-}
-
-function configKeyMatchesSecretKind(key, secretKind) {
-  if (secretKind === "api_token") {
-    return key.endsWith("_API_TOKEN") || key.endsWith("_TOKEN");
-  }
-  if (secretKind === "api_key") {
-    return key.endsWith("_API_KEY") || key.endsWith("_API_TOKEN");
-  }
-  return key.toUpperCase().endsWith(secretKind.toUpperCase());
-}
-
-function secretBindingName(providerId, secretKind) {
-  return `${normalizeBindingSegment(providerId)}_${normalizeBindingSegment(secretKind)}`;
-}
-
-function openAiEndpointPathSupported(endpoint) {
-  const placeholders = templatePlaceholders(endpoint.path);
-  return (
-    placeholders.length === 0 ||
-    (endpoint.path_params.length === 1 &&
-      placeholders.every((name) => endpoint.path_params.includes(name)))
-  );
-}
-
-function templatePlaceholders(value) {
-  return [...String(value ?? "").matchAll(/\$\{([^}]+)\}/g)].map((match) => match[1]);
-}
-
-function normalizeBindingSegment(value) {
-  return String(value)
-    .replace(/[^a-zA-Z0-9]/g, "_")
-    .toUpperCase();
-}
-
-function pushUnique(values, value) {
-  if (!values.includes(value)) {
-    values.push(value);
-  }
-}
-
-function samplePathParam(param, model, env) {
-  if (param === "path") {
-    return "status";
-  }
-  if (param === "method") {
-    return "status";
-  }
-  if (param === "model") {
-    return model;
-  }
-  if (param === "account") {
-    return env.CLOUDFLARE_ACCOUNT_ID ?? "account";
-  }
-  if (param === "gateway") {
-    return env.CLOUDFLARE_AI_GATEWAY_ID ?? "gateway";
-  }
-  if (param.endsWith("_id")) {
-    return "smoke";
-  }
-  return "smoke";
-}
-
-function sampleBody(provider, endpoint, method, model, env) {
-  if (!methodAllowsBody(method)) {
-    return {};
-  }
-  if (
-    endpoint.request_format.includes("graphql") ||
-    provider.adapter.request.includes("graphql")
-  ) {
-    return { query: "{ viewer { id } }" };
-  }
-  if (provider.id === "tavily" && endpoint.id === "search") {
-    return { query: "OpenClaw", max_results: 1 };
-  }
-  if (provider.id === "firecrawl" && endpoint.id === "scrape") {
-    return { url: "https://example.com", formats: ["markdown"] };
-  }
-  if (provider.id === "google-gemini") {
-    return { contents: [{ parts: [{ text: "reply with ok" }] }] };
-  }
-  if (provider.id === "anthropic") {
-    const body = {
-      model,
-      messages: [{ role: "user", content: "reply with ok" }],
-    };
-    if (endpoint.id === "messages") {
-      body.max_tokens = 16;
-    }
-    return body;
-  }
-  if (provider.id === "cohere") {
-    return { model, messages: [{ role: "user", content: "reply with ok" }] };
-  }
-  if (provider.id === "aws-bedrock") {
-    const override = env.CLAWROUTER_SMOKE_BODY_AWS_BEDROCK;
-    if (override) {
-      let parsed;
-      try {
-        parsed = JSON.parse(override);
-      } catch {
-        throw new Error("CLAWROUTER_SMOKE_BODY_AWS_BEDROCK must contain valid JSON");
-      }
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("CLAWROUTER_SMOKE_BODY_AWS_BEDROCK must contain a JSON object");
-      }
-      return parsed;
-    }
-    return {
-      schemaVersion: "messages-v1",
-      messages: [{ role: "user", content: [{ text: "reply with ok" }] }],
-      inferenceConfig: { maxTokens: 16 },
-    };
-  }
-  if (provider.id === "cloudflare-ai-gateway") {
-    const step = {
-      provider: "openai",
-      endpoint: "chat/completions",
-      query: {
-        model: env.CLOUDFLARE_AI_GATEWAY_SMOKE_MODEL ?? "openai/gpt-4.1-mini",
-        messages: [{ role: "user", content: "reply with ok" }],
-        max_tokens: 8,
-      },
-    };
-    if (env.CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY) {
-      step.headers = {
-        Authorization: `Bearer ${env.CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      };
-    }
-    return [step];
-  }
-  return {};
-}
-
-function manifestSmokeModelOverride(provider, endpoint, env) {
-  const raw = env[`CLAWROUTER_SMOKE_MODEL_${envName(provider.id)}`];
-  const value = typeof raw === "string" ? raw.trim() : "";
-  if (!value) return null;
-  if (value.length > 2048 || /[\u0000-\u001f\u007f]/.test(value)) {
-    throw new Error(`smoke model override for ${provider.id} is invalid`);
-  }
-  const catalog = provider.models.find((model) => model.id === value || model.upstream === value);
-  if (catalog) {
-    if (!modelsForEndpoint(provider, endpoint).includes(catalog)) {
-      throw new Error(`smoke model override for ${provider.id} must support ${endpoint.id}`);
-    }
-    if (!catalog.upstream.includes("${")) return catalog.upstream;
-  }
-  const prefix = (provider.routing.modelPrefixes ?? []).find((candidate) => value.startsWith(candidate));
-  return prefix ? value.slice(prefix.length) : value;
-}
-
-function methodAllowsBody(method) {
-  return !["GET", "HEAD"].includes((method ?? "POST").toUpperCase());
+  return compileManifests(providerFiles.map(path => parse(readFileSync(path, "utf8"))));
 }
 
 export async function runProviderTarget(baseUrl, smokeKey, provider) {
   const target = provider.target;
   const startedAt = Date.now();
   const checkedAt = new Date(startedAt).toISOString();
+  const requestId = `smoke_${randomUUID()}`;
+  if (target.unresolved) return {
+    provider: provider.id, requestId, status: "failed", checkedAt, latencyMs: 0,
+    statusCode: null, error: target.unresolved, providerAttempted: false,
+  };
   let response;
   try {
     response = await fetch(`${baseUrl.replace(/\/$/, "")}${target.route}`, {
@@ -618,13 +201,14 @@ export async function runProviderTarget(baseUrl, smokeKey, provider) {
       headers: {
         authorization: `Bearer ${smokeKey}`,
         "content-type": "application/json",
-        "x-request-id": `smoke_${provider.id}_${startedAt}`,
+        "x-request-id": requestId,
       },
       body: JSON.stringify(target.kind === "openai_chat" ? target.body : target.envelope),
     });
   } catch {
     return {
       provider: provider.id,
+      requestId,
       status: "failed",
       checkedAt,
       latencyMs: Date.now() - startedAt,
@@ -640,6 +224,7 @@ export async function runProviderTarget(baseUrl, smokeKey, provider) {
   } catch {
     return {
       provider: provider.id,
+      requestId,
       status: "failed",
       checkedAt,
       latencyMs: Date.now() - startedAt,
@@ -650,6 +235,7 @@ export async function runProviderTarget(baseUrl, smokeKey, provider) {
   }
   return {
     provider: provider.id,
+    requestId,
     status: response.ok && providerAttempted ? "verified" : "failed",
     checkedAt,
     latencyMs: Date.now() - startedAt,
@@ -661,17 +247,6 @@ export async function runProviderTarget(baseUrl, smokeKey, provider) {
         : `gateway HTTP ${response.status} before upstream response`,
     providerAttempted,
   };
-}
-
-function splitCsv(value) {
-  return (value ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function envName(value) {
-  return value.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase();
 }
 
 function errorMessage(error) {

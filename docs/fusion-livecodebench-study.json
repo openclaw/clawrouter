@@ -1,0 +1,1274 @@
+{
+  "version": 1,
+  "study": "adapted-livecodebench-always-review-20261124",
+  "claim": "development lead; not qualified for production",
+  "dataset": {
+    "repository": "livecodebench/code_generation_lite",
+    "revision": "0fe84c3912ea0c4d4a78037083943e8f0c4dd505",
+    "file": "test6.jsonl",
+    "sha256": "bb4c364f71921c4495a6ad15abe1a927350b720009f4933e2e71f8af0f6fd1f5"
+  },
+  "provenance": {
+    "sourceCommit": "de00f36",
+    "protocolSha256": "9cf3528b000fab39d6f017a9ce28e2a902af4fc11eb9a03b099b2ea7545f65a7",
+    "cohortProtocolSha256": "7d4b46ed1c27eebbc3da541706b754b51d2abc4e460f4c61ca3faea15ecd9ce9",
+    "qualificationSha256": "32d5c8d775c6a6cf8342bc6ac06ab9faec7211bf7e1d6b0a1b480ff1f44286d4",
+    "terminalAuditSha256": "e6c41731ff2b95feecbd88adeae67ca945e7cbaa2ec11c8c28aaf3ac8ba6248b"
+  },
+  "models": {
+    "weak": "openai/gpt-6-luna",
+    "strong": "openai/gpt-6.2-sol"
+  },
+  "arms": {
+    "weak": {
+      "passed": 9,
+      "costMicros": 16683
+    },
+    "strong": {
+      "passed": 12,
+      "costMicros": 111332
+    },
+    "fusion": {
+      "passed": 12,
+      "costMicros": 73766
+    },
+    "self-review": {
+      "passed": 11,
+      "costMicros": 28784
+    }
+  },
+  "lostStrongSuccesses": 0,
+  "uniquePaidCalls": 54,
+  "uniquePaidCostMicros": 197199,
+  "qualifiedFusionGain": false,
+  "tasks": [
+    {
+      "id": "lcb-9be0cdac3e28c828",
+      "identity": "atcoder:arc194_a",
+      "title": "Operations on a Stack",
+      "difficulty": "medium",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 1418,
+          "codeSha256": "7a6dbd1debd066992bbae79502906d881291daa80e0ad2b09134296fe23aff67",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 3870,
+          "codeSha256": "fca9a4614a53e0f6f5490a3eef4ab4bd6bd5a3cebcb10d537bd5b550e83eb58c",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 3836,
+          "codeSha256": "7a6dbd1debd066992bbae79502906d881291daa80e0ad2b09134296fe23aff67",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 2221,
+          "codeSha256": "7a6dbd1debd066992bbae79502906d881291daa80e0ad2b09134296fe23aff67",
+          "publicFallback": false,
+          "publicPassed": true
+        }
+      }
+    },
+    {
+      "id": "lcb-d987bef216593ea6",
+      "identity": "atcoder:abc393_d",
+      "title": "Swap to Gather",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 160,
+          "codeSha256": "5489f1142d9e8a79dba0ded6e27741d753207e6d106df506a67ae946f61fc766",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 2582,
+          "codeSha256": "e953a04d3c9c35b2692390ca9c85f59f655b8152e21cedb46ed1dce0330e41d7",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 1862,
+          "codeSha256": "5489f1142d9e8a79dba0ded6e27741d753207e6d106df506a67ae946f61fc766",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 321,
+          "codeSha256": "5489f1142d9e8a79dba0ded6e27741d753207e6d106df506a67ae946f61fc766",
+          "publicFallback": false,
+          "publicPassed": true
+        }
+      }
+    },
+    {
+      "id": "lcb-ff13dcbfb071427d",
+      "identity": "atcoder:abc396_d",
+      "title": "Minimum XOR Path",
+      "difficulty": "medium",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 312,
+          "codeSha256": "46b6189bef59df71b33fe45dc7b33f205783a03d742fe83d0686e0d6f0c6ac54",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 5404,
+          "codeSha256": "2186cbb63c59935521e6f962184a9658bd5556d19c44588607dedcbbaa4da8f1",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 3901,
+          "codeSha256": "46b6189bef59df71b33fe45dc7b33f205783a03d742fe83d0686e0d6f0c6ac54",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 606,
+          "codeSha256": "46b6189bef59df71b33fe45dc7b33f205783a03d742fe83d0686e0d6f0c6ac54",
+          "publicFallback": false,
+          "publicPassed": true
+        }
+      }
+    },
+    {
+      "id": "lcb-36176784f8231f05",
+      "identity": "atcoder:abc396_g",
+      "title": "Flip Row or Col",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 740,
+          "codeSha256": "b57270ef459f8c6a80ce791b857d3e5b6afcb28824184265cba6ed8963cbcbbd",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 6164,
+          "codeSha256": "0926f6f4f8a748aee54feb0075823065531fec962bb1b0eebfc18b8718178d95",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 3686,
+          "codeSha256": "b57270ef459f8c6a80ce791b857d3e5b6afcb28824184265cba6ed8963cbcbbd",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 1145,
+          "codeSha256": "b57270ef459f8c6a80ce791b857d3e5b6afcb28824184265cba6ed8963cbcbbd",
+          "publicFallback": false,
+          "publicPassed": true
+        }
+      }
+    },
+    {
+      "id": "lcb-c40a21d2958f6f90",
+      "identity": "atcoder:abc390_c",
+      "title": "Paint to make a rectangle",
+      "difficulty": "medium",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 287,
+          "codeSha256": "73dbd633819dc560f40fb19ae203c775e2c19d25e1f91030ae4da81c42097341",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 3886,
+          "codeSha256": "1dfabbb71a647f05a224b6d4b04137b8ea0d04056e435d4d83ddb94157252af3",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 3191,
+          "codeSha256": "73dbd633819dc560f40fb19ae203c775e2c19d25e1f91030ae4da81c42097341",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 513,
+          "codeSha256": "73dbd633819dc560f40fb19ae203c775e2c19d25e1f91030ae4da81c42097341",
+          "publicFallback": false,
+          "publicPassed": true
+        }
+      }
+    },
+    {
+      "id": "lcb-4e4d0ee0e18e3660",
+      "identity": "atcoder:abc398_f",
+      "title": "ABCBA",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": false,
+          "costMicros": 408,
+          "codeSha256": "39733c6ebdd1cd3ac118ed7ab7c29b10da1df0fd516de6084728ef73cec03263",
+          "publicFallback": false,
+          "publicPassed": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 3058,
+          "codeSha256": "3dce64e013320e0d453e3db5976ae5f0dffc982bbfdf2bd57e682f58b88d6716",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 3399,
+          "codeSha256": "c5250b6f20d27b609f9e65886138c943274d373c54b823ba6c7827fb4b245312",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 1083,
+          "codeSha256": "b99d12ee2d91de111bdc8357ef574adf85681c0d7bc8bde2b623fc14da97c362",
+          "publicFallback": false,
+          "publicPassed": true
+        }
+      }
+    },
+    {
+      "id": "lcb-489d6e728f3a722e",
+      "identity": "atcoder:abc398_c",
+      "title": "Uniqueness",
+      "difficulty": "medium",
+      "publicTests": 2,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 146,
+          "codeSha256": "d96c3c4ea1a8b87b8c074669237eac52b7676de626aff318d2f32cfbd8e5042c",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 2608,
+          "codeSha256": "e8ce0b0c9e53cbd0ccb9f2bcedd534e8a21257eeee49ae54a0519dd707e0b557",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 1768,
+          "codeSha256": "d96c3c4ea1a8b87b8c074669237eac52b7676de626aff318d2f32cfbd8e5042c",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 256,
+          "codeSha256": "d96c3c4ea1a8b87b8c074669237eac52b7676de626aff318d2f32cfbd8e5042c",
+          "publicFallback": false,
+          "publicPassed": true
+        }
+      }
+    },
+    {
+      "id": "lcb-6e051497b7d453bc",
+      "identity": "atcoder:abc397_g",
+      "title": "Maximize Distance",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 2516,
+          "codeSha256": "97d8b1cc17d2830c1b062f4482233f021fe55188159dca3bbed30897a3343ecf",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 11692,
+          "codeSha256": "4a6c8d5c585f27bb58f83ab4c24d3ea0c4f49bb38ff2e8d69a6f7a39bf3658d8",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 7082,
+          "codeSha256": "97d8b1cc17d2830c1b062f4482233f021fe55188159dca3bbed30897a3343ecf",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 3394,
+          "codeSha256": "97d8b1cc17d2830c1b062f4482233f021fe55188159dca3bbed30897a3343ecf",
+          "publicFallback": false,
+          "publicPassed": true
+        }
+      }
+    },
+    {
+      "id": "lcb-d17a99075d24ff22",
+      "identity": "atcoder:abc400_d",
+      "title": "Takahashi the Wall Breaker",
+      "difficulty": "medium",
+      "publicTests": 4,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 2559,
+          "codeSha256": "95acfa49d0b6423ca59e642c6b4e25f4bebd8789e6d962c7504f31694e451af2",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 13849,
+          "codeSha256": "01df63843cf0741e6a3c01a110cb4e5893e8d8553a51b5b7f48de2499d270a7a",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 9710,
+          "codeSha256": "95acfa49d0b6423ca59e642c6b4e25f4bebd8789e6d962c7504f31694e451af2",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 3880,
+          "codeSha256": "95acfa49d0b6423ca59e642c6b4e25f4bebd8789e6d962c7504f31694e451af2",
+          "publicFallback": false,
+          "publicPassed": true
+        }
+      }
+    },
+    {
+      "id": "lcb-e78d0fe16bacac32",
+      "identity": "atcoder:abc394_g",
+      "title": "Dense Buildings",
+      "difficulty": "hard",
+      "publicTests": 1,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 3537,
+          "codeSha256": "0befc446b0d0124089a5cb8b10a54551c415760a612302d04d8de99912fd2fea",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 18831,
+          "codeSha256": "752785fbb247bf4cffd3b7e0a7f2028f4706a10413e06017cf1cb6542b280e35",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 11983,
+          "codeSha256": "0befc446b0d0124089a5cb8b10a54551c415760a612302d04d8de99912fd2fea",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 4608,
+          "codeSha256": "0befc446b0d0124089a5cb8b10a54551c415760a612302d04d8de99912fd2fea",
+          "publicFallback": false,
+          "publicPassed": true
+        }
+      }
+    },
+    {
+      "id": "lcb-1f80f87ae830fdf3",
+      "identity": "atcoder:abc387_c",
+      "title": "Snake Numbers",
+      "difficulty": "medium",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": false,
+          "costMicros": 424,
+          "codeSha256": "cc8a4e4f7b3fdede81bfb7e1a4ff112ebae2ea0af352d624e623f8a11abe74a0",
+          "publicFallback": false,
+          "publicPassed": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 3126,
+          "codeSha256": "bbb37f420947b9763daa5efae4282b7eab2955f734967fc69c8f3409b497be8a",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 4031,
+          "codeSha256": "456e41e501190b496e5c934abb3b9d574b7ff978bd82a875941286eaf9374297",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 1130,
+          "codeSha256": "fd6367a5db9f05e875cd1957b18827cdfbfef68875c0c37fa03bd6c700ee53ec",
+          "publicFallback": false,
+          "publicPassed": true
+        }
+      }
+    },
+    {
+      "id": "lcb-d7b6df0e06b28efc",
+      "identity": "atcoder:arc196_c",
+      "title": "Strongly Connected",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": false,
+          "costMicros": 4176,
+          "codeSha256": null,
+          "publicFallback": false,
+          "publicPassed": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 36262,
+          "codeSha256": "942fb8dc54660fd5c4d1f821f8952420cacdde3e6dd0722085e803e40df449c1",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 19317,
+          "codeSha256": "f3ea9253d2fd6ca4438aff0c824c5873af49a394a49d7435c0d1be936b8a75ac",
+          "publicFallback": false,
+          "publicPassed": true
+        },
+        "self-review": {
+          "passed": false,
+          "costMicros": 9627,
+          "codeSha256": null,
+          "publicFallback": false,
+          "publicPassed": false
+        }
+      }
+    }
+  ],
+  "confirmation": {
+    "date": "2026-11-24",
+    "claim": "cost advantage not confirmed; cohort has a known invalid input fixture",
+    "sourceCommit": "8df158b",
+    "cohortProtocolSha256": "415e41f0f56251bc2198fced320a2495dd78f1be3510bfa2a0e1e510875402c3",
+    "trialProtocolSha256": "115c5d523582fd5469be794d4b632f15cccced0349825dc11eee30a54ca2e74a",
+    "terminalAuditSha256": "912f83455398618965536ca6b4f2ca45849cc50910b5eeb145491b071401e663",
+    "arms": {
+      "weak": {
+        "passed": 8,
+        "costMicros": 19190
+      },
+      "strong": {
+        "passed": 9,
+        "costMicros": 75106
+      },
+      "fusion": {
+        "passed": 10,
+        "costMicros": 76897
+      },
+      "self-review": {
+        "passed": 9,
+        "costMicros": 32345
+      }
+    },
+    "lostStrongSuccesses": 0,
+    "developmentLead": false,
+    "qualifiedFusionGain": false,
+    "uniquePaidCalls": 52,
+    "uniquePaidCostMicros": 165158,
+    "publicTests": 36,
+    "privateTests": 192,
+    "semanticQualification": {
+      "qualified": false,
+      "invalidTask": "lcb-0efeb39688c9f7e6",
+      "identity": "atcoder:abc392_f",
+      "reason": "One private input violates the stated insertion-position constraint 1 <= P_i <= i; all four arms fail this case. Original rows remain included.",
+      "resourceFailureTask": "lcb-8c6655d5976c7227",
+      "resourceDiagnostic": "Weak direct reproduces two MemoryErrors under the unchanged sandbox memory limit. No limits or scores changed."
+    },
+    "tasks": [
+      {
+        "id": "lcb-be14234239be4091",
+        "identity": "atcoder:abc394_d",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 156,
+            "publicPassed": true
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 2554,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 2020,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 325,
+            "publicPassed": true
+          }
+        }
+      },
+      {
+        "id": "lcb-bfac4b1c5fa9c9eb",
+        "identity": "atcoder:abc391_g",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 1025,
+            "publicPassed": true
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 4920,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 4206,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 1408,
+            "publicPassed": true
+          }
+        }
+      },
+      {
+        "id": "lcb-cd818803e439934b",
+        "identity": "atcoder:abc389_d",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 458,
+            "publicPassed": true
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 3824,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 2006,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 662,
+            "publicPassed": true
+          }
+        }
+      },
+      {
+        "id": "lcb-93def410927273a3",
+        "identity": "atcoder:arc194_b",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 4054,
+            "publicPassed": true
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 4926,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 8114,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 6188,
+            "publicPassed": true
+          }
+        }
+      },
+      {
+        "id": "lcb-266fe38d19f1513e",
+        "identity": "atcoder:abc398_b",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 130,
+            "publicPassed": true
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 1972,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 1718,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 236,
+            "publicPassed": true
+          }
+        }
+      },
+      {
+        "id": "lcb-af077693d2fbd602",
+        "identity": "atcoder:arc192_b",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": true,
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "costMicros": 4183,
+            "publicPassed": false
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 11264,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 17400,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": false,
+            "costMicros": 6320,
+            "publicPassed": false
+          }
+        }
+      },
+      {
+        "id": "lcb-2b1d4243ad68d535",
+        "identity": "atcoder:arc191_a",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 2047,
+            "publicPassed": true
+          },
+          "strong": {
+            "passed": false,
+            "costMicros": 6222,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 12240,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 4181,
+            "publicPassed": true
+          }
+        }
+      },
+      {
+        "id": "lcb-44f5c17dc47c4915",
+        "identity": "atcoder:abc399_f",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 341,
+            "publicPassed": true
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 5416,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 2503,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 516,
+            "publicPassed": true
+          }
+        }
+      },
+      {
+        "id": "lcb-8c6655d5976c7227",
+        "identity": "atcoder:abc390_d",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "costMicros": 1425,
+            "publicPassed": true
+          },
+          "strong": {
+            "passed": false,
+            "costMicros": 10238,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": false,
+            "costMicros": 6561,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": false,
+            "costMicros": 2571,
+            "publicPassed": true
+          }
+        }
+      },
+      {
+        "id": "lcb-8dd19a6267cf5c17",
+        "identity": "atcoder:abc394_f",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 2029,
+            "publicPassed": true
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 7370,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 6688,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 2956,
+            "publicPassed": true
+          }
+        }
+      },
+      {
+        "id": "lcb-4e05613bca9ac884",
+        "identity": "atcoder:arc192_a",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": true,
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "costMicros": 2917,
+            "publicPassed": false
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 10706,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 11030,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 6267,
+            "publicPassed": true
+          }
+        }
+      },
+      {
+        "id": "lcb-0efeb39688c9f7e6",
+        "identity": "atcoder:abc392_f",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "costMicros": 425,
+            "publicPassed": true
+          },
+          "strong": {
+            "passed": false,
+            "costMicros": 5694,
+            "publicPassed": true
+          },
+          "fusion": {
+            "passed": false,
+            "costMicros": 2411,
+            "publicPassed": true
+          },
+          "self-review": {
+            "passed": false,
+            "costMicros": 715,
+            "publicPassed": true
+          }
+        }
+      }
+    ]
+  },
+  "validatedFollowup": {
+    "sourceCommit": "72c3a48",
+    "claim": "fixed review policies do not preserve strong quality",
+    "cohortProtocolSha256": "598666cd239dd7eda425ee580c039198db553720a6cc3aa682cb217af7f7fa7d",
+    "trialProtocolSha256": "f9c62103ef515012075828cc54a6ff6cf5e8a592ef664a4b77736cb68c64f65d",
+    "terminalAuditSha256": "db1cc5726e6c6acf549ef2bdc78dfbe43646621da2c40b71272197cd1c1eedca",
+    "inputContractAuditSha256": "3fd468317a88c2d95a97e346fe1dac00aefb86683eae92e58005921b779a6e04",
+    "tasksCheckedForInputValidity": 11,
+    "referenceOutputValidatedTasks": 3,
+    "arms": {
+      "weak": {
+        "passed": 8,
+        "costMicros": 19949
+      },
+      "strong": {
+        "passed": 11,
+        "costMicros": 107324
+      },
+      "fusion": {
+        "passed": 10,
+        "costMicros": 110843
+      },
+      "self-review": {
+        "passed": 8,
+        "costMicros": 35141
+      },
+      "public-gated-review": {
+        "passed": 9,
+        "costMicros": 77607
+      }
+    },
+    "lostStrongSuccesses": 1,
+    "gatedLostStrongSuccesses": 2,
+    "qualifiedFusionGain": false,
+    "uniquePaidCalls": 48,
+    "uniquePaidCostMicros": 233359,
+    "publicTests": 27,
+    "privateTests": 164,
+    "tasks": [
+      {
+        "id": "lcb-aceb1f6774a9d9e5",
+        "identity": "atcoder:abc394_c",
+        "difficulty": "medium",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 580
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 3364
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 3134
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 885
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 580
+          }
+        }
+      },
+      {
+        "id": "lcb-38c847159f6eca34",
+        "identity": "atcoder:arc193_b",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2071
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 9650
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 6550
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 3429
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2071
+          }
+        }
+      },
+      {
+        "id": "lcb-28dd5bc970358a71",
+        "identity": "atcoder:abc397_b",
+        "difficulty": "medium",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 220
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2024
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1748
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 573
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 220
+          }
+        }
+      },
+      {
+        "id": "lcb-46b691f856853c23",
+        "identity": "atcoder:arc192_e",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 4167
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 13578
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 21830
+          },
+          "self-review": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 6288
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 21830
+          }
+        }
+      },
+      {
+        "id": "lcb-553840119c01c911",
+        "identity": "atcoder:abc400_c",
+        "difficulty": "medium",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 414
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2092
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1710
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 906
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 414
+          }
+        }
+      },
+      {
+        "id": "lcb-34f39be9005b60db",
+        "identity": "atcoder:abc390_g",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1772
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 9838
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 6046
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2373
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1772
+          }
+        }
+      },
+      {
+        "id": "lcb-1ee8d9579100e66a",
+        "identity": "atcoder:arc194_d",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "publicPassed": true,
+            "costMicros": 1833
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 6800
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 9005
+          },
+          "self-review": {
+            "passed": false,
+            "publicPassed": true,
+            "costMicros": 2621
+          },
+          "public-gated-review": {
+            "passed": false,
+            "publicPassed": true,
+            "costMicros": 1833
+          }
+        }
+      },
+      {
+        "id": "lcb-cd4c8e5d44ce84f1",
+        "identity": "atcoder:abc397_f",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2314
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 19302
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 7665
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 3954
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2314
+          }
+        }
+      },
+      {
+        "id": "lcb-a1af912b9c4ca43f",
+        "identity": "atcoder:abc400_e",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 985
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 4058
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 4076
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1616
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 985
+          }
+        }
+      },
+      {
+        "id": "lcb-c10b917ae6fa6298",
+        "identity": "atcoder:arc194_e",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 4181
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 27240
+          },
+          "fusion": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 44176
+          },
+          "self-review": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 9924
+          },
+          "public-gated-review": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 44176
+          }
+        }
+      },
+      {
+        "id": "lcb-224c7df46e7dcbad",
+        "identity": "atcoder:abc393_e",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1412
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 9378
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 4903
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2572
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1412
+          }
+        }
+      }
+    ]
+  }
+}

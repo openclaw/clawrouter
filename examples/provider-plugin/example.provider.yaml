@@ -1,0 +1,32 @@
+schema: clawrouter.service-provider.v1
+id: example
+displayName: Example
+class: rest_json
+products:
+  - id: api
+    displayName: API
+    commercialModel: metered
+    authenticationMethod: api-key
+    binding: { type: provider-default }
+    endpoints: [invoke]
+    offers:
+      - { endpoint: invoke, capability: tool.invoke, models: null }
+service:
+  platform: example
+  kind: api_provider
+  configKeys: [EXAMPLE_API_KEY]
+auth:
+  schemes:
+    - { type: bearer, header: Authorization, format: "Bearer ${secret}", secretKind: api_key }
+baseUrls: { default: https://api.example.invalid }
+adapter: { request: rest_json, response: rest_json }
+capabilities:
+  - { id: tool.invoke, endpoint: invoke, methods: [POST] }
+endpoints:
+  invoke:
+    path: /v1/invoke
+    requestFormat: example.invoke
+    responseFormat: example.invoke
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, service, key, subject]

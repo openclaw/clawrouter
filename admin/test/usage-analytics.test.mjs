@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { niceChartMaximum, providerChartRows, syntheticUsageTimeline, usageCostLabel, usageDayMs, usageEventGroups, usageTimeline } from "../src/usage-analytics.ts";
+import { niceChartMaximum, providerChartRows, usageDayMs, usageEventGroups, usageTimeline } from "../src/usage-analytics.ts";
 
 const summary = { requestCount: 10, successCount: 9, errorCount: 1, inputTokens: 80, outputTokens: 20, totalTokens: 100, actualCostMicros: 500 };
 
@@ -39,16 +39,6 @@ test("chart maximum rounds to readable tick intervals", () => {
   assert.equal(niceChartMaximum(1_284), 1_600);
 });
 
-test("synthetic usage timelines preserve their scoped summary totals", () => {
-  const timeline = syntheticUsageTimeline(Date.UTC(2026, 5, 24, 18), summary);
-  assert.equal(timeline.length, 30);
-  assert.equal(timeline.reduce((total, point) => total + point.requestCount, 0), summary.requestCount);
-  assert.equal(timeline.reduce((total, point) => total + point.successCount, 0), summary.successCount);
-  assert.equal(timeline.reduce((total, point) => total + point.errorCount, 0), summary.errorCount);
-  assert.equal(timeline.reduce((total, point) => total + point.totalTokens, 0), summary.totalTokens);
-  assert.equal(timeline.reduce((total, point) => total + point.actualCostMicros, 0), summary.actualCostMicros);
-});
-
 test("compound Fusion calls collapse into one request with aggregate cost and wall time", () => {
   const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", provider: "openai", reserved_cost_micros: 0, status: "success", compound_request_id: "req_fusion", compound_request_size: 3, compound_request_started_at_ms: 900 };
   const groups = usageEventGroups([
@@ -77,6 +67,50 @@ test("truncated Fusion groups are explicitly partial", () => {
   assert.equal(group.actualCostMicros, 20);
 });
 
+test("compound summaries preserve missing timing, fallback sizes and stable call order", () => {
+  const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", provider: "openai", reserved_cost_micros: 0, compound_request_id: "mixed", status: "success" };
+  const events = [
+    { ...base, id: "first", occurred_at_ms: 200, duration_ms: -10, actual_cost_micros: 3, compound_request_size: 1, compound_request_index: 1 },
+    { ...base, id: "second", occurred_at_ms: 100, duration_ms: null, actual_cost_micros: 0, cost_basis: "unpriced_usage", status: "provider_error", compound_request_index: 1 },
+    { ...base, id: "third", occurred_at_ms: 150, duration_ms: 0, compound_request_started_at_ms: 0, actual_cost_micros: 2 },
+  ];
+  events.forEach(Object.freeze);
+  Object.freeze(events);
+
+  const [group] = usageEventGroups(events);
+  assert.equal(group.primary, events[0]);
+  assert.deepEqual(group.events, events);
+  assert.notEqual(group.events, events);
+  assert.equal(group.occurredAtMs, 200);
+  assert.equal(group.durationMs, 200);
+  assert.equal(group.actualCostMicros, 5);
+  assert.equal(group.unpricedRequestCount, 1);
+  assert.equal(group.successCount, 2);
+  assert.equal(group.expectedCallCount, 3);
+  assert.equal(group.complete, true);
+
+  const [untimed] = usageEventGroups(events.map((event) => ({ ...event, duration_ms: null })));
+  assert.equal(untimed.durationMs, null);
+});
+
+test("Other providers keeps the known lower bound separate from an unknown unpriced total", () => {
+  const row = { provider: "first", requestCount: 3, successCount: 2, errorCount: 1, totalTokens: 6, actualCostMicros: 10 };
+  const missing = { ...row, provider: "legacy" };
+  const partial = { ...row, provider: "partial", unpricedRequestCount: 2 };
+  for (const tail of [[missing, partial], [partial, missing]]) {
+    const [first, other] = providerChartRows([row, ...tail], 2);
+    assert.equal(first, row);
+    assert.equal(other.unpricedRequestCount, undefined);
+    assert.equal(other.minimumUnpricedCount, 2);
+    assert.equal(other.requestCount, 6);
+    assert.equal(other.errorCount, 2);
+    assert.equal(other.actualCostMicros, 20);
+  }
+  const [, other] = providerChartRows([row, missing, { ...missing, provider: "second legacy" }], 2);
+  assert.equal(other.unpricedRequestCount, undefined);
+  assert.equal(other.minimumUnpricedCount, 0);
+});
+
 test("unavailable prices remain distinct from known zero and mixed accounted totals", () => {
   const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", provider: "openai", occurred_at_ms: 1_000, actual_cost_micros: 0, reserved_cost_micros: 0, status: "success" };
   const [unknown, knownZero, mixed] = usageEventGroups([
@@ -85,12 +119,12 @@ test("unavailable prices remain distinct from known zero and mixed accounted tot
     { ...base, id: "mixed-unknown", compound_request_id: "mixed", cost_basis: "unpriced_usage" },
     { ...base, id: "mixed-known", compound_request_id: "mixed", actual_cost_micros: 5, cost_basis: "manifest_pricing" },
   ]);
-  assert.equal(usageCostLabel("$0", unknown.events.length, unknown.unpricedRequestCount), "Price unavailable");
-  assert.equal(usageCostLabel("$0", knownZero.events.length, knownZero.unpricedRequestCount), "$0");
-  assert.equal(usageCostLabel("$5", mixed.events.length, mixed.unpricedRequestCount), "$5 accounted; 1 unpriced");
+  assert.equal(unknown.unpricedRequestCount, 1);
+  assert.equal(knownZero.unpricedRequestCount, 0);
+  assert.equal(mixed.unpricedRequestCount, 1);
   assert.equal(mixed.actualCostMicros, 5);
   const [historicalDenial] = usageEventGroups([{ ...base, id: "old-denial", status: "client_error", status_code: 400, cost_basis: "unpriced_service_tier" }]);
-  assert.equal(usageCostLabel("$0", 1, historicalDenial.unpricedRequestCount), "$0");
+  assert.equal(historicalDenial.unpricedRequestCount, 0);
   const dayStartMs = Math.floor(Date.now() / usageDayMs) * usageDayMs;
   const daily = { dayStartMs, requestCount: 2, successCount: 2, errorCount: 0, totalTokens: 2, actualCostMicros: 5, unpricedRequestCount: 1 };
   assert.equal(usageTimeline({ summary, events: [], providers: [], daily: [daily, daily] }, 1)[0].unpricedRequestCount, 2);
@@ -99,6 +133,4 @@ test("unavailable prices remain distinct from known zero and mixed accounted tot
   assert.equal(other.provider, "other-providers");
   assert.equal(other.unpricedRequestCount, 2);
   assert.equal(other.actualCostMicros, 10);
-  const synthetic = syntheticUsageTimeline(Date.now(), { ...summary, unpricedRequestCount: 3 });
-  assert.equal(synthetic.reduce((total, day) => total + day.unpricedRequestCount, 0), 3);
 });

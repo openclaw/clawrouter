@@ -1,0 +1,87 @@
+{
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "checkedAt": "2026-11-03",
+  "request": {
+    "model": "music-2.6",
+    "prompt": "Synthetic instrumental style",
+    "lyrics_optimizer": true,
+    "stream": true,
+    "output_format": "hex",
+    "audio_setting": {
+      "sample_rate": 44100,
+      "bitrate": 256000,
+      "format": "mp3"
+    }
+  },
+  "cover": {
+    "model": "music-cover",
+    "prompt": "Synthetic jazz cover style",
+    "audio_url": "https://media.example/reference.mp3",
+    "stream": true,
+    "output_format": "hex",
+    "audio_setting": {
+      "sample_rate": 44100,
+      "bitrate": 256000,
+      "format": "mp3"
+    }
+  },
+  "frames": [
+    {
+      "base_resp": {
+        "status_code": 0
+      },
+      "data": {
+        "status": 1,
+        "audio": "00ff"
+      }
+    },
+    {
+      "base_resp": {
+        "status_code": 0
+      },
+      "data": {
+        "status": 1,
+        "audio": "80"
+      }
+    },
+    {
+      "base_resp": {
+        "status_code": 0
+      },
+      "data": {
+        "status": 2,
+        "audio": "00ff80"
+      },
+      "extra_info": {
+        "music_size": 3,
+        "music_sample_rate": 44100,
+        "bitrate": 256000,
+        "music_duration": 25
+      }
+    }
+  ],
+  "availability": {
+    "paidExistingUsersFrom": "2026-08-20",
+    "freeDiscontinuationAnnounced": true,
+    "freeDiscontinuationDate": null,
+    "liveQualified": false
+  },
+  "pricingEvidence": {
+    "source": "https://platform.minimax.io/docs/pricing/overview",
+    "music26PerTrackMicros": 150000,
+    "maximumTrackMinutes": 5,
+    "existingPayingUsersOnly": true,
+    "coverTariff": null,
+    "activatedTariff": false
+  },
+  "qualification": {
+    "syntheticBytesOnly": true,
+    "terminalAggregateAssumption": "must_match_prior_delta_prefix",
+    "unknownCostIsZero": false,
+    "policyFixedIsUpstreamCost": false,
+    "remotePostReplay": false,
+    "rawFeatureIdsAllowed": false,
+    "referenceAudioDurationQualified": false
+  }
+}
+

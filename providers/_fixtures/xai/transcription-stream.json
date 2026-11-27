@@ -1,0 +1,20 @@
+{
+  "sources": ["https://docs.x.ai/developers/model-capabilities/audio/speech-to-text", "https://docs.x.ai/developers/models"],
+  "checkedAt": "2026-11-03",
+  "frozenSource": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7:extensions/xai/realtime-transcription-provider-factory.ts",
+  "query": "sample_rate=8000&encoding=mulaw&interim_results=true&endpointing=800&language=en",
+  "ready": {"type": "transcript.created"},
+  "audioBytes": [0, 1, 2, 3],
+  "events": [
+    {"type": "transcript.partial", "text": "Synthetic", "is_final": false, "speech_final": false, "start": 0, "duration": 0.2},
+    {"type": "transcript.partial", "text": "Synthetic", "is_final": true, "speech_final": false, "start": 0, "duration": 0.2},
+    {"type": "transcript.partial", "text": "utterance.", "is_final": false, "speech_final": false, "start": 0.2, "duration": 0.2},
+    {"type": "transcript.partial", "text": "Synthetic utterance.", "is_final": true, "speech_final": true, "start": 0, "duration": 0.4},
+    {"type": "transcript.partial", "text": "Next.", "is_final": true, "speech_final": true, "start": 0.4, "duration": 0.2}
+  ],
+  "end": {"type": "audio.done"},
+  "done": {"type": "transcript.done", "text": "Synthetic utterance. Next.", "duration": 0.6},
+  "error": {"type": "error", "message": "Synthetic provider error"},
+  "billing": {"publicStreamingUsdPerHour": 0.2, "nativeDurationUnit": "seconds", "upstreamCostMicros": null, "interruptedCharge": "unqualified", "rateActivated": false},
+  "modelDisposition": {"frozenQueryHasModel": false, "documentedServiceDefault": "grok-voice-transcribe-2.0", "insertModelAlias": false}
+}

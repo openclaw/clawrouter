@@ -1,0 +1,8 @@
+{
+  "qualification": "Synthetic transport bytes, not playable audio or live cost proof.",
+  "request": { "model": "openai/whisper-large-v3-turbo", "input_audio": { "data": "UklGRgAAAABXQVZF", "format": "wav" }, "language": "en", "temperature": 0.2 },
+  "result": { "text": "  A paper boat crosses the pond.  ", "usage": { "seconds": 3.5, "input_tokens": 42, "output_tokens": 8, "total_tokens": 50, "cost": 0.00001 } },
+  "silent": { "text": " \t\n", "usage": { "seconds": 3.5 } },
+  "unmetered": { "text": "A paper boat." },
+  "generationId": "gen_stt_fixture_01"
+}

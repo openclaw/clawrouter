@@ -1,0 +1,698 @@
+{
+  "schema": "fusion-uri-transfer-study-v1",
+  "date": "2026-11-27",
+  "protocolSha256": "32b64e9622ae0d808129910c9749908a8ae1df548cf091c4535484ba7329c8e6",
+  "resultSha256": "bf6c30bb2eb91bd237c20e04ae032c6277cd128505a696384e35e4af3b851ed8",
+  "auditSha256": "e896638617d6db4c968d3436fffa63b1e78f23a8e653dfdf5797aa5a318a9d31",
+  "qualificationProtocolSha256": "2f550fad58fcd9fbcea7235327d48e77ea639c06afaa21c2594c8d2356f5996c",
+  "qualificationSha256": "f9c21e7d78aa9f705525e490018f2262435e4271335a24221aba49945d232f9f",
+  "scope": "Fresh URI transfer cohort: all qualified tasks from the fixed six-repair roster; at least three required. One independent strong, cheap, and cheap-then-one-strong-repair arm per task. Unique exact-search relocation enabled equally for all arms. No proximity guesses or ambiguous relocation. Original public tests select fallback; held-out tests only after all calls. Exact assertion counts, zero false accepts or strong losses, quality strictly above cheap, at least20% estimated and normalized cost saving and elapsed no greater than strong required. One repository, historical public data, no training decontamination or production claim. At most24calls, stage cap $4 within cumulative $400, <=512files/64MiB, cached image only.",
+  "independentTasks": 4,
+  "models": {
+    "openai/gpt-6-luna": {
+      "provider": "openai",
+      "upstream": "gpt-6-luna",
+      "price": {
+        "input": 1.0000000000000001e-07,
+        "cached": 1e-08,
+        "write": 1.25e-07,
+        "output": 5e-07,
+        "request": 0,
+        "tiers": []
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna"
+    },
+    "openai/gpt-6.1-terra": {
+      "provider": "openai",
+      "upstream": "gpt-6.1-terra",
+      "price": {
+        "input": 1e-06,
+        "cached": 5e-08,
+        "write": 1.25e-06,
+        "output": 5e-06,
+        "request": 0,
+        "tiers": []
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+    }
+  },
+  "qualification": [
+    {
+      "id": "fast-uri-52774a5c35df",
+      "commit": "52774a5c35df36b0bbe439cd4c12c3dc0e50e3b9",
+      "commitUrl": "https://github.com/fastify/fast-uri/commit/52774a5c35df36b0bbe439cd4c12c3dc0e50e3b9",
+      "qualified": true,
+      "phases": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 602
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 602
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 518
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 518
+        }
+      }
+    },
+    {
+      "id": "fast-uri-5dabb86732aa",
+      "commit": "5dabb86732aa2a7655e258719970e61e12b6b4d1",
+      "commitUrl": "https://github.com/fastify/fast-uri/commit/5dabb86732aa2a7655e258719970e61e12b6b4d1",
+      "qualified": true,
+      "phases": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 548
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 548
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 502
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 502
+        }
+      }
+    },
+    {
+      "id": "fast-uri-1080a300f934",
+      "commit": "1080a300f9340f4616a7e12ebd847e53978c52f3",
+      "commitUrl": "https://github.com/fastify/fast-uri/commit/1080a300f9340f4616a7e12ebd847e53978c52f3",
+      "qualified": false,
+      "phases": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 536
+        },
+        "baselineFull": {
+          "valid": false,
+          "passed": false,
+          "assertions": 459
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 485
+        },
+        "baselinePublic": {
+          "valid": false,
+          "passed": false,
+          "assertions": 424
+        }
+      }
+    },
+    {
+      "id": "fast-uri-2372aa32ffb3",
+      "commit": "2372aa32ffb333c9dc1262a8f9f8cf8ed02f7fc3",
+      "commitUrl": "https://github.com/fastify/fast-uri/commit/2372aa32ffb333c9dc1262a8f9f8cf8ed02f7fc3",
+      "qualified": true,
+      "phases": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 502
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 502
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 482
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 482
+        }
+      }
+    },
+    {
+      "id": "fast-uri-46060c27252e",
+      "commit": "46060c27252ed847fd9cb5474270d5ff1d986841",
+      "commitUrl": "https://github.com/fastify/fast-uri/commit/46060c27252ed847fd9cb5474270d5ff1d986841",
+      "qualified": true,
+      "phases": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 385
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 385
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 313
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 313
+        }
+      }
+    },
+    {
+      "id": "fast-uri-a95158ad308d",
+      "commit": "a95158ad308df4d92bbde4eba699ce5165e9f796",
+      "commitUrl": "https://github.com/fastify/fast-uri/commit/a95158ad308df4d92bbde4eba699ce5165e9f796",
+      "qualified": false,
+      "phases": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 349
+        },
+        "baselineFull": {
+          "valid": false,
+          "passed": false,
+          "assertions": 231
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 334
+        },
+        "baselinePublic": {
+          "valid": false,
+          "passed": false,
+          "assertions": 216
+        }
+      }
+    }
+  ],
+  "records": [
+    {
+      "caseId": "fast-uri-52774a5c35df",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 46602,
+      "costMicros": 56772,
+      "elapsedMs": 23548.907209,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 602,
+        "expectedTests": 602
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fast-uri-52774a5c35df",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 4760,
+      "costMicros": 5777,
+      "elapsedMs": 14979.669833999997,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 602,
+        "expectedTests": 602
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fast-uri-52774a5c35df",
+      "kind": "repository",
+      "strategy": "cheap",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 4937,
+      "costMicros": 1276,
+      "elapsedMs": 17603.845500000003,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 602,
+        "expectedTests": 602
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fast-uri-5dabb86732aa",
+      "kind": "repository",
+      "strategy": "cheap",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 4559,
+      "costMicros": 5509,
+      "elapsedMs": 15357.886542000007,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 548,
+        "expectedTests": 548
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fast-uri-5dabb86732aa",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": true,
+      "normalizedMicros": 46762,
+      "costMicros": 52937,
+      "elapsedMs": 30483.060500000007,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 548,
+        "expectedTests": 548
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fast-uri-5dabb86732aa",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 41707,
+      "costMicros": 51208,
+      "elapsedMs": 15350.121916999997,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 548,
+        "expectedTests": 548
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fast-uri-2372aa32ffb3",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 43535,
+      "costMicros": 52158,
+      "elapsedMs": 30639.33320800001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 502,
+        "expectedTests": 502
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fast-uri-2372aa32ffb3",
+      "kind": "repository",
+      "strategy": "cheap",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 4233,
+      "costMicros": 5095,
+      "elapsedMs": 14743.297124999983,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 502,
+        "expectedTests": 502
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fast-uri-2372aa32ffb3",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 4744,
+      "costMicros": 1639,
+      "elapsedMs": 21717.656290999992,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 502,
+        "expectedTests": 502
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fast-uri-46060c27252e",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 2366,
+      "costMicros": 2890,
+      "elapsedMs": 7442.876250000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 385,
+        "expectedTests": 385
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fast-uri-46060c27252e",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 24000,
+      "costMicros": 29231,
+      "elapsedMs": 11609.023167000007,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 385,
+        "expectedTests": 385
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fast-uri-46060c27252e",
+      "kind": "repository",
+      "strategy": "cheap",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 2402,
+      "costMicros": 520,
+      "elapsedMs": 7823.2319580000185,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 385,
+        "expectedTests": 385
+      },
+      "passed": true
+    }
+  ],
+  "calls": [
+    {
+      "stage": "case-0/strong/control",
+      "number": 1,
+      "id": "fast-uri-52774a5c35df/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 56772,
+      "normalizedMicros": 46602,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 40679,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1184
+      },
+      "disposition": "complete",
+      "elapsedMs": 20825.534708
+    },
+    {
+      "stage": "case-0/cascade/draft",
+      "number": 1,
+      "id": "fast-uri-52774a5c35df/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 5777,
+      "normalizedMicros": 4760,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 40679,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1383
+      },
+      "disposition": "complete",
+      "elapsedMs": 12116.593624999998
+    },
+    {
+      "stage": "case-0/cheap/cheap",
+      "number": 1,
+      "id": "fast-uri-52774a5c35df/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1276,
+      "normalizedMicros": 4937,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 40679,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1737
+      },
+      "disposition": "complete",
+      "elapsedMs": 14593.221375000001
+    },
+    {
+      "stage": "case-1/cheap/cheap",
+      "number": 1,
+      "id": "fast-uri-5dabb86732aa/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 5509,
+      "normalizedMicros": 4559,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 38004,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1515
+      },
+      "disposition": "complete",
+      "elapsedMs": 12335.968457999996
+    },
+    {
+      "stage": "case-1/cascade/draft",
+      "number": 1,
+      "id": "fast-uri-5dabb86732aa/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1020,
+      "normalizedMicros": 4441,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 38004,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1279
+      },
+      "disposition": "complete",
+      "elapsedMs": 11098.568165999997
+    },
+    {
+      "stage": "case-1/cascade/fallback",
+      "number": 1,
+      "id": "fast-uri-5dabb86732aa/fallback",
+      "arm": "fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 51917,
+      "normalizedMicros": 42321,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 38383,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 787
+      },
+      "disposition": "complete",
+      "elapsedMs": 12975.512000000002
+    },
+    {
+      "stage": "case-1/strong/control",
+      "number": 1,
+      "id": "fast-uri-5dabb86732aa/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 51208,
+      "normalizedMicros": 41707,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 38004,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 740
+      },
+      "disposition": "complete",
+      "elapsedMs": 13031.928125000006
+    },
+    {
+      "stage": "case-2/strong/control",
+      "number": 1,
+      "id": "fast-uri-2372aa32ffb3/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 52158,
+      "normalizedMicros": 43535,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 34492,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1808
+      },
+      "disposition": "complete",
+      "elapsedMs": 28726.585166999997
+    },
+    {
+      "stage": "case-2/cheap/cheap",
+      "number": 1,
+      "id": "fast-uri-2372aa32ffb3/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 5095,
+      "normalizedMicros": 4233,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 34492,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1566
+      },
+      "disposition": "complete",
+      "elapsedMs": 12888.612666
+    },
+    {
+      "stage": "case-2/cascade/draft",
+      "number": 1,
+      "id": "fast-uri-2372aa32ffb3/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1639,
+      "normalizedMicros": 4744,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 34492,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2587
+      },
+      "disposition": "complete",
+      "elapsedMs": 19457.655667000014
+    },
+    {
+      "stage": "case-3/cascade/draft",
+      "number": 1,
+      "id": "fast-uri-46060c27252e/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2890,
+      "normalizedMicros": 2366,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 20922,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 547
+      },
+      "disposition": "complete",
+      "elapsedMs": 5547.731375000003
+    },
+    {
+      "stage": "case-3/strong/control",
+      "number": 1,
+      "id": "fast-uri-46060c27252e/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 29231,
+      "normalizedMicros": 24000,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 20922,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 615
+      },
+      "disposition": "complete",
+      "elapsedMs": 9694.309458000003
+    },
+    {
+      "stage": "case-3/cheap/cheap",
+      "number": 1,
+      "id": "fast-uri-46060c27252e/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 520,
+      "normalizedMicros": 2402,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 20922,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 619
+      },
+      "disposition": "complete",
+      "elapsedMs": 5883.793666000012
+    }
+  ],
+  "summary": {
+    "strong": {
+      "passed": 4,
+      "costMicros": 189369,
+      "elapsedMs": 81147.38550100001
+    },
+    "cascade": {
+      "passed": 4,
+      "costMicros": 63243,
+      "elapsedMs": 74623.262875
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 1,
+    "escalations": 1,
+    "costRatio": 0.33396701677676915,
+    "elapsedRatio": 0.919601567127266,
+    "costComparison": {
+      "costBasis": "invoice-and-cache-neutral-v1",
+      "strong": {
+        "costMicros": 189369,
+        "normalizedMicros": 155844
+      },
+      "cascade": {
+        "costMicros": 63243,
+        "normalizedMicros": 58632
+      },
+      "costRatio": 0.33396701677676915,
+      "normalizedCostRatio": 0.3762223762223762,
+      "invoiceCostScreen": true,
+      "normalizedCostScreen": true,
+      "costScreen": true
+    },
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false,
+    "cheap": {
+      "passed": 4,
+      "costMicros": 12400,
+      "elapsedMs": 55528.26112500001
+    },
+    "summaryPolicy": "routing-three-arm-v1",
+    "routingLead": false
+  },
+  "newCostMicros": 265012,
+  "auditScope": "Complete model-free outcome and cost replay matched all records; original live workflow times retained. Journal hashes checked for all 13 calls.",
+  "infrastructureCost": "Unpriced; reported model costs use pinned provider prices."
+}

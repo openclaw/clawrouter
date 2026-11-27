@@ -1,5 +1,6 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import {
   PolicyBindingIndexObject, listBindings, listConnections, listCredentials, listPolicies, listUsers,
@@ -13,7 +14,7 @@ const families = [
     put: "/policies/put", close: "/policies/initialize-all", list: listPolicies, resolve: env => resolvePolicies(env, ["fixture"]) },
   { name: "credentials", key: "credentials/fixture", value: { enabled: true, policyId: "fixture", policyGeneration: "v1", secretSha256: "a".repeat(64) },
     row: value => ({ credentialId: "fixture", credential: value }), enabled: row => row.credential.enabled,
-    put: "/credentials/put", close: "/credentials/initialize-all", list: listCredentials, resolve: env => resolveCredentials(env, ["fixture"]) },
+    put: "/credentials/mutate", close: "/credentials/initialize-all", list: listCredentials, resolve: env => resolveCredentials(env, ["fixture"]) },
   { name: "users", key: "access/users/fixture@example.com", value: { enabled: true, role: "user", tenantId: "fixture", groups: [] },
     row: value => ({ email: "fixture@example.com", record: value }), enabled: row => row.record.enabled,
     put: "/users/put", close: "/users/initialize-all", list: listUsers, resolve: env => resolveUsers(env, ["fixture@example.com"]) },
@@ -62,33 +63,35 @@ for (const family of families.slice(0, 2)) {
 }
 
 function migrationEnv(t, family) {
-  const db = new DatabaseSync(":memory:");
-  t.after(() => db.close());
-  const sql = { exec(query, ...bindings) {
-    const statement = db.prepare(query);
-    if (statement.columns().length) return statement.all(...bindings);
-    statement.run(...bindings);
-    return [];
-  } };
+  const { sql } = sqliteFixture(t);
   const authority = new PolicyBindingIndexObject({ storage: { sql } });
   const fixture = {
     beforeRead: null, reads: 0, store: new Map([[family.key, family.value]]),
     async call(path, body) {
+      if (path === "/credentials/mutate") {
+        await this.call("/policies/put", { policyId: "fixture", policy: { enabled: true, generation: "v1", providers: [] } });
+        body = { ...body, operation: "put", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" } };
+      }
       const response = await authority.fetch(new Request(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body) }));
       assert.equal(response.status, 200, await response.clone().text());
       return response;
     },
     env: {
-      ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: (url, init) => authority.fetch(new Request(url, init)) }) },
+      ACCESS_CONTROL: { idFromName: name => name, get: () => ({ async fetch(url, init) {
+        if (!new Headers(init.headers).has("x-clawrouter-policy-collection")) return authority.fetch(new Request(url, init));
+        const response = await authority.fetch(new Request(url, { ...init, body: accessBytesResponse(init.body, "").body, duplex: "half" }));
+        return accessBytesResponse(await response.text(), "", { status: response.status, headers: response.headers });
+      } }) },
       POLICY_KV: {
         async list({ prefix }) { return { list_complete: true, keys: [...fixture.store.keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })) }; },
-        async get(key) {
+        async get(key, type) {
           if (!fixture.store.has(key)) return null;
           fixture.reads++;
           const action = fixture.beforeRead;
           fixture.beforeRead = null;
           await action?.();
-          return structuredClone(fixture.store.get(key));
+          const value = structuredClone(fixture.store.get(key));
+          return type === "stream" ? accessBytesResponse(JSON.stringify(value), "").body : value;
         },
       },
     },

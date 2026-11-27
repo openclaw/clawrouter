@@ -1,0 +1,42 @@
+# Native contract checked 2026-11-03: https://exa.ai/docs/reference/search
+# Request telemetry only; upstream search/contents fees are not qualified prices.
+schema: clawrouter.service-provider.v1
+id: exa
+displayName: Exa
+status: experimental
+class: rest_json
+service:
+  platform: exa
+  kind: tool_provider
+  upstreamService: exa
+  configKeys: [EXA_API_KEY]
+auth:
+  schemes:
+    - type: api_key
+      header: x-api-key
+      secretKind: api_key
+baseUrls:
+  default: https://api.exa.ai
+routing:
+  nativePrefixes: [clawrouter-exa, exa]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: web.search
+    endpoint: search
+    methods: [POST]
+endpoints:
+  search:
+    path: /search
+    method: POST
+    requestFormat: exa.search
+    responseFormat: exa.search
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request

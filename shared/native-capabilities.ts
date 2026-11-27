@@ -1,0 +1,2 @@
+export { isPublishedMusicInputSupport } from "../packages/provider-plugin-contract/src/native-capabilities.ts";
+export type { OpenAiDecisionCapabilities, BasetenSystemOneDecisionCapabilities, SageDecisionCapabilities, NativeDecisionCapabilities, OpaquePcmSpeechProfile, InlineMusicReferenceImage, PublishedMusicInputSupport, NativeEndpointCapabilities, NativeModelCapabilities } from "../packages/provider-plugin-contract/src/native-capabilities.ts";

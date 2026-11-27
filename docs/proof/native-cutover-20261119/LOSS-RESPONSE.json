@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "syntheticOnly": true,
+  "caseId": "c1bdd2cfc9a132f0579ecd5688edbf50",
+  "version": "ae2aaf3e-69b9-40e9-b249-307e560516aa",
+  "status": 200,
+  "bodyComplete": true,
+  "observedBytes": 6,
+  "retainedBytes": 6,
+  "maximumBytes": 65536,
+  "captureComplete": true,
+  "bodySha256": "082027641f4532cec3b8585e1d86e6a9adf1dfb9cd2333de1aca7b1b35cc4ece",
+  "bodyBase64": "eyJpZCI6",
+  "jsonValid": false
+}

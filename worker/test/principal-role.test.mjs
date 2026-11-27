@@ -1,6 +1,7 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 const { adminApi } = await import("../admin.ts");
@@ -62,14 +63,7 @@ test("saving and reconciling assignment rules preserves local administrator role
 });
 
 async function authorityFixture(t) {
-  const db = new DatabaseSync(":memory:");
-  t.after(() => db.close());
-  const sql = { exec(query, ...bindings) {
-    const statement = db.prepare(query);
-    if (statement.columns().length) return statement.all(...bindings);
-    statement.run(...bindings);
-    return [];
-  } };
+  const { sql } = sqliteFixture(t);
   const authority = new PolicyBindingIndexObject({ storage: { sql } });
   const values = new Map();
   const fixture = { beforeProfileWrite: null };
@@ -77,7 +71,7 @@ async function authorityFixture(t) {
     CLAWROUTER_LOCAL_AUTH: "enabled",
     CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex(token),
     POLICY_KV: {
-      async get(key, type) { const value = values.get(key); return value === undefined ? null : type === "json" ? JSON.parse(value) : value; },
+      async get(key, type) { const value = values.get(key); return value === undefined ? null : type === "stream" ? accessBytesResponse(value, "").body : type === "json" ? JSON.parse(value) : value; },
       async put(key, value) { values.set(key, value); },
       async list({ prefix }) { return { keys: [...values.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })), list_complete: true }; },
     },

@@ -1,18 +1,52 @@
+import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 
 test("TypeScript provider compiler is deterministic and preserves the catalog contract", () => {
   const files = readdirSync("providers").filter((file) => file.endsWith(".provider.yaml")).sort().map((file) => `providers/${file}`);
-  const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", ...files], { encoding: "utf8" }));
+  const compiled = compileProviderSnapshot(files.map(file => parse(readFileSync(file, "utf8"))));
   const generated = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   assert.deepEqual(compiled, generated);
-  assert.equal(compiled.providers.length, 22);
+  assert.deepEqual(compiled.providers.map(provider => provider.id).sort(), files.map(file => parse(readFileSync(file, "utf8")).id).sort(), "every source manifest must appear exactly once in the compiled inventory");
+  const deepseek = compiled.providers.find(provider => provider.id === "deepseek");
+  assert.deepEqual(deepseek.models.map(model => model.upstream), ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-flash", "deepseek-v4-flash-vision-exp"]);
+  for (const model of deepseek.models) {
+    const pro = model.upstream === "deepseek-v4-pro", pricing = model.pricing;
+    assert.equal(model.id, `deepseek/${model.upstream}`);
+    assert.equal(model.pricing_ref, pro ? "deepseek-v4-pro-peak-upper-bound-2026-09-23" : "deepseek-flash-peak-upper-bound-2026-09-23");
+    assert.equal(pricing.effectiveAt, "2026-09-23");
+    assert.equal(pricing.settlementBasis, "published_upper_bound");
+    assert.deepEqual([pricing.inputMicrosPerMillion, pricing.cachedInputMicrosPerMillion, pricing.outputMicrosPerMillion], pro ? [1_320_000, 44_000, 3_960_000] : [300_000, 6_000, 1_200_000]);
+    assert.deepEqual(compiled.model_index[model.id], { provider: "deepseek", ...Object.fromEntries(Object.entries(model).filter(([key]) => key !== "id")) });
+  }
+  const realtime = compiled.model_index["openai/gpt-realtime-2.1"];
+  assert.equal(realtime.pricing.settlementBasis, "published_upper_bound");
+  assert.equal(realtime.pricing.maxRequestInputTokens, 128000);
+  assert.deepEqual([realtime.pricing.inputMicrosPerMillion, realtime.pricing.outputMicrosPerMillion], [32000000, 64000000]);
+  assert.equal(compiled.model_index["groq/gpt-oss-20b"].pricing.settlementBasis, "published_upper_bound");
   assert.equal(compiled.model_index["lanseq/qwen3.8-27b-int4"].provider, "lanseq");
+  const gemini = compiled.model_index["google/gemini-3.5-flash"];
+  const google = compiled.providers.find(provider => provider.id === "google-gemini");
+  assert.deepEqual(google.endpoints.find(endpoint => endpoint.id === "stream_generate_content").query, { alt: "sse" });
+  assert.deepEqual(google.endpoints.find(endpoint => endpoint.id === "generate_content").query, {});
+  assert.equal(gemini.pricing_ref, "google-gemini-3-5-flash-tiers-2026-09-23");
+  assert.equal(gemini.pricing.effectiveAt, "2026-09-23");
+  assert.deepEqual(gemini.pricing.serviceTiers.map(({ id, aliases, inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion }) => [id, aliases, inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion]), [
+    ["default", ["standard"], 1_500_000, 150_000, 9_000_000],
+    ["flex", [], 750_000, 80_000, 4_500_000],
+    ["priority", [], 2_700_000, 270_000, 16_200_000],
+  ]);
+  const together = compiled.model_index["together/glm-5.2"];
+  assert.equal(together.pricing_ref, "together-glm-5-2-standard-2026-09-23");
+  assert.equal(together.pricing.effectiveAt, "2026-09-23");
+  assert.equal(together.pricing.maxInputTokens, 1_048_575);
+  assert.equal(together.pricing.defaultMaxOutputTokens, 131_072);
+  assert.deepEqual([together.pricing.inputMicrosPerMillion, together.pricing.cachedInputMicrosPerMillion, together.pricing.outputMicrosPerMillion], [1_400_000, 260_000, 4_400_000]);
   assert.equal(compiled.model_index["openai/gpt-5.6"].provider, "openai");
   assert.equal(compiled.model_index["anthropic/claude-opus-4-8"].provider, "anthropic");
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
@@ -22,7 +56,7 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(compiled.providers.find((provider) => provider.id === "azure-openai").endpoints.find((endpoint) => endpoint.id === "responses").websocket, undefined);
   const astra = openai.models.find((model) => model.id === "openai/gpt-6-astra");
   assert.equal(astra.upstream, "gpt-6-astra");
-  assert.deepEqual(astra.capabilities, ["llm.responses", "llm.chat"]);
+  assert.deepEqual(astra.capabilities, ["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens", "search.web"]);
   assert.deepEqual(astra.supportedReasoningEfforts, ["low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index[astra.id], { provider: "openai", ...Object.fromEntries(Object.entries(astra).filter(([key]) => key !== "id")) });
   assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(astra.upstream));
@@ -37,10 +71,25 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
     assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(model.upstream));
     assert.deepEqual(model.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   }
-  assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat"]);
+  assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat", "llm.count_tokens", "search.web"]);
   assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index["openai/gpt-5.6"].supportedReasoningEfforts, gpt56.supportedReasoningEfforts);
-  assert.equal("supportedReasoningEfforts" in openai.models.find((model) => model.id === "openai/gpt-5.5"), false);
+  const gpt55 = openai.models.find((model) => model.id === "openai/gpt-5.5");
+  assert.deepEqual(gpt55.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh"]);
+  assert.equal(gpt55.requestParameters.chat_completions.defaultReasoningEffort, "medium");
+  assert.equal(gpt55.requestParameters.chat_completions.temperature, undefined);
+  assert.equal(astra.requestParameters.chat_completions.temperature, "unsupported");
+  assert.equal(astra.requestParameters.responses.toolCalling, "supported");
+  assert.equal(gpt56.requestParameters.chat_completions.defaultReasoningEffort, "medium");
+  assert.equal(gpt56.requestParameters.chat_completions.temperature, undefined);
+  for (const id of ["groq/gpt-oss-120b", "fireworks/gpt-oss-120b", "fireworks/glm-5.2"]) {
+    const indexed = compiled.model_index[id];
+    const model = compiled.providers.find(({ id: provider }) => provider === indexed.provider).models.find((model) => model.id === id);
+    assert.deepEqual(indexed.supportedReasoningEfforts, model.supportedReasoningEfforts, id);
+    assert.deepEqual(indexed.requestParameters, model.requestParameters, id);
+    assert.equal(indexed.requestParameters.chat_completions.checkedAt, "2026-09-23", id);
+    assert.ok(indexed.requestParameters.chat_completions.sources.length > 0, id);
+  }
   const { serviceTiers, ...standard } = gpt56.pricing;
   assert.deepEqual(standard, {
     effectiveAt: "2026-09-22",
@@ -85,21 +134,77 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.ok(compiled.capability_index["llm.chat"].length >= 10);
 });
 
-test("provider schema bounds reasoning efforts to canonical wire values", () => {
-  const schema = JSON.parse(readFileSync("providers/_schema/service-provider.schema.json", "utf8"));
-  assert.deepEqual(schema.$defs.model.properties.supportedReasoningEfforts, {
-    type: "array",
-    items: { enum: ["none", "minimal", "low", "medium", "high", "xhigh", "max"] },
-    minItems: 1,
-    maxItems: 7,
-    uniqueItems: true,
+test("standalone search cannot broaden its qualified provider, method, or transport", () => {
+  const valid = parse(readFileSync("providers/openai.provider.yaml", "utf8"));
+  withManifest(path => {
+    for (const changes of [{ path: "/v1/responses" }, { method: "GET" }, { responseFormat: "openai.responses" }, { streaming: "sse" }, { modelPassthrough: {} }, { nativeProxy: false }]) {
+      const manifest = structuredClone(valid);
+      Object.assign(manifest.endpoints.standalone_search, changes);
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), /standalone search requires/);
+    }
+    const manifest = structuredClone(valid);
+    manifest.capabilities.find(capability => capability.id === "search.web").methods.push("GET");
+    writeFileSync(path, JSON.stringify(manifest));
+    assert.throws(() => compile(path), /standalone search requires/);
+  });
+});
+
+test("endpoint pricing is normalized, indexed, and limited to supported endpoints", () => {
+  const valid = parse(readFileSync("providers/openai.provider.yaml", "utf8"));
+  const model = manifest => manifest.models.entries.find(({ id }) => id === "openai/gpt-6-luna");
+  const card = manifest => model(manifest).endpointPricing.decisions;
+  withManifest(path => {
+    writeFileSync(path, JSON.stringify(valid));
+    const compiled = compile(path);
+    const luna = compiled.providers[0].models.find(({ id }) => id === "openai/gpt-6-luna");
+    assert.deepEqual(compiled.model_index[luna.id].endpointPricing, luna.endpointPricing);
+    assert.equal(luna.endpointPricing.decisions.pricing.defaultMaxOutputTokens, 0);
+    assert.equal(luna.endpointPricing.decisions.pricing.inputTokenOverhead, 1024);
+    assert.equal(luna.endpointPricing.decisions.pricing_ref, card(valid).pricingRef);
+    assert.equal(luna.pricing.outputMicrosPerMillion, 500_000);
+    for (const [mutate, expected] of [
+      [manifest => { model(manifest).endpointPricing.missing = card(manifest); }, /supported endpoint/],
+      [manifest => { model(manifest).endpointPricing.embeddings = card(manifest); }, /supported endpoint/],
+      [manifest => { model(manifest).capabilities = ["llm.chat"]; delete model(manifest).requestParameters.responses; }, /supported endpoint/],
+      [manifest => { delete card(manifest).pricingRef; }, /invalid manifest/],
+      [manifest => { card(manifest).pricing.outputMicrosPerMillion = -1; }, /invalid manifest/],
+      [manifest => { card(manifest).pricing.longContext.thresholdInputTokens = 922_000; }, /long-context threshold/],
+      [manifest => { card(manifest).pricing.serviceTiers = [{ id: "flex", inputMicrosPerMillion: 1, outputMicrosPerMillion: 0 }]; }, /default card/],
+    ]) {
+      const manifest = structuredClone(valid);
+      mutate(manifest);
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), expected);
+    }
+  });
+});
+
+test("endpoint output limits compile with closed, finite field and integer range contracts", () => {
+  const valid = parse(readFileSync("providers/deepseek.provider.yaml", "utf8"));
+  const expected = { field: "max_tokens", minimum: 1, maximum: 393_216 };
+  withManifest((path) => {
+    writeFileSync(path, JSON.stringify(valid));
+    const compiled = compile(path).providers[0];
+    assert.deepEqual(compiled.endpoints[0].outputTokenLimit, expected);
+    assert.ok(compiled.models.every(model => model.pricing.maxInputTokens === 1_048_576 && model.pricing.defaultMaxOutputTokens === expected.maximum));
+    for (const limit of [
+      {}, null, { ...expected, field: "custom_limit" }, { ...expected, path: "/max_tokens" },
+      { ...expected, minimum: 0 }, { ...expected, maximum: 0 },
+      { ...expected, minimum: 1.5 }, { ...expected, maximum: "393216" },
+      { ...expected, maximum: Number.MAX_SAFE_INTEGER + 1 }, { ...expected, minimum: expected.maximum + 1 },
+    ]) {
+      const manifest = structuredClone(valid);
+      manifest.endpoints.chat_completions.outputTokenLimit = limit;
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), /outputTokenLimit/);
+    }
   });
 });
 
 test("compiled providers have unique ids, models, capabilities, and executable endpoint references", () => {
   const snapshot = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   assert.equal(new Set(snapshot.providers.map((provider) => provider.id)).size, snapshot.providers.length);
-  assert.equal(new Set(Object.keys(snapshot.model_index)).size, Object.keys(snapshot.model_index).length);
   for (const provider of snapshot.providers) {
     const endpoints = new Set(provider.endpoints.map((endpoint) => endpoint.id));
     assert.ok(provider.endpoints.length > 0, provider.id);
@@ -116,7 +221,7 @@ test("declared provider models retain distinct public and native upstream ids", 
 test("capabilities can share a non-literal endpoint without losing unified routes", () => {
   const snapshot = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   const gateway = snapshot.providers.find((provider) => provider.id === "cloudflare-ai-gateway");
-  assert.deepEqual(gateway.capabilities.map(({ id, endpoint }) => [id, endpoint]), [["llm.chat", "universal"], ["llm.responses", "universal"]]);
+  assert.deepEqual(gateway.capabilities.map(({ id, endpoint }) => [id, endpoint]), [["llm.messages", "messages"], ["llm.chat", "universal"], ["llm.responses", "universal"]]);
   assert.deepEqual(gateway.models[0].capabilities, ["llm.chat", "llm.responses"]);
 });
 
@@ -126,7 +231,7 @@ test("quota header sources must retain their declared array shape", () => {
   try {
     const invalid = readFileSync("providers/openai.provider.yaml", "utf8").replace("limitHeaders: [x-ratelimit-limit-requests]", "limitHeaders: x-ratelimit-limit-requests");
     writeFileSync(manifest, invalid);
-    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/limitHeaders:/);
+    assert.throws(() => compile(manifest), /invalid manifest:.*\/limitHeaders:/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -138,9 +243,9 @@ test("quota metric scales and probe requirements reject invalid manifest values"
   const source = readFileSync("providers/anthropic.provider.yaml", "utf8");
   try {
     writeFileSync(manifest, source.replace("metricScale: 100", "metricScale: 0"));
-    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/metricScale:/);
+    assert.throws(() => compile(manifest), /invalid manifest:.*\/metricScale:/);
     writeFileSync(manifest, source.replace("requiresRefreshToken: true", "requiresRefreshToken: refresh"));
-    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/requiresRefreshToken:/);
+    assert.throws(() => compile(manifest), /invalid manifest:.*\/requiresRefreshToken:/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -154,7 +259,7 @@ test("reasoning effort metadata rejects empty, duplicate, and unsupported values
   try {
     for (const value of cases) {
       writeFileSync(manifest, source.replace("[none, low, medium, high, xhigh, max]", value));
-      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/supportedReasoningEfforts/);
+      assert.throws(() => compile(manifest), /invalid manifest:.*\/supportedReasoningEfforts/);
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -177,7 +282,7 @@ test("service tier compilation rejects ambiguous, incomplete, and drifting rate 
     for (const [from, to, expected] of cases) {
       assert.ok(source.includes(from));
       writeFileSync(manifest, source.replace(from, to));
-      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), expected);
+      assert.throws(() => compile(manifest), expected);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
@@ -191,13 +296,13 @@ test("grant transport endpoint restrictions require unique own endpoint names", 
   try {
     for (const value of ["responses", "[]", "[responses, responses]", "[missing_endpoint]", "[null]", "[1]", "[[responses]]", "[toString]", "[constructor]"]) {
       writeFileSync(manifest, source.replace(anchor, `allowedEndpoints: ${value}`));
-      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /allowedEndpoints/);
+      assert.throws(() => compile(manifest), /allowedEndpoints/);
     }
     writeFileSync(manifest, source);
-    const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8" }));
+    const compiled = compile(manifest);
     assert.deepEqual(compiled.providers[0].auth.grantTransports.subscription.allowedEndpoints, ["responses"]);
     writeFileSync(manifest, source.replace(`      ${anchor}\n`, ""));
-    const unrestricted = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8" }));
+    const unrestricted = compile(manifest);
     assert.equal("allowedEndpoints" in unrestricted.providers[0].auth.grantTransports.subscription, false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -214,12 +319,12 @@ test("Codex model aliases require an explicit nonempty native slug", () => {
   try {
     for (const value of ['""', '" "', "null", "42", "[gpt-5.6-sol]"]) {
       writeFileSync(manifest, source.replace(anchor, `codexModel: ${value}`));
-      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /codexModel/);
+      assert.throws(() => compile(manifest), /codexModel/);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("ordinary pricing cards reject invalid schema fields before emitting a snapshot", () => {
+test("ordinary pricing cards reject invalid schema fields", () => {
   const valid = parse(readFileSync("providers/deepseek.provider.yaml", "utf8"));
   const rateFields = ["inputMicrosPerMillion", "outputMicrosPerMillion", "cachedInputMicrosPerMillion", "cacheWriteInputMicrosPerMillion", "cacheWrite5mInputMicrosPerMillion", "cacheWrite1hInputMicrosPerMillion"];
   const cases = [
@@ -234,6 +339,11 @@ test("ordinary pricing cards reject invalid schema fields before emitting a snap
     ["unsafe input limit", (pricing) => { pricing.maxInputTokens = Number.MAX_SAFE_INTEGER + 1; }],
     ["negative output limit", (pricing) => { pricing.defaultMaxOutputTokens = -1; }],
     ["negative overhead", (pricing) => { pricing.inputTokenOverhead = -1; }],
+    ["unknown unpriced cost", (pricing) => { pricing.unpricedCosts = ["unknown_fee"]; }],
+    ["empty unpriced costs", (pricing) => { pricing.unpricedCosts = []; }],
+    ["duplicate unpriced costs", (pricing) => { pricing.unpricedCosts = ["request_fee", "request_fee"]; }],
+    ["unpriced cost scalar", (pricing) => { pricing.unpricedCosts = "request_fee"; }],
+    ...["invoice_exact", null, [], {}].map(value => ["invalid settlement basis", (pricing) => { pricing.settlementBasis = value; }]),
     ["unknown field", (pricing) => { pricing.inputMicrosPerToken = 1; }],
     ["partial long-context card", (pricing) => { pricing.longContext = { thresholdInputTokens: 100, inputMicrosPerMillion: 1 }; }],
     ["unsafe long-context rate", (pricing) => { pricing.longContext = { thresholdInputTokens: 100, inputMicrosPerMillion: Number.MAX_SAFE_INTEGER + 1, outputMicrosPerMillion: 1 }; }],
@@ -243,20 +353,21 @@ test("ordinary pricing cards reject invalid schema fields before emitting a snap
       const manifest = structuredClone(valid);
       mutate(manifest.models.entries[0].pricing);
       writeFileSync(path, JSON.stringify(manifest));
-      assert.throws(() => compile(path), (error) => {
-        assert.equal(error.stdout, "", name);
-        assert.match(error.stderr, /provider deepseek invalid manifest:.*#\/models\/entries\/0\/pricing/);
-        return true;
-      }, name);
+      assert.throws(() => compile(path), /provider deepseek invalid manifest:.*#\/models\/entries\/0\/pricing/, name);
     }
     for (const value of [".inf", ".nan"]) {
-      writeFileSync(path, readFileSync("providers/deepseek.provider.yaml", "utf8").replace("inputMicrosPerMillion: 435000", `inputMicrosPerMillion: ${value}`));
+      const source = readFileSync("providers/deepseek.provider.yaml", "utf8"), anchor = "inputMicrosPerMillion: 1320000";
+      assert.ok(source.includes(anchor));
+      writeFileSync(path, source.replace(anchor, `inputMicrosPerMillion: ${value}`));
       assert.throws(() => compile(path), /invalid manifest:.*\/inputMicrosPerMillion:/);
     }
     const pricing = valid.models.entries[0].pricing;
-    Object.assign(pricing, { effectiveAt: "2028-02-29", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, defaultMaxOutputTokens: 0 });
+    Object.assign(pricing, { effectiveAt: "2028-02-29", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, defaultMaxOutputTokens: 0, unpricedCosts: ["request_fee"] });
     writeFileSync(path, JSON.stringify(valid));
-    assert.equal(JSON.parse(compile(path)).providers[0].models[0].pricing.outputMicrosPerMillion, 0);
+    const snapshot = compile(path);
+    assert.equal(snapshot.providers[0].models[0].pricing.outputMicrosPerMillion, 0);
+    assert.deepEqual(snapshot.providers[0].models[0].pricing.unpricedCosts, ["request_fee"]);
+    assert.deepEqual(Object.values(snapshot.model_index)[0].pricing.unpricedCosts, ["request_fee"]);
   });
 });
 
@@ -265,6 +376,7 @@ test("canonical schema validates root, endpoint and auth shapes without hiding r
   const cases = [
     ["null root", () => null, /invalid manifest: #:/],
     ["unknown root field", (manifest) => ({ ...manifest, display_name: "wrong field" }), /invalid manifest: #:/],
+    ["unsupported fixture metadata", (manifest) => ({ ...manifest, tests: { fixtures: [] } }), /invalid manifest: #:/],
     ["missing endpoint format", (manifest) => { delete manifest.endpoints.chat_completions.requestFormat; return manifest; }, /invalid manifest:.*\/endpoints\/chat_completions:/],
     ["missing bearer header", (manifest) => { delete manifest.auth.schemes[0].header; return manifest; }, /invalid manifest:.*\/auth\/schemes\/0/],
     ["unknown auth field", (manifest) => { manifest.auth.schemes[0].token = "fixture"; return manifest; }, /invalid manifest:.*\/auth\/schemes\/0/],
@@ -282,11 +394,180 @@ test("canonical schema validates root, endpoint and auth shapes without hiding r
 });
 
 function compile(path) {
-  return execFileSync(process.execPath, ["scripts/compile-providers.mjs", path], { encoding: "utf8", stdio: "pipe" });
+  return compileProviderSnapshot([parse(readFileSync(path, "utf8"))]);
 }
+
+test("speech character cards round-trip without token defaults and reject incompatible contracts", () => {
+  const valid = parse(readFileSync("providers/openai.provider.yaml", "utf8"));
+  const index = valid.models.entries.findIndex(model => model.id === "openai/tts-1");
+  assert.ok(index >= 0);
+  withManifest(path => {
+    writeFileSync(path, JSON.stringify(valid));
+    const compiled = compile(path), provider = compiled.providers[0];
+    const model = provider.models.find(model => model.id === "openai/tts-1");
+    assert.deepEqual(model.pricing, valid.models.entries[index].pricing);
+    assert.deepEqual(compiled.model_index[model.id], { provider: "openai", ...Object.fromEntries(Object.entries(model).filter(([key]) => key !== "id")) });
+    assert.deepEqual(model.capabilities, ["audio.speech"]);
+    assert.deepEqual(provider.auth.grantTransports.subscription.allowedEndpoints, ["responses"]);
+    const endpoint = provider.endpoints.find(endpoint => endpoint.id === "speech");
+    assert.equal(endpoint.request_format, "openai.audio_speech"); assert.equal(endpoint.response_format, "audio.binary");
+    assert.equal(endpoint.path, "/v1/audio/speech"); assert.equal(endpoint.streaming, "audio");
+    assert.equal(endpoint.modelPassthrough, undefined); assert.equal(endpoint.websocket, undefined);
+    for (const [name, change] of [
+      ["negative rate", model => { model.pricing.inputMicrosPerMillionCharacters = -1; }],
+      ["unsafe rate", model => { model.pricing.inputMicrosPerMillionCharacters = Number.MAX_SAFE_INTEGER + 1; }],
+      ["missing rate", model => { delete model.pricing.inputMicrosPerMillionCharacters; }],
+      ["token field", model => { model.pricing.outputMicrosPerMillion = 0; }],
+      ["wrong bound", model => { model.pricing.maxInputCharacters = 4097; }],
+      ["wrong unit", model => { model.pricing.unit = "token"; }],
+      ["missing provenance", model => { delete model.pricing.source; }],
+      ["wrong operation", model => { model.capabilities = ["llm.chat"]; }],
+    ]) {
+      const manifest = structuredClone(valid); change(manifest.models.entries[index]);
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), /invalid manifest|character pricing requires/, name);
+    }
+    valid.endpoints.speech.responseFormat = "openai.audio_speech";
+    writeFileSync(path, JSON.stringify(valid));
+    assert.throws(() => compile(path), /character pricing requires/, "JSON speech requests require a distinct binary response contract");
+  });
+});
+
+test("opaque model contracts validate endpoint-compatible pricing without template inheritance", () => {
+  const valid = parse(readFileSync("providers/local-openai.provider.yaml", "utf8"));
+  withManifest((path) => {
+    writeFileSync(path, JSON.stringify(valid));
+    const provider = compile(path).providers[0];
+    assert.deepEqual(provider.endpoints[0].modelPassthrough, { pricing_ref: provider.models[0].pricing_ref, pricing: provider.models[0].pricing });
+    const cases = [
+      ["boolean contract", (manifest) => { manifest.endpoints.chat_completions.modelPassthrough = true; }, /invalid manifest/],
+      ["unknown contract field", (manifest) => { manifest.endpoints.chat_completions.modelPassthrough.model = "fixture"; }, /invalid manifest/],
+      ["missing reference", (manifest) => { manifest.endpoints.chat_completions.modelPassthrough.pricingRef = "missing"; }, /pricingRef must resolve/],
+      ["unpriced reference", (manifest) => { delete manifest.models.entries[0].pricing; }, /pricingRef must resolve/],
+      ["duplicate reference", (manifest) => { manifest.models.entries.push({ ...manifest.models.entries[0], id: "local/duplicate", upstream: "duplicate" }); }, /pricingRef must resolve/],
+      ["incompatible model", (manifest) => { manifest.models.entries[0].capabilities = []; }, /pricingRef must resolve/],
+      ["undeclared model capability", (manifest) => { manifest.models.entries[0].capabilities = ["missing"]; }, /references missing capability/],
+    ];
+    for (const [name, mutate, expected] of cases) {
+      const manifest = structuredClone(valid);
+      mutate(manifest);
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), expected, name);
+    }
+  });
+});
+
+test("custom manifests keep known models and migrate opaque routing with an explicit endpoint declaration", async () => {
+  const { prepareNativeRequest } = await import("../proxy-selection.ts");
+  const manifest = parse(readFileSync("providers/deepseek.provider.yaml", "utf8"));
+  delete manifest.endpoints.chat_completions.modelPassthrough;
+  withManifest((path) => {
+    writeFileSync(path, JSON.stringify(manifest));
+    const previous = compile(path).providers[0];
+    const endpoint = previous.endpoints.find(({ id }) => id === "chat_completions");
+    const known = prepareNativeRequest(previous, endpoint, { model: previous.models[0].id, messages: [] }, endpoint.path, {});
+    assert.deepEqual(known.model, previous.models[0]);
+    assert.throws(() => prepareNativeRequest(previous, endpoint, { model: "fixture-unlisted", messages: [] }, endpoint.path, {}), (error) => error.code === "model_capability_unsupported");
+
+    manifest.endpoints.chat_completions.modelPassthrough = {};
+    writeFileSync(path, JSON.stringify(manifest));
+    const migrated = compile(path).providers[0];
+    const declared = migrated.endpoints.find(({ id }) => id === endpoint.id);
+    assert.deepEqual(prepareNativeRequest(migrated, declared, { model: known.model.id, messages: [] }, declared.path, {}), known);
+    const opaque = prepareNativeRequest(migrated, declared, { model: "fixture-unlisted", messages: [] }, declared.path, {});
+    assert.deepEqual(opaque.body, { model: "fixture-unlisted", messages: [] });
+    assert.deepEqual(opaque.model, { id: "fixture-unlisted", upstream: "fixture-unlisted", capabilities: ["llm.chat"], pricing_ref: null, pricing: null });
+  });
+});
 
 function withManifest(run) {
   const directory = mkdtempSync(join(tmpdir(), "clawrouter-provider-"));
   try { run(join(directory, "provider.yaml")); }
   finally { rmSync(directory, { recursive: true, force: true }); }
 }
+
+test("request parameter facts validate endpoint compatibility, provenance, and reasoning defaults", () => {
+  const valid = parse(readFileSync("providers/openai.provider.yaml", "utf8"));
+  const model = (manifest) => manifest.models.entries.find(({ id }) => id === "openai/gpt-5.4");
+  const rules = (manifest) => model(manifest).requestParameters.chat_completions;
+  const cases = [
+    ["unknown endpoint", (m) => { model(m).requestParameters.missing = rules(m); }, /supported endpoint/],
+    ["incompatible endpoint", (m) => { model(m).requestParameters.embeddings = rules(m); }, /supported endpoint/],
+    ["wrong wire format", (m) => { m.endpoints.chat_completions.requestFormat = "native.chat"; }, /wire format/],
+    ["unsupported default", (m) => { rules(m).defaultReasoningEffort = "max"; }, /default effort/],
+    ["missing effort domain", (m) => { delete model(m).supportedReasoningEfforts; }, /default effort/],
+    ["unknown predicate", (m) => { rules(m).temperature = "sometimes"; }, /invalid manifest/],
+    ["unknown dimension", (m) => { rules(m).customPath = "$.input"; }, /invalid manifest/],
+    ["missing source", (m) => { delete rules(m).sources; }, /invalid manifest/],
+    ["empty sources", (m) => { rules(m).sources = []; }, /invalid manifest/],
+    ["insecure source", (m) => { rules(m).sources = ["http://provider.example/docs"]; }, /invalid manifest/],
+    ["invalid date", (m) => { rules(m).checkedAt = "2026-02-29"; }, /invalid manifest/],
+  ];
+  withManifest((path) => {
+    for (const [name, mutate, expected] of cases) {
+      const manifest = structuredClone(valid);
+      mutate(manifest);
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), expected, name);
+    }
+    for (const entry of valid.models.entries) delete entry.requestParameters;
+    writeFileSync(path, JSON.stringify(valid));
+    assert.ok(compile(path).providers[0].models.every((entry) => !("requestParameters" in entry)));
+  });
+});
+
+test("image tariffs round-trip without chat rates and reject unqualified generation and edit contracts", () => {
+  const valid=parse(readFileSync("providers/openai.provider.yaml","utf8"));
+  const index=valid.models.entries.findIndex(m=>m.id==="openai/gpt-image-2.5-flare");
+  withManifest(path=>{
+    writeFileSync(path,JSON.stringify(valid));
+    const provider=compile(path).providers[0],model=provider.models.find(m=>m.id==="openai/gpt-image-2.5-flare");
+    assert.deepEqual(model.pricing,valid.models.entries[index].pricing);
+    assert.equal(Object.hasOwn(model.pricing,"outputMicrosPerMillion"),false);
+    for(const [name,mutate] of [
+      ["negative rate",m=>{m.models.entries[index].pricing.textInputMicrosPerMillion=-1;}],
+      ["missing rate",m=>{delete m.models.entries[index].pricing.imageOutputMicrosPerMillion;}],
+      ["unpriced generation",m=>{delete m.models.entries[index].pricing;}],
+      ["missing provenance",m=>{delete m.models.entries[index].pricing.generation.source;}],
+      ["unbounded count",m=>{m.models.entries[index].pricing.generation.maxImages=11;}],
+      ["inverted pixels",m=>{m.models.entries[index].pricing.generation.minPixels=8294400;m.models.entries[index].pricing.generation.maxPixels=655360;}],
+      ["unsafe reservation",m=>{m.models.entries[index].pricing.imageOutputMicrosPerMillion=Number.MAX_SAFE_INTEGER;}],
+      ["chat tariff",m=>{m.models.entries[index].pricing.outputMicrosPerMillion=1;}],
+      ["wrong operation",m=>{m.models.entries[index].capabilities=["llm.chat"];}],
+      ["SSE",m=>{m.endpoints.images_generations.streaming="sse";}],
+      ["wrong response format",m=>{m.endpoints.images_generations.responseFormat="openai.responses";}],
+      ["edit SSE",m=>{m.endpoints.images_edits.streaming="sse";}],
+      ["edit wrong request format",m=>{m.endpoints.images_edits.requestFormat="openai.responses";}],
+      ["edit wrong response format",m=>{m.endpoints.images_edits.responseFormat="openai.responses";}],
+      ["edit-only missing tariff",m=>{m.models.entries[index].capabilities=["image.edit"];delete m.models.entries[index].pricing;}],
+    ]){const manifest=structuredClone(valid);mutate(manifest);writeFileSync(path,JSON.stringify(manifest));assert.throws(()=>compile(path),/invalid manifest|image pricing|image generation requires/,name);}
+  });
+});
+
+test("free moderation request format belongs only to the OpenAI provider", () => {
+  const endpoint = parse(readFileSync("providers/openai.provider.yaml", "utf8")).endpoints.moderations;
+  const manifest = {
+    schema: "clawrouter.service-provider.v1", id: "openai", displayName: "Fixture provider",
+    auth: { schemes: [{ type: "bearer", header: "Authorization", format: "Bearer ${secret}", secretKind: "api_key" }] },
+    baseUrls: { default: "https://provider.example" },
+    capabilities: [{ id: "llm.moderations", endpoint: "moderations", methods: ["POST"] }],
+    endpoints: { moderations: endpoint },
+  };
+  withManifest(path => {
+    writeFileSync(path, JSON.stringify(manifest));
+    const allowed = compile(path).providers[0];
+    assert.equal(allowed.id, "openai");
+    assert.equal(allowed.endpoints[0].request_format, "openai.moderations");
+    manifest.id = "fixture-paid-moderation";
+    writeFileSync(path, JSON.stringify(manifest));
+    assert.throws(() => compile(path), /openai\.moderations requires provider openai/);
+    // Other providers retain their own contracts; a compatible response alone
+    // does not opt into OpenAI's free request tariff or grant restrictions.
+    manifest.endpoints.moderations.requestFormat = "fixture.moderations";
+    writeFileSync(path, JSON.stringify(manifest));
+    const distinct = compile(path).providers[0];
+    assert.equal(distinct.id, "fixture-paid-moderation");
+    assert.equal(distinct.endpoints[0].request_format, "fixture.moderations");
+    assert.equal(distinct.endpoints[0].response_format, "openai.moderations");
+  });
+});

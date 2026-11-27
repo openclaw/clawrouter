@@ -1,0 +1,17 @@
+{
+  "qualification": { "live": false, "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7", "ledgerValuesAreSynthetic": true, "upstreamCostMicros": null, "resultUrlsGrantNoAuthority": true },
+  "requests": {
+    "image": { "model": "grok-imagine", "body": { "prompt": "A blue paper boat", "model": "text-to-image" } },
+    "video": { "model": "veo3", "body": { "prompt": "A paper boat moving across still water" } },
+    "kling": { "model": "kling", "body": { "prompt": "Apply the reference motion", "image_url": "https://assets.example/character.png", "video_url": "https://assets.example/motion.mp4" } },
+    "speech": { "model": "elevenlabs/tts", "body": { "text": "A short synthetic fixture.", "voice_id": "21m00Tcm4TlvDq8ikWAM" } }
+  },
+  "submitted": { "jobId": "fixture_video_1", "status": "pending", "creditsCharged": 50, "externalJobId": "opaque_upstream_1" },
+  "partial": { "id": "fixture_video_1", "status": "running", "output": { "videoUrl": "https://assets.example/partial.mp4" } },
+  "completed": { "id": "fixture_video_1", "status": "completed", "output": { "videoUrl": "https://assets.example/final.mp4" }, "creditsCharged": 50 },
+  "failed": { "id": "fixture_video_1", "status": "failed", "error": { "code": "PROCESSING_ERROR" }, "creditsRefunded": 50, "refundStatus": "completed" },
+  "canceled": { "id": "fixture_video_1", "status": "cancelled" },
+  "image": { "jobId": "fixture_image_1", "status": "completed", "imageUrl": "https://assets.example/image.png", "resultUrls": ["https://assets.example/image.png"], "creditsCharged": 50 },
+  "speech": { "audioUrl": "https://assets.example/speech.mp3" },
+  "wire": { "videoCreateStatus": 202, "unaryStatus": 200, "retrieveMethod": "GET", "retrievePath": "/api/v1/jobs/fixture_video_1", "cancelQualified": false, "resultHeaders": {} }
+}

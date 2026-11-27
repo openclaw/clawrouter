@@ -1,0 +1,6 @@
+{
+  "qualification": "Synthetic custom-host compatibility fixture; no live host, account, model availability or billing proof.",
+  "grant": { "selectedBaseUrl": "https://example.com/api/v1", "chatImagesQualified": true },
+  "request": { "model": "google/gemini-3.1-flash-image-preview", "messages": [{ "role": "user", "content": "Draw a blue square." }], "modalities": ["image", "text"], "n": 1, "image_config": { "aspect_ratio": "1:1", "image_size": "1K" } },
+  "result": { "model": "google/gemini-3.1-flash-image-preview", "choices": [{ "index": 0, "finish_reason": "stop", "message": { "role": "assistant", "content": "A blue square.", "images": [{ "image_url": { "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY9kAAAAASUVORK5CYII=" } }] } }], "usage": { "prompt_tokens": 9, "completion_tokens": 100, "cost": 0.04 } }
+}

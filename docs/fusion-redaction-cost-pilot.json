@@ -1,0 +1,572 @@
+{
+  "schema": "fusion-redaction-cost-pilot-v1",
+  "date": "2026-11-27",
+  "caseCount": 3,
+  "repetitions": 3,
+  "modelCalls": 36,
+  "productionQualified": false,
+  "repository": "davidmarkclements/fast-redact",
+  "cases": [
+    {
+      "id": "fast-redact-3e93d32777d2",
+      "base": "74e09b2b3538692c5a4eb404dad429ee3efec633",
+      "oracle": "3e93d32777d2a59eaf5e05e6c463201a5f4f8a2c",
+      "publicAssertions": 424,
+      "fullAssertions": 434
+    },
+    {
+      "id": "fast-redact-f3e9f13b26a8",
+      "base": "f71a23d3bc0714efe33c912d8c8dafb9af0fa8a3",
+      "oracle": "f3e9f13b26a8b1bfa57e344a21d1f79fa575d708",
+      "publicAssertions": 417,
+      "fullAssertions": 423
+    },
+    {
+      "id": "fast-redact-59b84b2fa2be",
+      "base": "a325e20edb80212483ebe5c0daf9bc66d5fb2d3e",
+      "oracle": "59b84b2fa2be57b66a7679cdbd696e58e4eaba5e",
+      "publicAssertions": 414,
+      "fullAssertions": 417
+    }
+  ],
+  "protocolSha256": "9c9c3e82e7f523189b23453d6a9ffbf654b171a747f2687ea19abfbae243af83",
+  "resultSha256": "58dfba55dc42494b0450062ce78e28b03cc24acc120cfc6c640a838859041b92",
+  "summary": {
+    "cascade": {
+      "passed": 4,
+      "falseAccepts": 0,
+      "rescues": 4,
+      "costMicros": 255409,
+      "meanWorkflowMs": 17908.361022888887
+    },
+    "strong": {
+      "passed": 3,
+      "falseAccepts": 0,
+      "rescues": 0,
+      "costMicros": 233401,
+      "meanWorkflowMs": 10579.77110666666
+    },
+    "compact": {
+      "passed": 3,
+      "falseAccepts": 0,
+      "rescues": 0,
+      "costMicros": 200847,
+      "meanWorkflowMs": 13251.583384333338
+    }
+  },
+  "records": [
+    {
+      "caseIndex": 0,
+      "repeat": 0,
+      "strategy": "cascade",
+      "publicPassed": true,
+      "fullPassed": true,
+      "costMicros": 27331,
+      "workflowMs": 11461.470083,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 2109,
+          "elapsedMs": 1801.6329999999998,
+          "publicPassed": false
+        },
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 25222,
+          "elapsedMs": 5800.493624999999,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 0,
+      "strategy": "strong",
+      "publicPassed": true,
+      "fullPassed": true,
+      "costMicros": 25267,
+      "workflowMs": 8894.773833,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 25267,
+          "elapsedMs": 6930.036959000001,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 0,
+      "strategy": "compact",
+      "publicPassed": true,
+      "fullPassed": true,
+      "costMicros": 22336,
+      "workflowMs": 14020.589834000002,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 22336,
+          "elapsedMs": 11961.653417000001,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 1,
+      "strategy": "strong",
+      "publicPassed": true,
+      "fullPassed": true,
+      "costMicros": 24872,
+      "workflowMs": 7118.531999999999,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 24872,
+          "elapsedMs": 5060.7094579999975,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 1,
+      "strategy": "compact",
+      "publicPassed": true,
+      "fullPassed": true,
+      "costMicros": 22506,
+      "workflowMs": 13408.092791999996,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 22506,
+          "elapsedMs": 11467.482917000001,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 1,
+      "strategy": "cascade",
+      "publicPassed": true,
+      "fullPassed": true,
+      "costMicros": 27607,
+      "workflowMs": 18567.692417,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 2445,
+          "elapsedMs": 7228.874333,
+          "publicPassed": false
+        },
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 25162,
+          "elapsedMs": 7356.730582999997,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 2,
+      "strategy": "compact",
+      "publicPassed": true,
+      "fullPassed": true,
+      "costMicros": 21646,
+      "workflowMs": 9468.96162500001,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 21646,
+          "elapsedMs": 7454.075499999992,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 2,
+      "strategy": "cascade",
+      "publicPassed": true,
+      "fullPassed": true,
+      "costMicros": 27471,
+      "workflowMs": 14847.354583000008,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 2109,
+          "elapsedMs": 3008.0503330000065,
+          "publicPassed": false
+        },
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 25362,
+          "elapsedMs": 7941.561833999993,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 2,
+      "strategy": "strong",
+      "publicPassed": true,
+      "fullPassed": true,
+      "costMicros": 24962,
+      "workflowMs": 7424.882582999999,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 24962,
+          "elapsedMs": 5476.522792000003,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 0,
+      "strategy": "cascade",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 29004,
+      "workflowMs": 19293.439790999997,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 2280,
+          "elapsedMs": 5210.914042000004,
+          "publicPassed": false
+        },
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 26724,
+          "elapsedMs": 10064.767332999996,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 0,
+      "strategy": "strong",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 26789,
+      "workflowMs": 12144.859166999988,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 26789,
+          "elapsedMs": 10260.075458000007,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 0,
+      "strategy": "compact",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 23397,
+      "workflowMs": 14535.172833000019,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 23397,
+          "elapsedMs": 12575.337874999997,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 1,
+      "strategy": "strong",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 27129,
+      "workflowMs": 12757.158750000002,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 27129,
+          "elapsedMs": 10766.784249999997,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 1,
+      "strategy": "compact",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 22707,
+      "workflowMs": 12302.380249999987,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 22707,
+          "elapsedMs": 10127.826333000005,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 1,
+      "strategy": "cascade",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 30264,
+      "workflowMs": 25324.723915999988,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 2355,
+          "elapsedMs": 6365.5794590000005,
+          "publicPassed": false
+        },
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 27909,
+          "elapsedMs": 14478.630082999996,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 2,
+      "strategy": "compact",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 23927,
+      "workflowMs": 18712.912458000006,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 23927,
+          "elapsedMs": 16621.34387499999,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 2,
+      "strategy": "cascade",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 30023,
+      "workflowMs": 25929.884166999982,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 2364,
+          "elapsedMs": 6464.828041000001,
+          "publicPassed": false
+        },
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 27659,
+          "elapsedMs": 15369.96341700002,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 2,
+      "strategy": "strong",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 26314,
+      "workflowMs": 12722.291334000009,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 26314,
+          "elapsedMs": 10408.274042000005,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 0,
+      "strategy": "cascade",
+      "publicPassed": true,
+      "fullPassed": true,
+      "costMicros": 28481,
+      "workflowMs": 18524.22983300002,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 2235,
+          "elapsedMs": 5585.35579099998,
+          "publicPassed": false
+        },
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 26246,
+          "elapsedMs": 9041.265958000033,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 0,
+      "strategy": "strong",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 26171,
+      "workflowMs": 11996.786334000004,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 26171,
+          "elapsedMs": 10018.541874999995,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 0,
+      "strategy": "compact",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 21146,
+      "workflowMs": 10485.982707999996,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 21146,
+          "elapsedMs": 8608.157332999981,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 1,
+      "strategy": "strong",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 26331,
+      "workflowMs": 12256.965166999958,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 26331,
+          "elapsedMs": 10114.794791999971,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 1,
+      "strategy": "compact",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 21991,
+      "workflowMs": 12886.145667000033,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 21991,
+          "elapsedMs": 10864.781166,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 1,
+      "strategy": "cascade",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 27667,
+      "workflowMs": 13877.34454099997,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 2066,
+          "elapsedMs": 3341.825292000023,
+          "publicPassed": false
+        },
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 25601,
+          "elapsedMs": 6643.498332999996,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 2,
+      "strategy": "compact",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 21191,
+      "workflowMs": 13444.012292,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 21191,
+          "elapsedMs": 10490.995124999958,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 2,
+      "strategy": "cascade",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 27561,
+      "workflowMs": 13349.109875000024,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 2065,
+          "elapsedMs": 3305.252167000028,
+          "publicPassed": false
+        },
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 25496,
+          "elapsedMs": 6214.719499999948,
+          "publicPassed": false
+        }
+      ]
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 2,
+      "strategy": "strong",
+      "publicPassed": false,
+      "fullPassed": false,
+      "costMicros": 25566,
+      "workflowMs": 9901.69079199998,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 25566,
+          "elapsedMs": 7489.466040999978,
+          "publicPassed": false
+        }
+      ]
+    }
+  ]
+}

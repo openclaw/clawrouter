@@ -1,3 +1,5 @@
+export { sessionPolicyIdentity } from "../access.ts";
+
 export async function verifiedAccessSession() {
   return {
     authenticated: true,

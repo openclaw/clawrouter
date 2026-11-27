@@ -1,0 +1,177 @@
+import { CompactionWitnessProducer } from "./compaction-witness.ts";
+import { authorityCall } from "./authority.ts";
+import type { ContinuationOwner, EvidenceFinalization, PricingEvidence } from "./continuation-store.ts";
+import type { PinnedGrant } from "./grant-eligibility.ts";
+import type { ProxySelection } from "./proxy-selection.ts";
+import { createResponseIdentityInspector, responseIdentity, type ResponseIdentity } from "./response-identities.ts";
+import { createResponsesToolEvidence, retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
+import { responseOutcome } from "./token-usage.ts";
+import type { AuthorizedIdentity, Env } from "./types.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
+import type { WebSocketContinuationPin, WebSocketContinuationWitnesses } from "./websocket-continuation-witnesses.ts";
+
+export function continuationRestart(): HttpError {
+  return new HttpError(409, "continuation_restart_required", "continuation owner is unavailable or changed; restart with full input and omit previous_response_id and x-codex-turn-state");
+}
+
+export class HttpContinuation {
+  readonly requested: boolean;
+  readonly pinned?: PinnedGrant;
+  readonly parentTools: ToolKnowledge;
+  private readonly env: Env;
+  private readonly scope: string;
+  private readonly signal: AbortSignal;
+  private readonly previous: ContinuationOwner | null;
+  private readonly evidence = new Map<ResponseIdentity["kind"], string>();
+  private publishedCount = 0;
+  private owner?: ContinuationOwner;
+  private readonly producerId = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
+  private readonly tools: ReturnType<typeof createResponsesToolEvidence>;
+  private claim: "owned" | "legacy_unknown" | undefined;
+  private qualificationAttempted = false;
+  private finalEvidence?: PricingEvidence;
+  private witnesses?: CompactionWitnessProducer;
+  private backgroundJobId?: string;
+
+  private constructor(env: Env, scope: string, requested: boolean, owner: ContinuationOwner | null, parentTools: ToolKnowledge, base: ToolKnowledge, signal: AbortSignal) {
+    this.env = env; this.scope = scope; this.requested = requested; this.previous = owner;
+    this.signal = signal;
+    // Admission consumes only the resolved parent, never this response's later
+    // output or the current input folded into the next producer's proof.
+    this.parentTools = parentTools;
+    this.tools = createResponsesToolEvidence(base);
+    // Environment routes are pinned too: current pool availability cannot prove
+    // which credential produced an earlier response.
+    this.pinned = !requested ? undefined : owner?.grantKey && owner.lineage
+      ? { key: owner.grantKey, lineage: owner.lineage } : { key: null, revision: null };
+  }
+
+  static async resolve(request: Request, selection: ProxySelection, auth: AuthorizedIdentity, env: Env, transport: "http" | "websocket" = "http", socket?: { witnesses: WebSocketContinuationWitnesses; pin?: WebSocketContinuationPin }): Promise<HttpContinuation | undefined> {
+    if (!["llm.responses", "llm.responses.compact"].includes(selection.capability) || Array.isArray(selection.body)) return undefined;
+    const metadata = transport === "websocket" ? selection.body.client_metadata : null;
+    const headerTurn = responseIdentity("turn", request.headers.get("x-codex-turn-state"));
+    // Codex reconnects with full input and only this metadata token. Conflicting
+    // carriers must never discard an owner check or consume another pool account.
+    const metadataTurn = responseIdentity("turn", metadata && typeof metadata === "object" && !Array.isArray(metadata) ? (metadata as Record<string, unknown>)["x-codex-turn-state"] : null);
+    if (headerTurn && metadataTurn && headerTurn.value !== metadataTurn.value) throw continuationRestart();
+    const identities = [responseIdentity("response", selection.body.previous_response_id), headerTurn ?? metadataTurn].filter((value): value is ResponseIdentity => !!value);
+    const scope = await continuationScope(auth);
+    let owner: ContinuationOwner | null = null;
+    let inherited: ToolKnowledge = identities.some(identity => identity.kind === "response") ? "unknown" : "token_only";
+    if (identities.length) {
+      const endpointId = selection.capability === "llm.responses.compact" ? selection.provider.capabilities.find(capability => capability.id === "llm.responses")?.endpoint : selection.endpoint.id;
+      const witnessed = transport === "websocket" && endpointId ? socket?.witnesses.resolve(identities, scope, auth.policy.generation, selection.provider.id, endpointId, socket.pin) : undefined;
+      const { owners, evidence } = witnessed ?? await call<{ owners: Array<ContinuationOwner | null>; evidence?: Array<PricingEvidence | null> }>(env, scope, { action: "resolve", keys: await Promise.all(identities.map(identityKey)) });
+      owner = owners[0] ?? null;
+      if (!owner || owners.some(value => !value || JSON.stringify(value) !== JSON.stringify(owner)) || owner.providerId !== selection.provider.id || owner.endpointId !== endpointId || owner.policyGeneration !== auth.policy.generation) throw continuationRestart();
+      const previous = evidence?.[identities.findIndex(identity => identity.kind === "response")];
+      if (previous?.state === "final") inherited = previous.knowledge;
+    }
+    const base = retainedToolBase(selection.body, inherited);
+    const continuation = new HttpContinuation(env, scope, identities.length > 0, owner, inherited, base, request.signal);
+    if (transport === "http" && selection.provider.id === "openai" && typeof selection.body.model === "string") continuation.witnesses = new CompactionWitnessProducer(env, scope, auth, selection.body.model, selection.body, base);
+    return continuation;
+  }
+
+  bind(owner: ContinuationOwner): void {
+    if (this.previous && JSON.stringify(this.previous) !== JSON.stringify(owner)) throw continuationRestart();
+    this.owner = owner;
+    this.witnesses?.bind(owner);
+  }
+
+  background(id: string): void { this.backgroundJobId = id; }
+
+  preflightError(error: unknown): unknown {
+    // Both transports must explain how to restart when a resolved owner can no
+    // longer prepare the request. Other authorization and budget errors retain their cause.
+    return this.requested && error instanceof HttpError && ["upstream_grant_pool_unavailable", "upstream_grant_changed", "grant_reauthorization_required", "grant_refresh_failed", "grant_refresh_at_risk", "grant_refresh_persist_failed", "grant_disabled", "grant_credential_missing", "provider_not_configured", "grant_transport_unavailable"].includes(error.code)
+      ? continuationRestart() : error;
+  }
+
+  async headers(response: Response): Promise<void> {
+    const identity = responseIdentity("turn", response.headers.get("x-codex-turn-state"));
+    if (identity) this.remember(identity);
+    await this.flush();
+  }
+
+  async publish(identities: readonly ResponseIdentity[]): Promise<void> {
+    for (const identity of identities) this.remember(identity);
+    await this.flush();
+  }
+
+  async publishFrame(identities: readonly ResponseIdentity[], frame: Record<string, unknown>): Promise<void> {
+    await this.publish(identities);
+    if (this.signal.aborted) return;
+    if (responseOutcome(frame) === "provider_error") this.tools.invalid();
+    this.tools.accept(frame, true);
+    await this.qualify();
+  }
+
+  rememberWebSocket(witnesses: WebSocketContinuationWitnesses, pin: WebSocketContinuationPin): void {
+    if (!this.owner || !this.finalEvidence || this.signal.aborted) return;
+    witnesses.remember(this.scope, this.owner, pin, [...this.evidence].map(([kind, value]) => ({ kind, value })), this.finalEvidence);
+  }
+
+  inspect(response: Response, compact = false) {
+    const type = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (!type.includes("json") && !type.includes("text/event-stream")) return undefined;
+    const scanner = createResponseIdentityInspector(type.includes("text/event-stream"), identity => { if (!compact) this.remember(identity); });
+    let ended = false;
+    return {
+      push: async (bytes: Uint8Array) => { scanner.push(bytes); await this.flush(); },
+      end: async () => { scanner.end(); await this.flush(); ended = true; },
+      tools: { ...this.tools, ...(this.witnesses ? { witness: { accept: (value: unknown, sse: boolean) => this.witnesses!.observe(value, sse), invalid: () => this.witnesses!.invalidate() } } : {}) },
+      qualify: async () => { if (!compact) await this.qualify(); if (ended) await this.witnesses?.finish(this.signal); },
+    };
+  }
+
+  private remember(identity: ResponseIdentity): void {
+    const previous = this.evidence.get(identity.kind);
+    if (previous && previous !== identity.value) throw new HttpError(502, "continuation_identity_conflict", "upstream changed its continuation identity");
+    this.evidence.set(identity.kind, identity.value);
+  }
+
+  private async flush(): Promise<void> {
+    if (!this.owner || this.evidence.size === this.publishedCount) return;
+    const keys = await Promise.all([...this.evidence].map(([kind, value]) => identityKey({ kind, value })));
+    const response = this.evidence.get("response"), responseClaim = response ? { key: await identityKey({ kind: "response", value: response }), producerId: this.producerId } : undefined;
+    const { outcome, claim } = await call<{ outcome: string; claim?: "owned" | "legacy_unknown" }>(this.env, this.scope, { action: "register", keys, owner: this.owner, responseClaim, ...(this.backgroundJobId && responseClaim ? { backgroundJobId: this.backgroundJobId, backgroundResponseId: response } : {}) });
+    if (outcome !== "stored" || responseClaim && claim !== "owned" && claim !== "legacy_unknown") throw unavailable();
+    if (responseClaim) this.claim = claim;
+    this.publishedCount = this.evidence.size;
+  }
+
+  private async qualify(): Promise<void> {
+    const proof = this.tools.result();
+    if (this.qualificationAttempted || !proof || !this.owner || !this.claim || this.signal.aborted) return;
+    this.qualificationAttempted = true;
+    if (this.claim === "legacy_unknown") return;
+    if (proof.responseId !== this.evidence.get("response")) throw unavailable();
+    const key = await identityKey({ kind: "response", value: proof.responseId });
+    if (this.signal.aborted) return;
+    let result: EvidenceFinalization;
+    try {
+      result = await authorityCall<EvidenceFinalization>(this.env, "/http-continuations", { action: "qualify", keys: [key], owner: this.owner, responseClaim: { key, producerId: this.producerId }, knowledge: proof.knowledge }, this.scope, AbortSignal.timeout(5000));
+    } catch {
+      // An acknowledged claim already owns this identity. A lost proof ACK
+      // leaves pending/unknown or this producer's committed final fact, never
+      // another producer's proof. Delivery and financial accounting still run.
+      return;
+    }
+    // Semantic CAS conflicts must not fall into the transient RPC catch above.
+    if (result.outcome !== "qualified" && result.outcome !== "unavailable") throw unavailable();
+    if (result.outcome === "qualified") this.finalEvidence = { version: 1, producerId: this.producerId, state: "final", knowledge: proof.knowledge };
+  }
+}
+
+function unavailable(): HttpError { return new HttpError(503, "continuation_unavailable", "upstream continuation ownership could not be recorded; restart with full input"); }
+
+export async function continuationScope(auth: AuthorizedIdentity): Promise<string> {
+  return `http-continuations:${await sha256Hex(JSON.stringify([auth.authType, auth.policy.tenantId ?? "default", auth.policyId, auth.credentialId, auth.principalId]))}`;
+}
+export async function identityKey(identity: ResponseIdentity): Promise<string> { return sha256Hex(JSON.stringify([identity.kind, identity.value])); }
+async function call<T>(env: Env, scope: string, body: unknown): Promise<T> {
+  try { return await authorityCall<T>(env, "/http-continuations", body, scope, AbortSignal.timeout(5000)); }
+  catch { throw new HttpError(503, "continuation_unavailable", "continuation authority is unavailable; retry later with full input"); }
+}

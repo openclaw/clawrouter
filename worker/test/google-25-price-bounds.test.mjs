@@ -1,0 +1,78 @@
+import "./typescript-setup.mjs";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { registerGooglePriceBoundDispatchCases } from "./google-price-bound-dispatch-cases.mjs";
+import { parse } from "yaml";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
+const { prepareManifestRequest } = await import("../proxy-selection.ts");
+const { estimateCost } = await import("../proxy-accounting.ts");
+const { actualModelCost } = await import("../pricing.ts");
+const { validateBudgetReservation } = await import("../accounting.ts");
+const source = compileProviderSnapshot([parse(readFileSync(new URL("../../providers/google-gemini.provider.yaml", import.meta.url), "utf8"))]);
+const provider = source.providers[0], endpoint = provider.endpoints.find(row => row.id === "generate_content");
+const amounts = { "gemini-2.5-pro": [2875, 1500, 5175], "gemini-2.5-flash": [800, 425, 1440] };
+const models = Object.keys(amounts).map(id => provider.models.find(model => model.upstream === id));
+const plain = { contents: [{ role: "user", parts: [{ text: "fixture" }] }] };
+const tokens = { input: 1000, cached: 500, output: 100, cacheWrite: 0, cacheWrite5m: 0, cacheWrite1h: 0 };
+
+test("two frozen deprecated Gemini 2.5 identities retain native selection, qualified bounds and the original default", () => {
+  assert.equal(provider.models[0].upstream, "gemini-3.5-flash");
+  for (const model of models) for (const id of ["generate_content", "stream_generate_content"]) {
+    const route = provider.endpoints.find(row => row.id === id), facts = model.nativeCapabilities.endpoints[id];
+    const body = { ...plain, tools: [{ functionDeclarations: [{ name: "googleSearch", parameters: { type: "OBJECT" } }] }] };
+    const selected = prepareManifestRequest(provider, route, body, { model: model.upstream }, {}, true);
+    assert.equal(selected.model.id, model.id); assert.equal(selected.pathParams.model, model.upstream);
+    assert.deepEqual(selected.body, body); assert.equal(Object.hasOwn(selected.body, "model"), false);
+    assert.deepEqual(facts.input, ["text", "image", "video", "audio"]);
+    assert.equal(facts.contextWindow, 1048576); assert.equal(facts.maxOutputTokens, 65536);
+    assert.equal(facts.checkedAt, "2026-11-03");
+    assert.equal(model.availability.status, "deprecated");
+    assert.equal(model.availability.checkedAt, "2026-11-03");
+    assert.equal(Object.hasOwn(model.availability, "servingModel"), false);
+    assert.equal(model.pricing.settlementBasis, "published_upper_bound");
+    assert.deepEqual(source.model_index[model.id].pricing, model.pricing);
+    if (id === "stream_generate_content") assert.deepEqual(route.query, { alt: "sse" });
+  }
+});
+
+test("Gemini 2.5 high-context and audio ceilings preserve served-tier cache rates, including unchanged Flex cache prices", () => {
+  for (const model of models) {
+    for (const [index, serviceTier] of ["standard", "flex", "priority"].entries()) {
+      assert.equal(actualModelCost(model.pricing, { ...tokens, serviceTier }, endpoint.request_format), amounts[model.upstream][index]);
+      const media = { contents: [{ parts: [{ inlineData: { mimeType: "audio/wav", data: "Zml4dHVyZQ==" } }] }],
+        serviceTier, generationConfig: { maxOutputTokens: 100, candidateCount: 2 } };
+      const estimate = estimateCost(model, media, null, "llm.generate", endpoint);
+      assert.equal(estimate.basis, "manifest_pricing");
+      assert.equal(estimate.inputTokens, 1048576); assert.equal(estimate.outputTokens, 200);
+      const actual = actualModelCost(model.pricing, { ...tokens, input: 1048576, cached: 0, output: 200, serviceTier }, endpoint.request_format);
+      assert.ok(actual !== null && estimate.reserveMicros >= actual);
+    }
+    assert.equal(actualModelCost(model.pricing, { ...tokens, serviceTier: "future" }, endpoint.request_format), null);
+  }
+  for (const model of models) {
+    const [standard, flex] = model.pricing.serviceTiers;
+    assert.equal(flex.cachedInputMicrosPerMillion, standard.cachedInputMicrosPerMillion);
+    assert.equal(flex.inputMicrosPerMillion, standard.inputMicrosPerMillion / 2);
+  }
+});
+
+test("Gemini 2.5 plain client functions stay priced while hosted tools, explicit stored context and unknown tiers remain closed", () => {
+  for (const model of models) {
+    const body = { ...plain, tools: [{ functionDeclarations: [{ name: "googleSearch", parameters: { type: "OBJECT", properties: { codeExecution: { type: "STRING" } } } }] }] };
+    const known = estimateCost(model, body, null, "llm.generate", endpoint);
+    for (const [limit, providerLimit] of [[100000000, null], [null, 100000000]]) {
+      const connection = { providerId: provider.id, monthlyBudgetMicros: providerLimit };
+      assert.equal(validateBudgetReservation("llm.generate", known, limit, connection), true);
+      for (const extra of [{ tools: [{ googleSearch: {} }] }, { tools: [{ code_execution: {} }] },
+        { cachedContent: "cachedContents/fixture" }, { serviceTier: "contributor" }, { service_tier: "future" }]) {
+        const request = { ...plain, ...extra };
+        assert.throws(() => validateBudgetReservation("llm.generate", estimateCost(model, request, null, "llm.generate", endpoint), limit, connection), error => error.code === "pricing_required");
+        const fixed = estimateCost(model, request, 17, "llm.generate", endpoint);
+        assert.equal(fixed.basis, "policy_fixed"); assert.equal(fixed.reserveMicros, 17);
+      }
+    }
+  }
+});
+
+registerGooglePriceBoundDispatchCases({ provider, models, amounts, plain });

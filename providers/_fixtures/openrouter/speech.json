@@ -1,0 +1,13 @@
+{
+  "requests": [
+    { "model": "hexgrad/kokoro-82m", "input": "Synthetic speech sample.", "voice": "af_alloy", "response_format": "mp3", "provider": { "zdr": true, "data_collection": "deny" } },
+    { "model": "elevenlabs/eleven-turbo-v2", "input": "Synthetic speech sample.", "voice": "synthetic_voice", "response_format": "mp3" },
+    { "model": "google/gemini-3.1-flash-tts-preview", "input": "Synthetic speech sample.", "voice": "Kore", "response_format": "pcm" },
+    { "model": "mistralai/voxtral-mini-tts-2603", "input": "Synthetic speech sample.", "voice": "synthetic_voice", "response_format": "pcm" }
+  ],
+  "responses": {
+    "mp3": { "status": 200, "headers": { "content-type": "audio/mpeg", "x-generation-id": "gen-synthetic-speech" }, "bytes": [73, 68, 51, 4, 0, 0] },
+    "pcm": { "status": 200, "headers": { "content-type": "audio/pcm", "x-generation-id": "gen-synthetic-pcm" }, "bytes": [0, 0, 1, 0, 255, 127] }
+  },
+  "note": "Synthetic transport bytes and placeholder voices; not acoustic quality, model availability, voice existence or live billing proof."
+}

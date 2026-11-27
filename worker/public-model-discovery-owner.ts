@@ -1,0 +1,56 @@
+import { grantOwnerIdentity, qualifiedApiKeyOwner } from "./grant-owner-facts.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
+import { inspectGrantCredentials } from "./grant-credentials.ts";
+import { discoveryAllows } from "./model-discovery-request.ts";
+import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./model-discovery-formats.ts";
+import type { ProxySelection } from "./proxy-selection.ts";
+import type { UpstreamAuth } from "./providers.ts";
+import { authorizeResponseControl, assertControlCallerLive, publicControlAuthorization } from "./response-control-authorization.ts";
+import type { AuthorizedIdentity, Env } from "./types.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
+
+export function assertPublicDiscoveryEnvelope(value: unknown): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).some(name => !["method", "body", "query", "pathParams"].includes(name)))
+    throw new HttpError(400, "invalid_model_discovery", "public catalog envelopes accept only the declared bodyless operation");
+}
+
+// No inference headers or credential bytes cross the public leaf ABI.
+export async function preparePublicDiscoveryOwner(request: Request, env: Env, auth: AuthorizedIdentity,
+  selection: ProxySelection, upstream: UpstreamAuth) {
+  if (new URL(request.url).search)
+    throw new HttpError(400, "invalid_model_discovery", "public catalog requests do not accept caller query parameters");
+  const { provider, endpoint } = selection, grant = upstream.grant, key = upstream.grantKey;
+  const providerId = publicCatalogProvider(endpoint.request_format);
+  if (!providerId || provider.id !== providerId || endpoint.response_format !== endpoint.request_format || !key || !qualifiedApiKeyOwner(grant, provider.id)
+    || selection.capability !== "models.list" || selection.model !== null || endpoint.path !== "/models"
+    || manifestOnlyPublicCatalog(endpoint.request_format) && endpoint.id !== "public_models"
+    || selection.method !== "GET" || endpoint.method !== "GET" || endpoint.path_params.length || Object.keys(selection.pathParams).length
+    || endpoint.auth != null || endpoint.upstreamPath !== undefined || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
+    || endpoint.inputProfile !== undefined || endpoint.requestPricing !== undefined || endpoint.modelPassthrough
+    || Object.keys(selection.body).length || Object.keys(endpoint.query).length
+    || upstream.query.size || upstream.transport !== null) unavailable();
+  const identity = grantOwnerIdentity(grant);
+  const caller = publicControlAuthorization(auth);
+  const owner = { providerId, endpointId: endpoint.id, grantKey: key, lineage: grant.credentialLineage!,
+    routeSha256: await sha256Hex(JSON.stringify([providerId, endpoint.id, endpoint.request_format, upstream.baseUrl])),
+    policyGeneration: auth.policy.generation };
+  // A refresh may narrow this frozen finite set; it cannot add account offers.
+  const permittedModelIds = new Set(provider.models.filter(model => discoveryAllows(auth.policy, provider, model.upstream)).map(model => model.upstream));
+  let currentPolicy = auth.policy;
+  const allows = (id: string) => permittedModelIds.has(id) && discoveryAllows(currentPolicy, provider, id);
+  const revalidateAccount = async (signal: AbortSignal) => {
+    const policy = await authorizeResponseControl(env, caller, owner, signal);
+    const current = await inspectGrantCredentials(env, key, signal);
+    signal.throwIfAborted(); assertControlCallerLive(caller);
+    if (!policy || !qualifiedApiKeyOwner(current, providerId) || grantOwnerIdentity(current) !== identity
+      || !filterGrantCandidates(providerId, [{ key, grant: current, runtimeState: null }], new Set(),
+        grantRoutingPolicy(policy.grantRouting), key, undefined, Date.now()).available.length) unavailable();
+    currentPolicy = policy;
+  };
+  return { providerId, inferenceBaseUrl: upstream.baseUrl, revalidateAccount, allows, permittedModelIds };
+}
+
+function unavailable(): never { throw new HttpError(503, "model_discovery_owner_unavailable", "the original catalog caller, credential or destination is unavailable"); }

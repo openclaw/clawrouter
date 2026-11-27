@@ -1,0 +1,787 @@
+{
+  "schema": "fusion-transfer-study-v1",
+  "date": "2026-11-27",
+  "scope": "Development evidence: five non-H2 task identities, two attempts each, no certified unseen evaluation. Both policies share each compact output. No fallback or mixed-model rescue occurred.",
+  "model": "openai/gpt-6.1-terra",
+  "reasoningEffort": "low",
+  "priceUsdPerMillionTokens": {
+    "input": 1,
+    "output": 5
+  },
+  "priceSource": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+  "cases": [
+    {
+      "id": "http1-error",
+      "label": "HTTP/1 socket error",
+      "taskUrl": "https://github.com/nodejs/undici/commit/1e0bea9fb57720118866fe4b6ce3fb9263596add",
+      "briefSource": "https://github.com/nodejs/undici/pull/6255",
+      "expectedPublicTests": 5,
+      "expectedFullTests": 6,
+      "expectedSkipLabels": [],
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "tests": 6,
+          "failures": 0,
+          "skipped": 0
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "tests": 5,
+          "failures": 0,
+          "skipped": 0
+        },
+        "baseFull": {
+          "valid": true,
+          "passed": false,
+          "tests": 6,
+          "failures": 5,
+          "skipped": 0
+        },
+        "basePublic": {
+          "valid": true,
+          "passed": false,
+          "tests": 5,
+          "failures": 5,
+          "skipped": 0
+        }
+      },
+      "protocolSha256": "84b957f87aaab047451f0f0db2183679db48adcf491a978a37afc2643ec900a1",
+      "auditSha256": "f96fbaa58dc48b1e954ba36ae7de5c2bd5a7edd14ab7b310a9f3912ded625980",
+      "resultSha256": "722f302e61608fb960f141720d656deb2bee40385d8d0f05eca673df0d588434",
+      "dependencyBytes": 68530,
+      "pairs": [
+        {
+          "pair": 0,
+          "sharedPrefix": "pair-0/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 23709,
+          "elapsedMs": 5051.345125,
+          "usage": {
+            "uncachedInputTokens": 22679,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 206
+          },
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 5,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrades": {
+            "fusion": {
+              "valid": true,
+              "passed": true,
+              "tests": 6,
+              "failures": 0,
+              "skipped": 0
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 6,
+              "failures": 0,
+              "skipped": 0
+            }
+          },
+          "workflowMs": {
+            "fusion": 7510.327791,
+            "full": 7510.324915999996
+          },
+          "fallbackCalls": 0
+        },
+        {
+          "pair": 1,
+          "sharedPrefix": "pair-1/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 23779,
+          "elapsedMs": 4914.742042,
+          "usage": {
+            "uncachedInputTokens": 22679,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 220
+          },
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 5,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrades": {
+            "fusion": {
+              "valid": true,
+              "passed": true,
+              "tests": 6,
+              "failures": 0,
+              "skipped": 0
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 6,
+              "failures": 0,
+              "skipped": 0
+            }
+          },
+          "workflowMs": {
+            "fusion": 7208.894917,
+            "full": 7208.893
+          },
+          "fallbackCalls": 0
+        }
+      ],
+      "newCalls": 2,
+      "newEstimatedCostMicros": 47488,
+      "summary": {
+        "fusion": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 47488
+        },
+        "full": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 47488
+        },
+        "costRatio": 1,
+        "medianPairedTimeRatio": 1.0000003243639455,
+        "mixedRescues": 0,
+        "economySignal": false,
+        "sharedPrefixChargedToEachPolicy": true,
+        "independentTasks": 1,
+        "repetitions": 2,
+        "productionQualified": false
+      }
+    },
+    {
+      "id": "cache-rollback",
+      "label": "Cache batch rollback",
+      "taskUrl": "https://github.com/nodejs/undici/commit/161e78eb364b80d0db5235ec9eff1ba862de6a93",
+      "briefSource": "https://github.com/nodejs/undici/pull/6245",
+      "expectedPublicTests": 4,
+      "expectedFullTests": 5,
+      "expectedSkipLabels": [],
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "tests": 5,
+          "failures": 0,
+          "skipped": 0
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "tests": 4,
+          "failures": 0,
+          "skipped": 0
+        },
+        "baseFull": {
+          "valid": true,
+          "passed": false,
+          "tests": 5,
+          "failures": 3,
+          "skipped": 0
+        },
+        "basePublic": {
+          "valid": true,
+          "passed": false,
+          "tests": 4,
+          "failures": 3,
+          "skipped": 0
+        }
+      },
+      "protocolSha256": "be2addb87a2a95281d849658cb2e923f19c5ba96988b9684f935ffb51c129572",
+      "auditSha256": "2d5a4ddd510c56a8e9c00806dabf88c16af3463d208da5654719bc96a7605a6c",
+      "resultSha256": "4559309997a23b6ac33de1d2eb97aa019a5ae10639cbb3ecea2f65d6d21c243b",
+      "dependencyBytes": 67200,
+      "pairs": [
+        {
+          "pair": 0,
+          "sharedPrefix": "pair-0/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 11493,
+          "elapsedMs": 2554.600584,
+          "usage": {
+            "uncachedInputTokens": 11163,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 66
+          },
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 4,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrades": {
+            "fusion": {
+              "valid": true,
+              "passed": true,
+              "tests": 5,
+              "failures": 0,
+              "skipped": 0
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 5,
+              "failures": 0,
+              "skipped": 0
+            }
+          },
+          "workflowMs": {
+            "fusion": 5153.875250000001,
+            "full": 5153.873625000002
+          },
+          "fallbackCalls": 0
+        },
+        {
+          "pair": 1,
+          "sharedPrefix": "pair-1/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 11493,
+          "elapsedMs": 2082.7525830000004,
+          "usage": {
+            "uncachedInputTokens": 11163,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 66
+          },
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 4,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrades": {
+            "fusion": {
+              "valid": true,
+              "passed": true,
+              "tests": 5,
+              "failures": 0,
+              "skipped": 0
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 5,
+              "failures": 0,
+              "skipped": 0
+            }
+          },
+          "workflowMs": {
+            "fusion": 4049.116417000001,
+            "full": 4049.1132080000007
+          },
+          "fallbackCalls": 0
+        }
+      ],
+      "newCalls": 2,
+      "newEstimatedCostMicros": 22986,
+      "summary": {
+        "fusion": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 22986
+        },
+        "full": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 22986
+        },
+        "costRatio": 1,
+        "medianPairedTimeRatio": 1.0000005539080181,
+        "mixedRescues": 0,
+        "economySignal": false,
+        "sharedPrefixChargedToEachPolicy": true,
+        "independentTasks": 1,
+        "repetitions": 2,
+        "productionQualified": false
+      }
+    },
+    {
+      "id": "socks-ipv6",
+      "label": "SOCKS IPv6 hosts",
+      "taskUrl": "https://github.com/nodejs/undici/commit/789001cdb570ae6fef93bcd18e3d65d13fc5ace6",
+      "briefSource": "https://github.com/nodejs/undici/pull/6243",
+      "expectedPublicTests": 39,
+      "expectedFullTests": 42,
+      "expectedSkipLabels": [
+        "Socks5ProxyAgent - HTTPS connection"
+      ],
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "tests": 42,
+          "failures": 0,
+          "skipped": 1
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "tests": 39,
+          "failures": 0,
+          "skipped": 1
+        },
+        "baseFull": {
+          "valid": true,
+          "passed": false,
+          "tests": 42,
+          "failures": 4,
+          "skipped": 1
+        },
+        "basePublic": {
+          "valid": true,
+          "passed": false,
+          "tests": 39,
+          "failures": 4,
+          "skipped": 1
+        }
+      },
+      "protocolSha256": "8629e665446cf1a3d70ca1529a550fe482bd54a2767cdb00b757f910e248d969",
+      "auditSha256": "cfca85d2a962da8f86c2d0db948afdab30ea983ebbb81a4b7f0fae5a9f852821",
+      "resultSha256": "110ee0d520a927e5ef6bd9860a06fcc95b83ae58a6b9e2ae28042d957fd1309c",
+      "dependencyBytes": 68439,
+      "pairs": [
+        {
+          "pair": 0,
+          "sharedPrefix": "pair-0/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 23740,
+          "elapsedMs": 8921.617917,
+          "usage": {
+            "uncachedInputTokens": 20545,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 639
+          },
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 39,
+            "failures": 0,
+            "skipped": 1
+          },
+          "fullGrades": {
+            "fusion": {
+              "valid": true,
+              "passed": true,
+              "tests": 42,
+              "failures": 0,
+              "skipped": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 42,
+              "failures": 0,
+              "skipped": 1
+            }
+          },
+          "workflowMs": {
+            "fusion": 13261.529500999999,
+            "full": 13261.529083
+          },
+          "fallbackCalls": 0
+        },
+        {
+          "pair": 1,
+          "sharedPrefix": "pair-1/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 24245,
+          "elapsedMs": 9697.943583000002,
+          "usage": {
+            "uncachedInputTokens": 20545,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 740
+          },
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 39,
+            "failures": 0,
+            "skipped": 1
+          },
+          "fullGrades": {
+            "fusion": {
+              "valid": true,
+              "passed": true,
+              "tests": 42,
+              "failures": 0,
+              "skipped": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 42,
+              "failures": 0,
+              "skipped": 1
+            }
+          },
+          "workflowMs": {
+            "fusion": 13965.858208000001,
+            "full": 13965.857541000001
+          },
+          "fallbackCalls": 0
+        }
+      ],
+      "newCalls": 2,
+      "newEstimatedCostMicros": 47985,
+      "summary": {
+        "fusion": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 47985
+        },
+        "full": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 47985
+        },
+        "costRatio": 1,
+        "medianPairedTimeRatio": 1.000000039639537,
+        "mixedRescues": 0,
+        "economySignal": false,
+        "sharedPrefixChargedToEachPolicy": true,
+        "independentTasks": 1,
+        "repetitions": 2,
+        "productionQualified": false
+      }
+    },
+    {
+      "id": "fetch-abort",
+      "label": "Falsy fetch abort reasons",
+      "taskUrl": "https://github.com/nodejs/undici/commit/5d7f657451f7b813d33513b4a1c46f923db63113",
+      "briefSource": "https://github.com/nodejs/undici/issues/6231",
+      "expectedPublicTests": 13,
+      "expectedFullTests": 16,
+      "expectedSkipLabels": [],
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "tests": 16,
+          "failures": 0,
+          "skipped": 0
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "tests": 13,
+          "failures": 0,
+          "skipped": 0
+        },
+        "baseFull": {
+          "valid": true,
+          "passed": false,
+          "tests": 16,
+          "failures": 5,
+          "skipped": 0
+        },
+        "basePublic": {
+          "valid": true,
+          "passed": false,
+          "tests": 13,
+          "failures": 5,
+          "skipped": 0
+        }
+      },
+      "protocolSha256": "1fe64bd408c0ae7829b2c5aa1e09b987bc07a90851960fb782045d36b31ad3dd",
+      "auditSha256": "921c5964091e239242161b2f7bd6db8fe03b245c731780917b4453a6f0d18055",
+      "resultSha256": "2a5f6a09c56c942d0b25c0c55aa6536ba1b2c4ac4c29176603508c132b35405b",
+      "dependencyBytes": 74224,
+      "pairs": [
+        {
+          "pair": 0,
+          "sharedPrefix": "pair-0/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 32742,
+          "elapsedMs": 3933.3443750000006,
+          "usage": {
+            "uncachedInputTokens": 31982,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 152
+          },
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 13,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrades": {
+            "fusion": {
+              "valid": true,
+              "passed": true,
+              "tests": 16,
+              "failures": 0,
+              "skipped": 0
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 16,
+              "failures": 0,
+              "skipped": 0
+            }
+          },
+          "workflowMs": {
+            "fusion": 6837.498333,
+            "full": 6837.496501
+          },
+          "fallbackCalls": 0
+        },
+        {
+          "pair": 1,
+          "sharedPrefix": "pair-1/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 32497,
+          "elapsedMs": 2668.2541249999995,
+          "usage": {
+            "uncachedInputTokens": 31982,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 103
+          },
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 13,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrades": {
+            "fusion": {
+              "valid": true,
+              "passed": true,
+              "tests": 16,
+              "failures": 0,
+              "skipped": 0
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 16,
+              "failures": 0,
+              "skipped": 0
+            }
+          },
+          "workflowMs": {
+            "fusion": 4820.364001,
+            "full": 4820.360917
+          },
+          "fallbackCalls": 0
+        }
+      ],
+      "newCalls": 2,
+      "newEstimatedCostMicros": 65239,
+      "summary": {
+        "fusion": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 65239
+        },
+        "full": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 65239
+        },
+        "costRatio": 1,
+        "medianPairedTimeRatio": 1.000000453860221,
+        "mixedRescues": 0,
+        "economySignal": false,
+        "sharedPrefixChargedToEachPolicy": true,
+        "independentTasks": 1,
+        "repetitions": 2,
+        "productionQualified": false
+      }
+    },
+    {
+      "id": "tls-servername",
+      "label": "TLS server-name switching",
+      "taskUrl": "https://github.com/nodejs/undici/commit/6b22aba1b0f54e2cebe39c198e718c2157fa3fbb",
+      "briefSource": "https://github.com/nodejs/undici/pull/6233",
+      "expectedPublicTests": 2,
+      "expectedFullTests": 6,
+      "expectedSkipLabels": [],
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "tests": 6,
+          "failures": 0,
+          "skipped": 0
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "tests": 2,
+          "failures": 0,
+          "skipped": 0
+        },
+        "baseFull": {
+          "valid": true,
+          "passed": false,
+          "tests": 6,
+          "failures": 6,
+          "skipped": 0
+        },
+        "basePublic": {
+          "valid": true,
+          "passed": false,
+          "tests": 2,
+          "failures": 2,
+          "skipped": 0
+        }
+      },
+      "protocolSha256": "417981a7221c378567813732dd9df65dfd5b6b9ae1df310b1a209fbcc8548e95",
+      "auditSha256": "0410d0b31abdbaa342b7989175094f440fe28eaef6b083731fcdce491c1066f1",
+      "resultSha256": "3c83388f17d5dcb70691ba84e33ec02200c71bdf8c95980d18abb7b5b99b94f7",
+      "dependencyBytes": 74868,
+      "pairs": [
+        {
+          "pair": 0,
+          "sharedPrefix": "pair-0/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 13206,
+          "elapsedMs": 5935.909916,
+          "usage": {
+            "uncachedInputTokens": 10991,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 443
+          },
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 2,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrades": {
+            "fusion": {
+              "valid": true,
+              "passed": true,
+              "tests": 6,
+              "failures": 0,
+              "skipped": 0
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 6,
+              "failures": 0,
+              "skipped": 0
+            }
+          },
+          "workflowMs": {
+            "fusion": 8285.395248999997,
+            "full": 8285.394833
+          },
+          "fallbackCalls": 0
+        },
+        {
+          "pair": 1,
+          "sharedPrefix": "pair-1/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 13306,
+          "elapsedMs": 6303.581375000002,
+          "usage": {
+            "uncachedInputTokens": 10991,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 463
+          },
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 2,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrades": {
+            "fusion": {
+              "valid": true,
+              "passed": true,
+              "tests": 6,
+              "failures": 0,
+              "skipped": 0
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 6,
+              "failures": 0,
+              "skipped": 0
+            }
+          },
+          "workflowMs": {
+            "fusion": 9341.531959000004,
+            "full": 9341.532416999999
+          },
+          "fallbackCalls": 0
+        }
+      ],
+      "newCalls": 2,
+      "newEstimatedCostMicros": 26512,
+      "summary": {
+        "fusion": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 26512
+        },
+        "full": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 26512
+        },
+        "costRatio": 1,
+        "medianPairedTimeRatio": 1.000000000590237,
+        "mixedRescues": 0,
+        "economySignal": false,
+        "sharedPrefixChargedToEachPolicy": true,
+        "independentTasks": 1,
+        "repetitions": 2,
+        "productionQualified": false
+      }
+    }
+  ],
+  "newCalls": 10,
+  "newEstimatedCostMicros": 210210,
+  "previousCampaignSpentOrReservedMicros": 325929855,
+  "campaignSpentOrReservedMicros": 326140065,
+  "campaignBudgetMicros": 400000000,
+  "productionQualified": false
+}

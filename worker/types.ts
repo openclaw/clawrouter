@@ -1,92 +1,35 @@
-export interface ProviderSnapshot {
-  version: string;
-  providers: CompiledProvider[];
-  capability_index: Record<string, Array<{ provider: string; endpoint: string; methods: string[] }>>;
-  model_index: Record<string, { provider: string; upstream: string; codexModel?: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; pricing_ref: string | null; pricing: ModelPricing | null }>;
-}
+import type { GrantKind, GrantQuotaKind } from "../shared/provider-snapshot.ts";
+import type { MiniMaxAnthropicBinding } from "./minimax-anthropic-binding.ts";
+import type {LargeHttpEnv} from './large-http/admission.ts';
+import type { GrantRoutingPolicy, GrantAccount, GrantExtraUsage, GrantLane, BudgetOverride } from "../shared/contracts";
+export type { GrantSelectionStrategy, GrantStickiness, GrantRoutingPolicy, ProviderConnection, GrantAccount, GrantExtraUsage, GrantLane, BudgetOverride, PolicyBinding } from "../shared/contracts";
+export type { ModelRequestParameters, ProviderReasoningEffort } from "../shared/model-request-parameters";
 
-export interface CompiledProvider {
-  id: string; display_name: string; status: string; class: string; service_platform: string; service_kind: string;
-  config_keys: string[]; optional_config_keys: string[]; auth: { schemes: AuthScheme[]; authorization: AuthorizationConfig | null; refresh: RefreshConfig | null; grantTransports: Record<string, CompiledGrantTransport> };
-  auth_schemes: string[]; base_urls: Record<string, string>; routing: { nativePrefixes: string[]; modelPrefixes: string[]; baseUrlParam: string | null; serviceParam: string | null };
-  native_prefixes: string[]; adapter: { request: string | null; response: string | null; stream: string | null; error: string | null; passthroughHeaders: string[]; injectHeaders: Record<string, string>; injectQuery: Record<string, string>; requestTransforms: { renameFields: Array<{ from: string; to: string; paths: string[]; upstreams: string[]; upstreamConfig: string | null }> } };
-  capabilities: Array<{ id: string; endpoint: string; methods: string[] }>;
-  endpoints: CompiledEndpoint[]; models: CompiledModel[]; billing: { meter: string | null; dimensions: string[]; counters: Array<{ name: string; source: string; unit?: string | null }> }; meter: string | null;
-  quota: CompiledQuotaConfig;
-}
+export type ProxyRequestBody = Record<string, unknown> | Record<string, unknown>[];
 
-export type GrantQuotaKind = "requests" | "tokens" | "input_tokens" | "output_tokens" | "credits" | "subscription" | "generic";
-export interface CompiledQuotaWindow {
-  id: string;
-  kind: GrantQuotaKind;
-  unit: string | null;
-  window: string | null;
-  limitHeaders: string[];
-  remainingHeaders: string[];
-  usedHeaders: string[];
-  resetHeaders: string[];
-  fixedLimit: number | null;
-  metricScale: number;
-}
-export interface CompiledQuotaProbeWindow {
-  id: string;
-  kind: GrantQuotaKind;
-  unit: string | null;
-  window: string | null;
-  limitPointer: string | null;
-  remainingPointer: string | null;
-  usedPointer: string | null;
-  resetPointer: string | null;
-  fixedLimit: number | null;
-  metricScale: number;
-}
-export interface CompiledQuotaProbe {
-  grantKinds: Array<NonNullable<UpstreamGrant["kind"]>>;
-  requiresRefreshToken: boolean;
-  url: string;
-  method: "GET" | "POST";
-  headers: Record<string, string>;
-  windows: CompiledQuotaProbeWindow[];
-}
-export interface CompiledQuotaConfig { responseHeaders: CompiledQuotaWindow[]; probes: CompiledQuotaProbe[] }
+export type {
+  ProviderSnapshot,
+  CompiledProvider,
+  GrantQuotaKind,
+  CompiledQuotaWindow,
+  CompiledQuotaProbeWindow,
+  CompiledQuotaProbe,
+  CompiledQuotaConfig,
+  GrantTransportAuth,
+  CompiledGrantTransport,
+  AuthScheme,
+  AuthorizationConfig,
+  RefreshConfig,
+  CompiledModel,
+  OutputTokenLimit,
+  ToolPricing,
+  CompiledEndpoint,
+  GrantKind,
+} from "../shared/provider-snapshot.ts";
+export type { TokenRates, LongContextPricing, ServiceTierPricing, TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing } from "../shared/contracts";
 
-export type GrantTransportAuth =
-  | { type: "bearer"; header: string; format: string }
-  | { type: "api_key"; header: string }
-  | { type: "query_api_key"; param: string };
-export interface CompiledGrantTransport {
-  baseUrl: string | null;
-  auth: GrantTransportAuth | null;
-  endpointPaths: Record<string, string>;
-  allowedEndpoints?: string[];
-  headers: Record<string, string>;
-  appendHeaders: Record<string, string>;
-  requestTransforms: { prependSystem: Array<{ type: "text"; text: string }> };
-  maintenance: {
-    quotaPoll: { normalIntervalSeconds: number; urgentIntervalSeconds: number; exhaustedIntervalSeconds: number; urgentRemainingPercent: number } | null;
-    keepWarm: { defaultEnabled: boolean; intervalSeconds: number; endpoint: string; body: Record<string, unknown> } | null;
-  };
-}
-
-export type AuthScheme =
-  | { type: "bearer"; header: string; format: string; secretKind: string; required: boolean }
-  | { type: "api_key"; header: string; secretKind: string }
-  | { type: "query_api_key"; param: string; secretKind: string }
-  | { type: "oauth"; provider: string | null; scopes: string[]; tokenRef: string | null }
-  | { type: "sig_v4"; service: string; regionParam: string | null }
-  | { type: "cloudflare_binding" };
-
-export interface AuthorizationConfig { authorizeUrl: string; tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; scopes: string[]; grantKind: string; extraAuthorizeParams: Record<string, string>; extraTokenParams: Record<string, string>; accountIdJsonPointer: string | null; subscriptionPlanJsonPointer: string | null }
-export interface RefreshConfig { tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; requestFormat: "form" | "json"; extraParams: Record<string, string> }
-export interface TokenRates { inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null }
-export interface LongContextPricing extends TokenRates { thresholdInputTokens: number }
-export interface ServiceTierPricing extends TokenRates { id: string; aliases: string[]; maxInputTokens: number | null; longContext: LongContextPricing | null }
-export interface ModelPricing extends TokenRates { effectiveAt: string; source: string; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null; serviceTiers?: ServiceTierPricing[] }
-export type ProviderReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-export interface CompiledModel { id: string; upstream: string; codexModel?: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; pricing_ref: string | null; pricing: ModelPricing | null }
-export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; websocket?: "openai.responses"; timeout_ms: number | null }
-
-export interface Env {
+export interface Env extends LargeHttpEnv {
+  CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
   // Object bindings, never generic provider environment strings or grant-pool entries.
   PRIVATE_CODEX_POLICY?: { get(): Promise<string> };
   PRIVATE_CODEX_UPSTREAM?: { get(): Promise<string> };
@@ -97,6 +40,7 @@ export interface Env {
   GRANT_CREDENTIALS: DurableObjectNamespace;
   USAGE_QUEUE: Queue<QueueMessage>;
   CONTENT_ARCHIVE: R2Bucket;
+  CONTENT_CLEANUP: DurableObjectNamespace;
   ASSETS: Fetcher;
   CLAWROUTER_ADMIN_TOKEN_SHA256?: string;
   CLAWROUTER_ACCESS_TEAM_DOMAIN?: string;
@@ -107,57 +51,55 @@ export interface Env {
   CLAWROUTER_LOCAL_AUTH?: string;
   CLAWROUTER_LOCAL_ADMIN_EMAIL?: string;
   CLAWROUTER_PUBLIC_ORIGIN?: string;
+  CLAWROUTER_UPSTREAM_RETENTION_BINDINGS?: string;
+  CLAWROUTER_MINIMAX_NATIVE_MEDIA_BINDING?: string;
   CLAWROUTER_CONTENT_RETENTION_DEFAULT?: string;
+  /** Isolate hot-cache max age in seconds (default 60); 0 disables admission/credential/budget caching. */
+  CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS?: string;
   CLAWROUTER_DEPLOY_ENV?: string;
   [name: string]: unknown;
 }
 
 export interface AccessPolicy {
+  budgetOverride?: BudgetOverride;
   enabled: boolean;
   generation: string;
   providers: string[];
+  models?: string[] | null;
+  poolStatus?: "hidden" | "visible";
   tenantId?: string | null;
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;
+  dailyBudgetMicros?: number | null;
+  weeklyBudgetMicros?: number | null;
+  limitHint?: string | null;
+  serviceTiers?: import("../shared/service-tiers").PolicyServiceTiers | null;
   requestCostMicros?: number | null;
+  requestCostsMicros?: Record<string, number> | null;
   budgetScope?: "policy" | "principal";
+  budgetMode?: "reserve" | "soft";
+  upstreamRetention?: import("../shared/upstream-retention.ts").UpstreamRetentionPolicy | null;
+  inputPublication?: import("../shared/input-publication.ts").InputPublicationPolicy | null;
   retainRequestContent: boolean;
   grantRouting: GrantRoutingPolicy;
-}
-
-export type GrantSelectionStrategy = "priority" | "round_robin" | "least_used" | "most_remaining" | "threshold" | "weighted_random";
-export type GrantStickiness = "none" | "identity" | "session";
-export interface GrantRoutingPolicy {
-  strategy: GrantSelectionStrategy;
-  stickiness: GrantStickiness;
-  failover: boolean;
-  staleState: "allow" | "deny";
-  staleAfterSeconds: number;
-  switchAtUsedPercent: number;
-  hysteresisPercent: number;
-  eligibleGrants: Record<string, string[]>;
 }
 
 export interface AccessPolicyEntry { policyId: string; policy: AccessPolicy }
 
 export interface ProxyCredential {
+  /** Private administrator attestation. Never projected as caller authority. */
+  copilotPublicIdentity?: import("./copilot-public-identity.ts").CopilotPublicIdentityAttestation;
+  name?: string | null;
   enabled: boolean;
   secretSha256: string;
   policyId: string;
   policyGeneration: string;
   principalId?: string | null;
+  expiresAt?: string | null;
+  serviceTiers?: string[] | null;
 }
 
 export interface ProxyCredentialEntry { credentialId: string; credential: ProxyCredential }
-
-export interface ProviderConnection {
-  providerId: string;
-  enabled: boolean;
-  label?: string | null;
-  monthlyBudgetMicros?: number | null;
-  spentMicros?: number | null;
-  remainingMicros?: number | null;
-}
 
 export interface ProviderHealth {
   providerId: string;
@@ -169,6 +111,7 @@ export interface ProviderHealth {
 }
 
 export interface AccessUserRecord {
+  budgetOverrides?: Record<string, BudgetOverride>;
   role?: "admin" | "user";
   tenantId?: string | null;
   enabled?: boolean | null;
@@ -183,6 +126,7 @@ export interface AssignmentState { version: 1; revision: string; assignments: Re
 export interface AccessControlUser { email: string; record: AccessUserRecord }
 
 export interface AccessSession {
+  budgetOverrides?: Record<string, BudgetOverride>;
   authenticated: true;
   auth: "cloudflare_access" | "local" | "admin_token";
   role: "admin" | "user";
@@ -191,14 +135,6 @@ export interface AccessSession {
   tenantId: string;
   groups: string[];
   contentRetentionDisabled: boolean;
-}
-
-export interface PolicyBinding {
-  policyId: string;
-  principalType: "user" | "group";
-  principalId: string;
-  enabled: boolean;
-  priority: number;
 }
 
 export interface OAuthState {
@@ -214,11 +150,17 @@ export interface OAuthState {
 }
 
 export interface UpstreamGrant {
+  minimaxSearchBinding?: import("../shared/minimax-search-binding").MiniMaxSearchBinding | null;
+  minimaxVideoBinding?: import("../shared/minimax-video-binding").MiniMaxVideoBinding | null;
+  minimaxImageBinding?: import("../shared/minimax-image-binding").MiniMaxImageBinding | null;
+  vertexAnthropicBinding?: import("./vertex-anthropic-binding.ts").VertexAnthropicBinding | null;
+  minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;
+  nativeMediaBinding?: import("../shared/native-media-binding.ts").NativeMediaBinding | null;
   version?: number;
   enabled?: boolean;
   priority?: number;
   weight?: number;
-  kind?: "api_key" | "oauth" | "subscription";
+  kind?: GrantKind;
   provider?: string | null;
   label?: string | null;
   credential?: string | null;
@@ -227,13 +169,21 @@ export interface UpstreamGrant {
   refreshToken?: string | null;
   tokenType?: string;
   expiresAt?: string | null;
+  refreshTokenExpiresAt?: string | null;
+  lastManualAuthorizationAt?: string | null;
   scopes?: string[];
   accountId?: string | null;
   subscription?: { plan?: string | null; subject?: string | null } | null;
   maintenance?: { keepWarm?: boolean } | null;
   credentialStore?: "durable_object";
   credentialGeneration?: number;
+  credentialLineage?: string;
   credentialStatus?: "active" | "reauth_required";
+  // False: refresh ready; null: uncertain outcome; timestamp: retry floor.
+  // Explicit false clears a stale block when an owner overlays KV metadata.
+  credentialRefreshBlockedUntil?: string | null | false;
+  credentialProvenance?: "clawrouter_oauth" | "imported" | null;
+  refreshDiagnosis?: import("../shared/contracts").GrantRefreshDiagnosis | null;
   hasCredential?: boolean;
   credentialFields?: string[];
   hasAccessToken?: boolean;
@@ -252,6 +202,8 @@ export interface UpstreamGrant {
 }
 
 export interface GrantQuotaWindow {
+  observedAt?: string;
+  models?: string[] | null;
   id: string;
   kind: GrantQuotaKind;
   unit: string | null;
@@ -269,6 +221,10 @@ export interface GrantRuntimeState {
   lastSignal: "quota" | "rate_limited" | "authentication";
   grantRevision: string | null;
   windows: GrantQuotaWindow[];
+  // Successful quota probes replace only their declared window scopes. A trailing * is a collection prefix.
+  windowSnapshots?: Record<string, { observedAt: string; ids: string[] }>;
+  account?: GrantAccount;
+  extraUsage?: GrantExtraUsage;
 }
 
 export interface AssignmentRule {
@@ -286,6 +242,7 @@ export interface AssignmentRule {
 }
 
 export interface AuthorizedIdentity {
+  serviceTiers?: string[] | null;
   credentialId: string | null;
   principalId: string | null;
   authType: "proxy_key" | "access";
@@ -295,12 +252,27 @@ export interface AuthorizedIdentity {
 }
 
 export interface UsageEvent {
+  /** Reporting metadata only. Not used by budget settlement. */
+  request_format?: string;
+  /** Measured token/tool component only; never a reservation or reporting estimate. */
+  reporting_known_cost_micros?: number | null;
+  reporting_estimated_cost_micros?: number | null;
+  reporting_estimate_reason?: string | null;
+  reasoning_output_tokens?: number | null;
+  realtime_usage?: { item_id?: string | null; unit_id: string; response_id: string | null; output_cap: number; text_input_tokens?: number; audio_input_tokens?: number; cached_text_input_tokens?: number; cached_audio_input_tokens?: number; text_output_tokens?: number; audio_output_tokens?: number };
+  hosted_tool_calls?: { web_search: number };
+  hosted_tool_calls_complete?: boolean;
+  hosted_tool_cost_micros?: number | null;
+  hosted_tool_pricing_ref?: string | null;
+  image_usage?: { text_input_tokens: number; image_input_tokens: number; image_output_tokens: number };
   id: string;
   type: "clawrouter.usage.v1";
   occurred_at_ms: number;
   tenant_id: string;
   policy_id: string;
   credential_id: string | null;
+  grant_key: string | null;
+  grant_lane: GrantLane | null;
   principal_id: string | null;
   auth_type: string;
   session_id: string | null;
@@ -341,7 +313,7 @@ export interface UsageEvent {
   status: "success" | "provider_error" | "client_error" | "denied" | "timeout";
 }
 
-export type QueueMessage = UsageEvent | ({ kind: "budget_settlement"; request: BudgetSettleRequest } & (
+export type QueueMessage = UsageEvent | { kind: "budget_charge"; ledger: { objectName: string }; request: BudgetChargeRequest } | ({ kind: "budget_settlement"; request: BudgetSettleRequest } & (
   { ledger: { objectName: string } }
   // Queued jobs from earlier deployments still carry their original scope.
   | { tenant_id: string; policy_id: string; principal_id?: string | null }
@@ -350,9 +322,20 @@ export type QueueMessage = UsageEvent | ({ kind: "budget_settlement"; request: B
 export interface BudgetReserveRequest {
   policyId: string;
   windowKey: string;
+  scopeKey?: string | null;
   limitMicros: number;
   costMicros: number;
   reservationId: string;
+  capability: string;
+  dispatched?: true;
+}
+
+export interface BudgetChargeRequest {
+  chargeId: string;
+  policyId: string;
+  windowKey: string;
+  scopeKey: string;
+  amountMicros: number;
   capability: string;
 }
 

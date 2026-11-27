@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "scope": "Selected exposed-case input-format diagnostic; not independent production qualification. All inference preceded grading. Exact-anchor validation unchanged. API time excludes grading and is not workflow latency.",
+  "model": "openai/gpt-6.1-terra",
+  "reasoning": {
+    "effort": "low"
+  },
+  "maxOutputTokens": 8192,
+  "cases": [
+    {
+      "caseId": "picomatch-15c324a9dae5",
+      "repository": "micromatch/picomatch",
+      "base": "36bc4615479355c30eac88b60a12e79cdaf892fd",
+      "oracle": "15c324a9dae5d5b1e7281a6708d16371a0b14098",
+      "publicTests": 33,
+      "fullTests": 34
+    },
+    {
+      "caseId": "picomatch-75c313a9a5de",
+      "repository": "micromatch/picomatch",
+      "base": "36bc4615479355c30eac88b60a12e79cdaf892fd",
+      "oracle": "75c313a9a5de0883afbbd9fa74ae03ef2919bd3e",
+      "publicTests": 18,
+      "fullTests": 19
+    }
+  ],
+  "records": [
+    {
+      "caseId": "picomatch-15c324a9dae5",
+      "trial": 1,
+      "layout": "json",
+      "artifactValid": false,
+      "passed": false,
+      "costMicros": 8822,
+      "apiElapsedMs": 3714.483,
+      "status": "completed"
+    },
+    {
+      "caseId": "picomatch-15c324a9dae5",
+      "trial": 1,
+      "layout": "plain",
+      "artifactValid": true,
+      "passed": true,
+      "costMicros": 7989,
+      "apiElapsedMs": 3051.017,
+      "status": "completed"
+    },
+    {
+      "caseId": "picomatch-15c324a9dae5",
+      "trial": 2,
+      "layout": "plain",
+      "artifactValid": true,
+      "passed": true,
+      "costMicros": 7914,
+      "apiElapsedMs": 2525.569,
+      "status": "completed"
+    },
+    {
+      "caseId": "picomatch-15c324a9dae5",
+      "trial": 2,
+      "layout": "json",
+      "artifactValid": false,
+      "passed": false,
+      "costMicros": 8762,
+      "apiElapsedMs": 3391.378,
+      "status": "completed"
+    },
+    {
+      "caseId": "picomatch-15c324a9dae5",
+      "trial": 3,
+      "layout": "json",
+      "artifactValid": false,
+      "passed": false,
+      "costMicros": 8852,
+      "apiElapsedMs": 3142.674,
+      "status": "completed"
+    },
+    {
+      "caseId": "picomatch-15c324a9dae5",
+      "trial": 3,
+      "layout": "plain",
+      "artifactValid": true,
+      "passed": true,
+      "costMicros": 7939,
+      "apiElapsedMs": 2602.808,
+      "status": "completed"
+    },
+    {
+      "caseId": "picomatch-75c313a9a5de",
+      "trial": 1,
+      "layout": "plain",
+      "artifactValid": true,
+      "passed": false,
+      "costMicros": 20116,
+      "apiElapsedMs": 3515.516,
+      "status": "completed"
+    },
+    {
+      "caseId": "picomatch-75c313a9a5de",
+      "trial": 1,
+      "layout": "json",
+      "artifactValid": true,
+      "passed": false,
+      "costMicros": 22633,
+      "apiElapsedMs": 4383.622,
+      "status": "completed"
+    },
+    {
+      "caseId": "picomatch-75c313a9a5de",
+      "trial": 2,
+      "layout": "json",
+      "artifactValid": true,
+      "passed": false,
+      "costMicros": 23198,
+      "apiElapsedMs": 7112.187,
+      "status": "completed"
+    },
+    {
+      "caseId": "picomatch-75c313a9a5de",
+      "trial": 2,
+      "layout": "plain",
+      "artifactValid": true,
+      "passed": false,
+      "costMicros": 20116,
+      "apiElapsedMs": 4260.961,
+      "status": "completed"
+    },
+    {
+      "caseId": "picomatch-75c313a9a5de",
+      "trial": 3,
+      "layout": "plain",
+      "artifactValid": true,
+      "passed": false,
+      "costMicros": 20121,
+      "apiElapsedMs": 4042.965,
+      "status": "completed"
+    },
+    {
+      "caseId": "picomatch-75c313a9a5de",
+      "trial": 3,
+      "layout": "json",
+      "artifactValid": true,
+      "passed": false,
+      "costMicros": 22483,
+      "apiElapsedMs": 3753.274,
+      "status": "completed"
+    }
+  ],
+  "summary": {
+    "json": {
+      "calls": 6,
+      "validArtifacts": 3,
+      "passed": 0,
+      "costMicros": 94750,
+      "meanApiMs": 4249.602736333334
+    },
+    "plain": {
+      "calls": 6,
+      "validArtifacts": 6,
+      "passed": 3,
+      "costMicros": 84195,
+      "meanApiMs": 3333.1391805
+    }
+  }
+}

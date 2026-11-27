@@ -1,3 +1,8 @@
+> Production deployment: use **Deploy ClawRouter** on `main`, with no inputs.
+> [Deployment compatibility](deployment-compatibility.md) is the canonical operator
+> and developer contract. Older train/qualification instructions below describe
+> historical releases and diagnostic tools, not required deployment steps.
+
 # Deploy ClawRouter on Cloudflare
 
 ClawRouter’s edge runtime is a TypeScript Worker. Revocation-critical runtime
@@ -9,6 +14,85 @@ assignment rules, redacted grant metadata, and operational health.
 For the isolated non-production profile used by AWS FakeCo clients, follow
 [FakeCo staging](fakeco.md). Its locked resource names and dedicated workflow
 must be used instead of overriding the production deployment ad hoc.
+
+## Large HTTP staged release
+
+`config/deployment-hold.json` controls whether source is held out of the production
+train. When held, scheduled selection exits without deploying; manual selection and
+`pnpm cf:deploy` refuse. The hold is read from the selected commit, so an
+environment variable or a different control checkout cannot release it. Remove
+the hold only in a reviewed follow-up after separately authorized infrastructure
+preparation and a compatible recovery version exist. This does not disable the
+workflow or change an already deployed Worker. The current file has `hold: false`;
+the native source, artifact and hosted-qualification guards still apply.
+
+For a compatible control repair that must precede a native payload replacement,
+use the separately qualified `native-control` bridge described in
+[native controller qualification](native-cutover-qualification.md#compatible-control-adoption).
+It adopts current control with exact old native bytes using the ordered cutover
+and compatible recovery engine; it is not a percentage rollout or a source-guard
+override. A subsequent separately authorized `native-cutover` replaces the payload.
+
+The new `v6-large-http` Durable Object classes and cron configuration require
+an additive deployment before any percentage rollout. Do not bypass the train's
+non-versioned configuration or secret-lineage checks. Ordinary rollback across
+class creation is unavailable; recovery must retain the new classes, private
+native assets, control token, callbacks and outstanding accounting owners.
+
+After building and rendering the exact reviewed release, prepare three local
+configurations sharing the same immutable Worker, native and dashboard assets:
+
+```sh
+pnpm cf:large-http:release prepare .wrangler.generated.toml .wrangler/release
+pnpm cf:large-http:release verify .wrangler/release/manifest.json
+```
+
+Packaging does not deploy. It removes build hooks, hashes every asset and config,
+and refuses artifact/configuration drift. Bootstrap stops both large ingress and
+native starts. Compatible blue enables native lifecycle while keeping large
+ingress closed. Green opens ingress. Both controls default to enabled outside
+these explicit release artifacts. Blue and green have identical native settings
+and fingerprints, including the content-addressed private runtime.
+
+The reviewed execution sequence is bootstrap, idempotent control-secret
+provisioning, compatible blue, warm/readiness proof, then upload green and advance
+through the approved activation. A single cutover after readiness is sufficient
+when the session-continuity rehearsal supports it; gradual percentages are not a
+requirement. `cf:large-http:provision` only creates a
+missing secret, verifies its presence and never rotates an existing value or
+retries an ambiguous write. Secret creation is its own version/lineage boundary;
+attest the resulting version and establish blue afterward. Do not put it inside
+the train's preserved-secret upload sequence.
+
+Before production authorization, rehearse that sequence and recovery using
+separate Cloudflare resources and synthetic credentials/upstream. Verify
+mixed-version private callbacks, normal connection reuse/reconnects, bounded
+maximum/overflow behavior, once-only accounting, admission stop and exact
+retirement/absence. Keep native lifecycle enabled during a traffic split.
+Closing ingress preserves capacity; `/v1/admin/large-http` with
+`{"accepting":false}` stops new admission and drains it. Retain uncertain
+nonretryable deliveries and debt for reconciliation; never replay inference.
+Recovery selects a compatible post-migration version, not pre-migration main.
+Once large traffic has been admitted, that version must preserve the supported
+large-body envelope. An ingress-closed staging blue cannot restore those large
+conversations; it is a temporary fail-closed control until compatible service
+returns.
+
+The deployment requirement is session continuity, not uninterrupted execution.
+An active request, stream or Codex turn may fail briefly. An isolated rehearsal
+must deploy during a real Codex turn, then complete a subsequent turn in the same
+saved session using prior conversation context. Record the session ID, active
+request/turn and deployment timestamps, recovery duration and any scripted or
+human intervention. Reconnection alone is insufficient. Do not add socket handoff
+or live request migration solely to prevent a temporary failure. Never blindly
+replay uncertain upstream inference; preserve its continuation/accounting owner
+and use an assessed resume or a distinct follow-up question.
+
+These artifacts do not supply production authorization or an executable launch
+manifest. Record exact source/config/version identities, live preflight,
+observations, stop conditions, cost decisions and recovery receipts separately.
+Existing performance results still apply only to their measured inputs; this
+release-control change requires its own behavior proof and affected validation.
 
 ## Required Bindings
 
@@ -48,11 +132,19 @@ are required.
 
 ## Provision
 
-Authenticate Wrangler first, then create the runtime resources:
+Set the account and API token before creating the runtime resources. The token
+needs queue creation and Workers KV Storage Write permissions:
 
 ```sh
+export CLOUDFLARE_ACCOUNT_ID=...
+export CLOUDFLARE_API_TOKEN=...
 pnpm cf:provision
 ```
+
+Both production and FakeCo create KV through the Cloudflare API using the exact
+deployment namespace title. Missing credentials stop provisioning before any
+resource changes. An existing namespace title is an error; inspect its ID with
+`pnpm exec wrangler kv namespace list` before configuring an existing deployment.
 
 Protect the browser console with Cloudflare Access before treating the custom
 domain as ready:
@@ -113,7 +205,7 @@ CLAWROUTER_ADMIN_TOKEN_SHA256
 CLAWROUTER_POLICY_KV_ID
 CLAWROUTER_POLICY_KV_PREVIEW_ID
 CLAWROUTER_SMOKE_KEY
-CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional smoke-only upstream key
+CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional legacy Universal smoke-only key
 ```
 
 Set the queue variables when overriding their defaults. Set the Access
@@ -132,15 +224,18 @@ CLAWROUTER_ACCESS_DEFAULT_TENANT      # optional, defaults to default
 CLAWROUTER_PROVIDER_AWS_REGION        # non-secret Bedrock Region, for example us-east-1
 ```
 
-The `Deploy Cloudflare` workflow can provision Access and deploy in one run
-when `CLOUDFLARE_API_TOKEN` has Zero Trust Access application/policy
-permissions. Dispatch it with `provision_access=true`; the repository default
-uses `access_github_orgs=openclaw` and no email-domain exception. Set
-`access_domain` if the console
-host is not `clawrouter.openclaw.ai`, and optionally set `access_admin_emails`
-or `access_admin_domains`. The workflow runs
-`pnpm cf:access -- --write-github-env` before rendering the Wrangler config, so
-the newly created Access audience tag is included in the deployed Worker.
+Production uses the **Deploy Cloudflare** weekday train described below. Manual
+production dispatches require a reviewed full `expected_sha` matching the `main`
+event SHA; scheduled runs choose a green commit without a manual input. FakeCo
+remains explicitly dispatched with its existing full-SHA guard.
+
+The production train does not provision Access apps, domains, or new environments.
+Do Access provisioning separately with explicit operator authorization. Its old
+`provision_access`, `access_*`, `worker_url`, and ignored KV-preflight-skip inputs
+are removed; the train is locked to `clawrouter-edge` on
+`https://clawrouter.openclaw.ai`. The first guard runs before checkout. Candidate
+checkout is verified again before dependency execution. Old workflow refs retain
+old behavior; do not dispatch historical workflows for a controlled deployment.
 
 Check the deploy surface without printing secret values:
 
@@ -162,6 +257,13 @@ any DLQ depth as an operator incident: inspect the failed message, repair the
 underlying Durable Object or Worker issue, and replay it to `USAGE_QUEUE`
 before that recovery window expires.
 
+A UsageLedger `/snapshot` CPU-limit reset can also fail queued `/ingest` calls
+before they execute; zero-CPU ingest failures can therefore exhaust retries.
+Check the shard's snapshot failures as well as the failed ingest. Exact snapshot
+rollups remove those aggregate scans only after the shard's historical migration
+completes. The `usage_rollup_maintenance` alarm log reports retained row count,
+database bytes, and migration watermarks without principal IDs or event content.
+
 Provider API keys are Cloudflare Worker secrets, not GitHub repository files:
 
 ```sh
@@ -171,13 +273,28 @@ printf '%s' "$CLAWROUTER_ADMIN_TOKEN_SHA256" | pnpm exec wrangler secret put CLA
 pnpm exec wrangler secret put OPENAI_API_KEY --config .wrangler.generated.toml
 ```
 
-For a controlled bulk rotation, the deploy workflow can stream temporary
-repository secrets to `wrangler secret bulk` without writing values to disk.
-Store each temporary transport secret as
-`CLAWROUTER_PROVIDER_<WORKER_BINDING>`, dispatch with
-`configure_provider_secrets=true`, verify the live provider smoke, then delete
-the temporary GitHub secrets. `pnpm cf:secrets -- --dry-run` prints binding
-names only; the live command sends a JSON object to Wrangler over stdin.
+Provider-secret changes are intentionally **outside the unattended train**.
+Wrangler 4.147 supports `versions upload --secrets-file` and `versions secret
+bulk`, but the script-version API inherits omitted secrets from the **latest
+uploaded** version, not the deployed blue. It cannot pin that inheritance to a
+version ID. A secret-changing rollback can additionally require Cloudflare's
+`force=true` guard override. These contracts make an abandoned candidate unsafe
+to inherit automatically; the train does not bypass that guard or rotate secrets.
+
+The former `configure_provider_secrets` input and provider-secret environment
+transport are removed from the train. Before and after upload it verifies that
+every newer version back to blue is an annotated train upload that preserves
+secrets. Rehearsed/aborted code-only versions are safe ancestors. An unrelated
+upload interrupts that proof and stops before exposure; the owner of that upload
+must reconcile it rather than letting a rejected secret update leak forward.
+No secret values are read, copied into the controller, or printed.
+
+Perform an explicitly authorized secret operation separately while no train is
+running, then establish and smoke a stable, SHA-tagged deployment before resuming
+trains. `pnpm cf:secrets` remains an **immediate** operation for that managed
+provisioning path, including FakeCo; never use it during a split. Its dry-run
+prints binding names only. Lanseq remains optional and uses `LANSEQ_API_KEY` when
+configured; absent transport values never remove existing Worker bindings.
 
 Provider configuration values are not included in that secret bulk operation.
 In particular, `AWS_REGION` is a non-secret Worker variable rendered under
@@ -204,18 +321,36 @@ Cloudflare AI Gateway needs the gateway coordinates plus the API token used for
 gateway authentication. The manifest binds account and gateway IDs from Worker
 config, not caller-supplied path parameters.
 
+The existing universal route accepts Cloudflare's ordered array of provider
+requests through `/v1/proxy/cloudflare-ai-gateway/universal` (in `body`) or
+`/v1/native/cloudflare-ai-gateway/` (as the request body). Cloudflare
+[continues to support this deprecated endpoint](https://developers.cloudflare.com/ai-gateway/usage/universal/)
+for existing integrations. An enforced budget requires a fixed policy request
+price because the fallback array has no single model price. Request retention
+omits per-entry credential headers; see [the retention contract](content-retention.md).
+
 ```sh
 pnpm exec wrangler secret put CLOUDFLARE_ACCOUNT_ID --config .wrangler.generated.toml
 pnpm exec wrangler secret put CLOUDFLARE_AI_GATEWAY_ID --config .wrangler.generated.toml
 pnpm exec wrangler secret put CLOUDFLARE_API_TOKEN --config .wrangler.generated.toml
 ```
 
-For a Cloudflare AI Gateway live smoke, configure the gateway with provider
-defaults or pass an upstream OpenAI key only to the smoke runner:
+The bundled Cloudflare AI Gateway smoke now prefers the declared Messages
+operation: `/v1/proxy/cloudflare-ai-gateway/messages`, selecting
+`cloudflare-ai-gateway/claude-sonnet-4-6` with `max_tokens: 16`. The Worker sends
+`claude-sonnet-4-6` to `/anthropic/v1/messages` using the selected gateway
+credential. The gateway must resolve the provider credential through its stored
+BYOK or Unified Billing configuration. This declaration is not live account or
+SDK qualification.
 
-```sh
-export CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY=...
-```
+`CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY` and
+`CLOUDFLARE_AI_GATEWAY_SMOKE_MODEL` apply only when a Universal smoke target is
+selected; they neither choose Universal nor supply credentials/model overrides
+to Messages. Existing Universal routes remain available. Gateway vendor pricing
+is unknown: an enforced budget requires an explicit policy-fixed request fee,
+with authoritative admission and settlement. That fee does not certify vendor
+invoice cost or establish account entitlement. See
+[Cloudflare native Messages](cloudflare-native-messages.md).
 
 ## Render and Deploy
 
@@ -237,11 +372,31 @@ GitHub deploys render Wrangler config with `CLAWROUTER_OMIT_ROUTES=1` so normal
 script updates do not require zone-level Worker route permissions after the
 custom domain route has already been provisioned.
 
-Deploy:
+For an explicitly authorized initial install or manual lifecycle operation only:
 
 ```sh
 pnpm cf:deploy
 ```
+
+Normal production updates use the automated train, not this immediate-cutover
+command.
+
+## Health report
+
+Hourly invocation outcomes per deployed version, from Cloudflare's
+`workersInvocationsAdaptive` analytics:
+
+```sh
+CLOUDFLARE_ACCOUNT_ID=<account> pnpm cf:health-report -- --hours 24
+```
+
+Each line shows requests, the client-disconnect share, the failure share
+(exceptions, CPU/memory limits, load shedding) and the active versions.
+`<- version change` marks a deploy; `FLAG` marks hours above 10% disconnects or
+1% failures. A spike that starts long after a version change and is not shared
+by the previous version points at a client, not the release. The token needs
+Account Analytics Read; without `CLOUDFLARE_API_TOKEN` the command uses the
+local `wrangler auth token`. `--json` prints the summary for scripts.
 
 ## Smoke
 
@@ -258,6 +413,27 @@ export CLAWROUTER_SMOKE_KEY=clawrouter-live-svc_docs-...
 export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai
 pnpm cf:smoke
 ```
+
+Each provider POST has a unique request ID. After recording its health result,
+the smoke uses the same key to poll `GET /v1/usage` for that request's successful
+event, matching provider and HTTP status. It reports the independent event ID
+only after observing the event in the caller's durable usage snapshot.
+Polling lasts at most 100 seconds **per successful provider**, with a two-second
+interval and a ten-second limit covering each fetch, body read, and disposal.
+This does not bound the existing provider POST or the entire smoke run.
+Authentication, redirects, unsupported endpoints, and malformed snapshots fail
+visibly; transient reads and missing events retry within that bound. A failed
+usage check preserves the provider health result and does not repeat the POST.
+All selected providers still run before failures are reported.
+
+The snapshot exposes only the latest 100 caller-visible events. A busy caller
+can evict a smoke event before inspection, so timeout means visibility is
+unconfirmed, not proof of data loss. Queue delivery has stalled for about a
+minute in production (2026-10-26), so the bound sits above that while
+staying inside the train's five-minute smoke command limit for one provider.
+Inspect usage and queue delivery before deciding on another paid request.
+This check proves event visibility, not budget settlement or the contents of
+the ingestion acknowledgment.
 
 Select more golden providers with a comma-separated list:
 
@@ -280,14 +456,28 @@ pnpm cf:smoke
 See [Amazon Bedrock](aws-bedrock.md) before selecting another model: request
 bodies are model-specific and the smoke operation is raw `InvokeModel`.
 
-For GitHub Actions deploys, `worker_url`, `live_providers`, and the smoke key
-are mandatory. When the current Worker exposes key inspection, preflight blocks
+For GitHub Actions deploys, the configured production URL, `live_providers`,
+and the smoke key are mandatory. When the current Worker exposes key inspection, preflight blocks
 deployment if the smoke credential is invalid or its policy denies a selected
 live provider. An unavailable current Worker only warns so first and recovery
 deploys remain possible. `all` runs every provider smoke target and requires a
 proxy smoke key with access to every selected provider. Readiness reports live
 checks as `verified`, `failed`, or `stale`; a configured provider without a live
 check is `unverified`.
+
+The deploy workflow's optional `openai_smoke_model` input selects the OpenAI
+smoke model. Leave it empty to use the first eligible catalog model, currently
+`openai/gpt-5.6`. Set `live_providers=openai` and
+`openai_smoke_model=openai/gpt-6-astra` to use Astra for that same single provider
+request. This does not reorder models or change keys or budgets. For a local
+smoke, the equivalent existing override is
+`CLAWROUTER_SMOKE_MODEL_OPENAI=openai/gpt-6-astra`.
+
+The Chat smoke keeps its small 16-token cap. The router maps it to
+`max_completion_tokens` for Astra, which includes reasoning tokens, so the
+request may produce no visible answer. A successful smoke proves the HTTP
+request and its durable usage-event visibility; it does not validate generated
+text, WebSockets, or native Codex behavior.
 
 ## Cloudflare Access Console
 
@@ -439,6 +629,26 @@ policy provider allowlists, provider readiness, OAuth grants, and budget limits.
 
 ## Session credential API
 
+All newly minted keys expire. `expiresAt` accepts an ISO-8601 UTC timestamp;
+omission defaults to 180 days. Personal keys may live at most the smaller of
+`CLAWROUTER_CREDENTIAL_DEFAULT_TTL_DAYS` (180) and
+`CLAWROUTER_CREDENTIAL_MAX_TTL_DAYS` (366). Admin explicit expiries may use the
+configured maximum. Both optional vars pass through Cloudflare and self-host
+configuration rendering. Legacy absent/null expiries continue working.
+
+Lists return `expiresAt`, `expired`, and `serviceTiers`; expired keys have
+`active: false`. `POST /v1/session/credentials/<id>/rotate` renews an enabled
+key, including an expired one, with a fresh hash and default lifetime. Its body
+still accepts only `secretSha256`. Ownership, held policy and enabled-state
+checks remain in force. Expiry is checked at each admission, including
+WebSocket turns and continuation controls; dispatched work completes.
+
+Creation accepts `serviceTiers`, a list narrowing the policy's effective tiers;
+null inherits policy access. The dashboard offers 30/90/180-day validity, Fast
+on by default, and opt-in Ultrafast only for policies granting it. Daily policy
+allowance and `limitHint` appear beside My keys. See [member rollout](member-keys.md).
+
+
 A verified Cloudflare Access session can manage proxy credentials owned by its
 normalized email. These routes do not require the admin role:
 
@@ -453,7 +663,7 @@ POST /v1/session/credentials/<credential-id>/revoke
 forces `principalId` to the signed-in email, binds the current policy generation,
 and rejects policies outside the session's effective user and group bindings.
 Credential ids use 4-128 alphanumeric or underscore characters. A principal may
-have at most ten enabled credentials, while rotating an existing owned id remains
+have at most 25 enabled credentials, while rotating an existing owned id remains
 allowed. To bound control-plane storage, old disabled self-service records are
 pruned once a principal reaches 100 retained ids. Existing ids owned by another principal cannot be claimed. Mutation
 requests require a same-origin browser request. The console generates 24 random
@@ -461,6 +671,19 @@ secret bytes, sends only their SHA-256 digest, and reveals the complete
 `clawrouter-live-<credential-id>-<secret>` key once.
 
 ## Admin API
+
+Policies additionally accept `dailyBudgetMicros`, `serviceTiers: {allowed, models}`,
+and `limitHint`. Daily limits use UTC days and the policy's existing budget
+scope. `limitHint` is trimmed plain text, at most 300 characters, with no control
+characters. Tier lists use canonical lowercase IDs, at most eight per list and
+32 catalog-model overrides. Ultrafast is restricted to the `team_server` policy's
+`openai/gpt-6.1-sol` override.
+
+Credential create/PUT accepts `expiresAt` and `serviceTiers`. Admin PUT preserves
+an existing expiry and tier restriction when omitted; omission of `secretSha256`
+also preserves an existing secret, allowing operators to stamp legacy expiry
+without rotation. A new ID still requires the hash. Null expiry is rejected.
+
 
 Admin requests use either a verified Cloudflare Access admin session or
 `Authorization: Bearer <admin-token>`. For bearer auth, the Worker compares the
@@ -488,6 +711,7 @@ PUT /v1/admin/policy-bindings
 PUT /v1/admin/policies/<policy-id>
 PUT /v1/admin/credentials/<credential-id>
 PUT /v1/admin/connections/<provider-id>
+PATCH /v1/admin/connections/<provider-id>
 PUT /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>
 PUT /v1/admin/assignment-rules/<rule-id>
 POST /v1/admin/policies/<policy-id>/revoke
@@ -524,6 +748,17 @@ email/domain allowlist configured on the Worker. `ACCESS_CONTROL` makes
 policies, credentials, user status, binding mutations, and session grant
 resolution strongly consistent. Provider kill switches use the same serialized
 authority; provider requests only resolve the selected connection.
+
+For independent connection edits, use `PATCH` with only the changed fields:
+`{"enabled": false}` disables a provider without changing its label or budget;
+`{"monthlyBudgetMicros": 50000000}` changes its cap without enabling it.
+Omitted fields stay unchanged. Set `label` or `monthlyBudgetMicros` to `null` to
+clear them; an empty label also clears it, while a zero budget blocks spending.
+The response contains the committed connection. Concurrent edits to different
+fields are merged in the authority; edits to the same field use the last
+accepted value. Unknown fields and read-only spend observations are ignored.
+Existing `PUT` clients retain their defaults: omitted `enabled` becomes `true`,
+omitted `label` becomes `null`, and omitted `monthlyBudgetMicros` stays unchanged.
 
 ## Keys and Revocation
 
@@ -687,11 +922,39 @@ active tier; routing never spills into a higher tier while a lower tier has an
 eligible grant. CLI imports, admin writes, and browser OAuth maintain the
 bounded pool index automatically.
 
+Each scope/provider permits 32 active grants or pending active reservations.
+A replacement reserves capacity before storing active credentials; a paused
+replacement records a pending proposal without consuming an active slot. Neither
+proposal can receive requests, and the previous provider remains attached until
+the store commits.
+Paused and reauthorization-required accounts remain attached while freeing an
+active slot. Revocation removes the attachment after deleting its secrets.
+These attachment facts do not yet change environment-credential fallback;
+legacy backfill and fallback activation require the subsequent control-plane
+migration.
+
+The attachment storage upgrade is forward-only. Recovery must use the current
+Worker or a forward fix so the owner can reconcile unfinished publication.
+Do not roll back to a Worker that predates attachment statuses: its pool query
+ignores those statuses and does not safely handle retained inactive accounts.
+Do not delete the index fences or restore an older index over current owners.
+
 `cf:oauth:put` replaces the entire grant at that key, including its credentials
 and account metadata. Omitted refresh tokens, credential bundles, and refresh
 configuration are cleared. Supply a fresh primary credential for each import.
 For a metadata edit that preserves credentials, use the console or the admin
 API's default PUT mode instead of the CLI replacement mode.
+
+The console enables account writes after the first account list loads; you can
+prepare a draft while it loads. That first list supplies untouched policy and
+provider defaults; later refreshes do not retarget the draft. Empty or unavailable
+selections remain visible. The console applies confirmed saves, revocations,
+credential refreshes, and quota results before refreshing the rest of the dashboard. You can edit or
+save again while that refresh runs; later drafts and selections stay intact.
+Provider sign-in keeps account writes blocked while its redirect is pending.
+A reporting failure does not undo a confirmed change. If a write cannot be
+confirmed, refresh and inspect the account before retrying; the console does
+not retry the write automatically.
 
 `--local` now calls a running local Worker through the same authenticated API.
 It defaults to `http://127.0.0.1:8787` when `CLAWROUTER_BASE_URL` is unset, and
@@ -722,9 +985,16 @@ for five minutes, and no explicit grant restriction:
 
 `strategy` may be `priority`, `round_robin`, `least_used`, `most_remaining`,
 `threshold`, or `weighted_random`. `threshold` keeps the pool's current grant
-until its most constrained fresh quota window reaches `switchAtUsedPercent`,
+until its most constrained open quota window reaches `switchAtUsedPercent`,
 then selects the healthiest candidate below that cutoff only when it improves
-remaining capacity by at least `hysteresisPercent`. It requires
+remaining capacity by at least `hysteresisPercent`. If no measured candidate
+qualifies, it moves to a grant with no reading in an open window: one that has
+never reported quota, or whose window has reset since it was last used.
+Threshold routing compares the last reading of every open window, however old,
+because remaining quota only falls until reset; a grant last seen at or past the
+cutoff is therefore never a replacement until its window resets.
+`staleAfterSeconds` still bounds the readings `most_remaining` ranks and the
+evidence `staleState: "deny"` requires. Threshold routing requires
 `stickiness: "none"`; the pool cursor supplies affinity. `stickiness` may otherwise be
 `none`, `identity`, or `session`;
 identity and session values are hashed before selection and are not persisted as
@@ -735,6 +1005,30 @@ Set `staleState` to `deny` to fail closed when all eligible grants lack fresh
 quota evidence. Set `failover` to `false` when a policy must never retry a
 request with another credential. The console exposes these controls and each
 grant's selection count and last-selected time.
+
+Administrators can share existing subscription owners across policies with
+`grantRouting.sharedGrants` on `PUT /v1/admin/policies/<policy-id>`:
+
+```json
+{ "sharedGrants": { "anthropic": ["oauth/contributor_policy/account"] } }
+```
+
+Merge this field into the policy's existing `grantRouting` object. It names
+existing enabled subscription grants, with at most 32 shared owners per policy.
+Routing keeps their full original keys; credentials, refresh ownership and quota
+stay with each original owner. Source-policy access remains available. The
+consumer's providers, models, token-reference allowlist, reserve and budgets
+still apply, and usage is charged to the consumer policy with the original grant
+key. This does not share another policy's bindings or follow its shared references.
+Revoking or pausing the source grant disables it for every consumer within the
+normal hot-cache maximum age. Replacing it with an API-key grant does not inherit
+subscription sharing. Disabling the source policy alone does not revoke its grants.
+
+Omitting `sharedGrants` preserves existing membership, including during console
+edits. Send `{}` to remove all shared members. There is no credential migration,
+copy or new refresh owner. A provider pool remains bounded to 98 candidates:
+32 policy grants, 32 tenant grants, two default references and up to 32 shared
+owners. Missing shared owners do not implicitly enable environment fallback.
 
 Provider manifests declare the response headers used to collect request, token,
 input-token, output-token, subscription-window, or credit quota. ClawRouter
@@ -812,13 +1106,24 @@ manual token import does not establish provider approval or compatibility.
 See [OpenAI setup and subscription limits](openai-subscriptions.md) for direct
 Codex login and the private facade's separate requirements.
 
+The catalog includes `anthropic/claude-opus-5-5` with the October 11, 2026
+standard prices and one-million-token input limit. Its upstream name matches
+`opus` quota windows. A policy can restrict the pool to this model with
+`models: ["anthropic/claude-opus-5-5"]`; omitted/null leaves existing access
+unchanged. Set `poolStatus: "visible"` only when policy holders should see the
+pool's account emails, quota readings and policy-wide seven-day usage at
+`GET /v1/pool`. The default is hidden. See the [API contract](api-reference.md#policy-pool-status).
+
 The bundled Anthropic manifest supports Claude subscription OAuth credentials,
 including one-year inference-only tokens generated by `claude setup-token` and
 refreshable access/refresh pairs. It uses Bearer authentication, merges
 the Claude Code OAuth beta identifiers with caller-required beta features,
 prepends Anthropic's required Claude Code billing system blocks, and refreshes
-refreshable grants with Anthropic's JSON token contract. Refreshable grants poll
-the OAuth usage endpoint for the five-hour, seven-day, Sonnet, and Opus windows.
+refreshable grants with Anthropic's JSON token contract. The subscription transport
+uses the manifest-owned Claude Code 2.1.288 identity. Refreshable grants poll
+the OAuth usage endpoint for five-hour, general seven-day, legacy Sonnet/Opus,
+and model-scoped weekly windows (including Fable), plus the profile endpoint for
+sanitized account facts.
 Inference-only setup tokens collect five-hour and seven-day utilization from
 successful inference and keep-warm response headers instead. Anthropic API-key grants remain
 on `x-api-key` and do not receive subscription-only request transforms.
@@ -862,6 +1167,124 @@ or at 10% remaining capacity, sends one fixed one-token Claude request with no
 user content, and discards the response. Neither contributors nor submitted
 payloads can alter its endpoint, model, headers, prompt, or interval.
 
+### Model-aware Claude subscription pools
+
+Attach your authorized Claude Max subscriptions to one policy, all at the same
+priority, and use `most_remaining` (the default) to spread requests across the
+accounts with the most quota for that request's upstream model. Only unscoped
+exhaustion cools the entire account. A full Fable weekly window excludes that
+account for Fable while preserving its Sonnet and Opus capacity. Model matching
+uses lowercase family tokens contained in the upstream model ID. Unified
+five-hour and weekly response-header windows remain unscoped.
+
+Configure the policy through Access or `PUT /v1/admin/policies/<policy-id>`:
+
+```json
+{
+  "grantRouting": {
+    "strategy": "most_remaining",
+    "includedQuotaReservePercent": 5,
+    "environmentFallback": true
+  }
+}
+```
+
+`includedQuotaReservePercent` is an integer from 0 through 50, default 0.
+It is a soft floor. While any account in the pool is above it, subscription
+requests skip an account when any applicable live window has that percentage
+or less remaining. If every account that could serve is at or below the reserve,
+the policy has no environment fallback (or the request is pinned to a grant),
+the accounts that still have quota left in every applicable window serve instead.
+They are spread across the policy's strategy, within the policy hysteresis scaled
+to the reserve band. A fully used window (0%), a cooldown or a failed credential
+still excludes an account. Retry-After then waits only for empty windows and
+cooldowns, not for a window to climb back above the reserve. Draining to 0% can let in-flight requests cross
+into Anthropic extra usage on accounts that have it enabled; the next quota
+observation then excludes the account. Polling and provider observations are not
+an atomic upstream spending cap. Missing/reset-passed quota
+remains unknown. Choose `staleState: "deny"` if stale observations must block
+admission; the existing stale-state default is `allow`.
+
+`environmentFallback` defaults to false. With it enabled, exhaustion, reserve,
+model-scoped quota exhaustion, or one-shot failover exclusion of the last grant can select
+`ANTHROPIC_API_KEY` using normal API-key transport and budget accounting. If that
+credential is absent the unavailable pool still returns its pool error: HTTP 429
+with `Retry-After` while grants are only rate-limit cooling or awaiting a
+published quota reset, otherwise (including failed 401/403 credentials) HTTP
+503. This setting
+does not enable disabled providers, bypass budgets, or change pinned continuation
+ownership. An eligible grant always wins over the environment credential. If you
+also attach paid API-key grants, put those in a higher numeric priority tier than
+subscriptions; normal priority rules continue to apply.
+
+Every proxied HTTP response identifies its final lane with
+`x-clawrouter-grant-lane: subscription`, `api_key`, or `environment`. A successful
+alternate attempt also retains `x-clawrouter-grant-failover: 1`. The one final
+usage event attributes the request to the final grant/lane, not the rejected
+attempt. Subscription traffic retains its API-equivalent manifest cost for
+reporting and budget enforcement; it does not represent an Anthropic invoice.
+
+The admin **Subscriptions** page selects a policy, summarizes Claude-only headroom and traffic, and shows account email, Max
+plan, credential status, all included quota windows as **percent free**, reset
+instants, model-family eligibility, last selection, and usage for the chosen
+range. Extra usage spend/limit values are minor currency units in the provider
+payload and are displayed as currency. Account and extra-usage facts are
+allowlisted scalars; raw profiles and tokens are never returned. Manual quota
+refresh shares the credential owner's polling path. HTTP 429 from either probe
+retains its last reading and defers that endpoint until `Retry-After`; HTTP 401
+requires reauthorization. The existing normal/urgent/exhausted intervals remain
+240/60/600 seconds. Setup-token grants still obtain quota from inference headers
+and cannot query usage/profile.
+
+Per-grant reporting uses the policy's tenant/policy usage shard and 30-day
+retention. Older events retain unknown grant/lane attribution, without guessed
+backfill. See the [grant usage API](api-reference.md#upstream-grant-usage) for the
+bounded daily model series.
+
+### Operator account inventory
+
+Run the inventory command from a reviewed, pinned checkout to make one
+authenticated `GET /v1/admin/upstream-grants` against
+`https://clawrouter.openclaw.ai`. It works without an account-readiness endpoint.
+Before running, obtain a working administrator credential reference from its
+owner. Use the operator secret manager to inject `CLAWROUTER_ADMIN_TOKEN` into
+the command's environment. When Cloudflare Access requires service credentials,
+inject both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` through the same
+operator route. Keep raw credentials out of GitHub Actions, command arguments,
+and logs. The command does not provision credentials; without that prerequisite,
+authenticated inventory remains unverified.
+
+```sh
+git rev-parse HEAD
+CLAWROUTER_BASE_URL=https://clawrouter.openclaw.ai node scripts/grant-pool-operations.mjs
+```
+
+Record the pinned commit and invoking operator alongside the receipt. The
+receipt labels execution as `operator`; it does not attest source or caller
+identity. Exclude overlapping deployments and account mutations before running.
+The command does not install packages, deploy a Worker, or run provider smoke.
+
+Receipts contain only the fixed target, API-visible counts and digests, or fixed
+diagnostics. Raw account identities, labels, URLs, credential data and server
+errors stay out of logs. Redirects, failed authentication, malformed or oversized
+responses fail without retrying the request.
+
+The `clawrouter.api-visible-grants.v1` digest hashes JSON containing that `schema`
+and `grants` sorted by key. Each projected grant contains only `key`, `provider`,
+`kind`, `enabled`, `updatedAt`, `revokedAt`, `credentialStatus` in that order;
+missing optional values become `null`, and legacy strings retain their exact
+bytes without timestamp or enum normalization. The separate `keyNamesSha256` hashes
+`{schema: "clawrouter.api-visible-grant-keys.v1", keys}` with the same sorted key
+names. Labels and mutable quota observations do not affect these digests.
+Compare an earlier private key-name inventory only after recomputing it with
+this exact versioned algorithm; a digest from another format is not comparable.
+
+This receipt covers the API-visible projection only. Null KV values and
+index-only owners are outside it; an empty projection never proves empty storage,
+stopped writers, or matched storage lineage. Review the full inventory privately.
+The command changes no account state and provides no baseline acceptance or
+routing activation action.
+
 ### Contributor intake
 
 An administrator can authorize one credential contribution without sharing an
@@ -870,6 +1293,9 @@ for one exact pool slot and save its one-time secret to a new protected file:
 
 ```sh
 export CLAWROUTER_ADMIN_TOKEN=...
+# Also required when Cloudflare Access protects the admin route for automation:
+export CF_ACCESS_CLIENT_ID=...
+export CF_ACCESS_CLIENT_SECRET=...
 pnpm pool:ticket -- \
   --url https://clawrouter.openclaw.ai \
   --out ./maintainer-openai.ticket.json \
@@ -886,6 +1312,17 @@ The command creates the ticket file with mode `0600` and refuses to overwrite
 an existing path. Transfer it to the named contributor over an approved secret
 channel. The ticket defaults to 15 minutes and is bound to the scope, provider,
 grant kind, priority, and weight chosen by the administrator.
+The Access service token must be allowed by the application's Service Auth
+policy; it supplements the admin bearer token. Configure both Access variables
+or neither for an unprotected self-hosted endpoint. Ticket creation shares the
+key commands' admin transport: it refuses redirects with an Access setup hint
+and does not print raw response bodies in errors. Admin responses consumed as
+JSON, including tickets and all error responses, are limited to 128 KiB;
+rejected responses do not create a ticket file. Key and grant mutation commands
+acknowledge successful JSON response headers and discard the unused body, so
+large accepted grant metadata does not turn a committed mutation into a CLI
+failure. A bodyless 204 also acknowledges success; redirects and non-JSON
+responses remain errors. No automatic mutation retry is performed.
 The provider manifest supplies the default. Claude tickets enable keep-warm when
 neither flag is present. Use `--no-keep-warm` to disable it for one grant;
 `--keep-warm` remains available as an explicit override for providers whose
@@ -1001,3 +1438,286 @@ paths, empty segments, `.`, `..`, query strings, and fragments are rejected.
 
 The live Worker rejects manifest endpoints that still need unresolved deployment
 templates that are not declared in `service.configKeys`.
+
+## Automated production train
+
+Blue and green are **versions of the existing `clawrouter-edge` script**, not
+separate Workers. BudgetLedger, UsageLedger, PolicyBindingIndex, GrantCredential
+and ContentArchiveCleanup keep their existing script-scoped authoritative state.
+No parallel ledgers or duplicated credentials are provisioned.
+
+### Trigger and source custody
+
+- `deploy-cloudflare.yml` runs at **10:07 America/Edmonton, Monday–Friday**.
+  GitHub's documented `schedule.timezone` field handles DST; the seven-minute
+  offset avoids top-of-hour congestion. Scheduled Actions can still be delayed
+  or dropped by GitHub. There is no merge or release-tag trigger.
+- A manual urgent run uses `--ref main -f expected_sha=<full SHA>` and defaults
+  to `mode=rollout`. The SHA must match the event before checkout; source is
+  verified again after candidate checkout, before installation.
+- Scheduled selection freezes the event's `main` snapshot, walks first-parent
+  commits newer than deployed, and chooses the newest exact-SHA `CI` **push on
+  main** whose latest run and every job succeeded. PR merge-ref checks, skipped
+  jobs, and a green older attempt followed by a red attempt do not qualify.
+  Missing/failed CI merely skips that scheduled candidate. Already deployed and
+  no newer green candidate are successful no-ops with no alert.
+- The deployed commit comes from the live Cloudflare version's SHA tag. The
+  only legacy exception is exact version
+  `d06cab69-8847-46da-b6b6-cc1585b42371`, mapped to
+  `478974c17edab8da283f4637ae706a4d63885a2e` after checking successful historical
+  run [39813164865](https://github.com/openclaw/clawrouter/actions/runs/39813164865).
+  That run's Wrangler log prints the version ID. Unknown lineage stops rather
+  than guessing. Every new upload is tagged and messaged with the candidate SHA.
+- Workflow control code stays in a separate frozen checkout, so selecting a
+  slightly older green source cannot replace the train controller. Both source
+  checkouts disable persisted checkout credentials. Concurrency covers deploy
+  **and recovery**, never cancelling an in-progress train.
+
+### Rollout and gates
+
+Preflight, Worker check, admin check/test/build, content-storage provisioning and
+config rendering run before upload. Secret changes are excluded for the
+inheritance/rollback reasons above. The train uploads with `wrangler versions
+upload`; distribution changes use the same Cloudflare deployments API as
+`wrangler versions deploy`, explicitly passing ordered `[green, blue]` entries.
+The API adapter verifies the current deployment ID before changing it and reads
+back the exact distribution afterwards. An ambiguous response is reconciled by
+readback, never by blindly repeating the write.
+
+1. Green 0%, blue 100%. Mandatory smoke supplies
+   `Cloudflare-Workers-Version-Overrides: clawrouter-edge="<green UUID>"`.
+   `/v1/health.versionId` and Worker response headers must identify green; a
+   silently ignored override is not a successful smoke.
+   Each console asset must also prove its requested version and exact bytes,
+   through both green and blue (the initial legacy bootstrap keeps its documented
+   exception). A successful response from another runtime is
+   retried for at most 30 seconds per asset because overrides can still propagate
+   after health passes. Missing/invalid version proof, HTTP failures and corrupt
+   bytes fail immediately. Failure receipts include the public asset path, HTTP
+   status and expected/observed version; no response content is logged.
+2. Green 10% for at least two minutes, then green 50% for at least three minutes.
+   Full override smoke runs immediately and waits at most 30 seconds between
+   checks through each hold. It includes a paid golden-provider request and
+   durable usage visibility:
+   low production volume never eliminates synthetic coverage.
+3. Green 100%, final override smoke, then a remote completion receipt. Blue stays
+   in the version history and at 0% as the rollback target. Stable version order
+   preserves Cloudflare's forward-only DO reassignment guarantee during increases.
+
+The two/three-minute holds target five minutes of canary observation, not five
+minutes for the entire CI job. Preflight, build, upload, initial/final smoke,
+Cloudflare API calls, and slow checks add elapsed time. Smoke duration counts
+inside each hold, but a check must finish successfully before promotion; it is
+never skipped to meet the timing target. The 30-second interval supplies repeated
+synthetic observations without requiring statistically significant organic traffic.
+The default single provider keeps the synthetic cost bounded; expanding
+`live_providers` increases it. Each
+smoke process has a five-minute wall-clock bound, upload twelve minutes, rollout
+step 75 minutes, and deploy job 100 minutes. These are failure limits, not proof
+that provider requests finish faster.
+
+When permitted, `workersInvocationsAdaptive` groups invocation counts and runtime
+errors by `scriptVersion`. The most recent minute is excluded for ingestion lag.
+A green window with at least three errors and more than 5% errors breaches; when
+both versions have at least 20 observations it must also exceed blue by more than
+2 percentage points. Counts below that minimum are explicitly **not a statistical
+comparison**. This measures Worker runtime errors, not every application-returned
+HTTP 5xx; synthetic HTTP checks remain mandatory.
+
+A missing **Account Analytics Read** permission or unavailable per-version dataset
+is reported as **analytics disabled / smoke-only gating** in the job summary.
+It does not fail every deployment or pretend analytics ran. Other malformed or
+persistent analytics failures stop the rollout. No new token is created. To enable
+that optional gate, the existing token owner can grant Account Analytics Read for
+the current Cloudflare account; retain existing Workers Scripts Edit and storage
+permissions for deployment.
+
+### Automatic failure recovery and notification
+
+For safe changes, any smoke/error-rate breach restores **only blue at 100%**,
+removing green from the deployment, and fails the run. A non-secret journal is
+written before every exposure and encoded into Cloudflare deployment annotations.
+A second job on a fresh runner reconstructs that journal and recovers if the
+rollout process timed out or its runner disappeared. It refuses to overwrite an
+unrelated newer deployment. A Cloudflare/GitHub outage can prevent recovery or
+notification; the run then reports an explicit recovery failure rather than
+claiming blue was restored. No system hosted solely by those services can promise
+recovery while both control planes are unavailable.
+
+Only failures, rollbacks, and freezes open/update **one** issue titled
+`Production deployment train failures`. It is reopened and its latest receipt
+updated, not duplicated each run. No assignee, mention, comment ping, or chat
+notification is sent. Successful runs and no-ops only write the job summary.
+Receipts include SHA, blue/green IDs, rollout result and analytics availability;
+raw secrets and provider bodies are not artifacts.
+
+### Lifecycle migrations and rollback-unsafe formats
+
+`deploy-train-source.mjs` parses `wrangler.toml` at deployed and candidate commits
+and compares `migrations` and declarative `exports` semantically. Comments,
+whitespace and table-field order do not cause a migration; migration sequence
+order remains significant. A lifecycle change takes the explicit **plain `wrangler deploy`**
+path, then mandatory version-asserting smoke. It never automatically rolls back
+past that operation, even after an ambiguous timeout. Failure freezes and alerts.
+**Ship class lifecycle changes in tiny migration-only PRs**, independently of
+behavioral changes; Cloudflare cannot split an atomic class creation/deletion.
+
+Changes to non-versioned observability/logpush/tail settings, queue consumers,
+cron triggers, routes, workers.dev or preview routing are rejected before upload.
+`versions upload` plus distribution changes cannot apply these settings. Use a
+separately authorized configuration deployment and establish a stable SHA-tagged
+base; do not silently leave a requested logging/privacy setting unapplied.
+
+One read-only reconciliation for version-only candidates permits the exact retained-diagnostics profile:
+`[observability.logs]` with `enabled=true`, `head_sampling_rate=1`, and
+`invocation_logs=false`. An operator must separately apply that profile first.
+The train reads `/script-settings` before asset publication, before upload, and
+before every 0/10/50/100 traffic step. Live logs must be enabled and persisted at
+full sampling, invocation logs and traces must be disabled, and no additional
+observability settings may differ from the profile's API defaults. Missing,
+unreadable, or changed settings block the next operation; drift during a canary
+uses the existing recovery policy. The rollout receipt records the profile and
+last successful readback time. This path never writes script settings and does
+not relax the guard for other non-versioned source changes.
+
+For a forward-only data/format change, add this trailer to the commit that lands
+on `main` (preserve it in the squash-merge message):
+
+```text
+ClawRouter-Rollback-Unsafe: explain the irreversible storage or wire-format change
+```
+
+The train scans **every commit in deployed..candidate**, not merely the tip. A
+trailer is used rather than a mutable flag because it cannot be accidentally reset
+by a later unrelated PR. The pre-existing attachment-status boundary
+`032b0dfa9aa963d4cd18dce48a6d1e9e48c4e7c3` is explicitly recognized for older
+installations. Its forward-only storage contract above remains binding.
+
+Once an unsafe green is included in a deployment, failure freezes the observed
+split and requires a forward fix. Exposure is recorded **before green 0%**, not
+only at 10%: synthetic requests can write shared state, and non-HTTP handlers
+must not be assumed to obey an HTTP canary percentage. No-impact rehearsal modes
+refuse migration and rollback-unsafe ranges.
+
+Expand/contract rules apply even without a marker:
+
+- DO method arguments/results and persisted SQLite/serialized records must be
+  readable by both versions during the split. Expand readers first, write new
+  optional fields next, and contract only in a later rollout after the rollback
+  window closes. Never delete/reinterpret authority data under an old reader.
+- KV records and R2 metadata need compatible optional additions or explicit format
+  versions. Do not overwrite a value with an incompatible shape while blue reads it.
+- Usage-queue messages can outlive the producing deployment and be retried. Both
+  consumers must understand messages from either producer and retained older
+  messages; preserve idempotency, settlement identity, and old schema readers.
+  New message kinds require reader support shipped before any producer emits them.
+- A marker does not make an incompatible mixed-version rollout safe. If coexistence
+  cannot be made safe, redesign into expand/contract phases before merging.
+
+### Queue and console version skew
+
+`USAGE_QUEUE` has one consumer **script** (`clawrouter-edge`), not one separately
+provisioned consumer per color. Cloudflare's current public Queues documentation
+specifies the single active consumer but does not establish a version-selection
+contract for a split. Do not infer queue-consumer selection from the producer's
+HTTP override or its percentage. The gate conservatively treats green's inclusion
+as possible non-HTTP exposure; the provider smoke proves durable event visibility,
+not which version consumed that event. Queue code must be compatible in both
+directions. No new queue or consumer script is created for a train.
+
+Cloudflare documents that content-hashed assets can 404 when HTML and asset
+requests hit different versions. `run_worker_first` alone does not provide
+affinity. Rather than adding a zone Transform Rule or another Worker, the train
+publishes public hashed JS/CSS/font/image assets into the **existing** R2 bucket
+under `console-assets/v1/assets/`. Both colors first use their own `ASSETS`; a
+404 for an allowlisted hashed asset falls back to the shared immutable bytes.
+This resolves cross-color asset loads without pinning authenticated requests to
+one version. API/data contracts still require expand/contract compatibility.
+
+Publication verifies SHA-256 bytes, refuses collisions/overwrites, and completes
+before any green exposure. Every smoke checks candidate asset bytes through both
+colors and a harmless R2-only probe through green (both colors after bootstrap).
+The first train refuses admin/shared/lockfile changes when legacy blue lacks the
+fallback. This bootstraps the shared delivery protocol with unchanged assets.
+The existing `v1/` request-content lifecycle/cleanup cannot read or delete this
+separate prefix; no retained prompts are exposed. Only allowlisted public build
+artifacts are published—never HTML, source maps, arbitrary R2 paths, or secrets.
+Shared assets remain immutable so open tabs and retained rollback versions keep
+working; storage grows only with changed content hashes. Do not delete assets
+still referenced by a deployable version or supported browser cache. Local/self-
+host operation uses normal bundled assets and does not require Cloudflare storage.
+The existing API token needs R2 object read/write; lack of access fails before Worker upload, not midway through a split.
+
+Each train also opens a temporary metadata-only tail and aggregates queue batch
+counts by observed `scriptVersion.id` and rollout step. Raw tail payloads, headers,
+logs and message bodies are never logged or retained. The tail is deleted in
+`finally`; permission/connection failures are explicitly reported as unobserved,
+not a guessed consumer version. Samples prove what happened in that run, not an
+undocumented platform routing guarantee. Inspect the job summary/receipt for
+actual queue-version observations before drawing deployment-specific conclusions.
+
+References checked 2026-10-22:
+[GitHub timezone schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule),
+[Cloudflare gradual deployments](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/),
+[Durable Object guarantees](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/with-durable-objects/),
+[secret inheritance](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/create/),
+[secret rollback guard](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/create/),
+[version affinity and assets](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/version-affinity/),
+[Queues consumer model](https://developers.cloudflare.com/queues/reference/how-queues-works/).
+
+### Rehearsals
+
+Use `mode=zero-smoke` to upload, deploy green 0%, assert the full green smoke and
+restore blue 100%. Use `mode=zero-failure` to inject a failing green health-version
+assertion at 0%; this deliberately fails the run, exercises rollback and updates
+the same failure issue. Read `wrangler deployments list` in the run log to verify
+that green was removed and blue is the sole 100% entry. Neither mode progresses
+to 10%. They still make synthetic requests and are not a promise of zero writes
+inside the shared service.
+
+The FakeCo workflow had no runs and its GitHub environment lookup returned 404 on
+2026-10-22; no FakeCo repository secret or variable names were present. This does
+not prove that no stray Cloudflare resource exists, but it means FakeCo is not a
+configured deployment rehearsal target. Do not provision it solely for this proof.
+Use the authorized production 0% rehearsals, then one normal manual train.
+
+#### Verified initial rehearsals (2026-10-22)
+
+At candidate `517d2d432afab80a841098b340b82075d2c3d6c2`, main push CI
+[39840237804](https://github.com/openclaw/clawrouter/actions/runs/39840237804)
+passed. Production blue was `d06cab69-8847-46da-b6b6-cc1585b42371`.
+
+- [Zero-smoke 39841010254](https://github.com/openclaw/clawrouter/actions/runs/39841010254)
+  proved green `efe82347-afc3-4ebf-8d43-182b8e01cf83` at 0%, the full provider/usage
+  smoke, and shared asset bytes/R2-only probe, then restored blue alone at 100%.
+- [Deliberate failure 39841674043](https://github.com/openclaw/clawrouter/actions/runs/39841674043)
+  first proved green `ec272ca8-5238-41e8-9fc8-8cc08eba276b`, deliberately failed its
+  version assertion at 0%, and automatically restored blue alone at 100%. The
+  independent recovery job confirmed restoration and created the single
+  [tracking issue](https://github.com/openclaw/clawrouter/issues/317), with no mentions.
+
+Those rehearsals exposed an observer contract bug, not a missing-token-permission
+finding: Cloudflare tail IDs are **32-character hex Identifiers**, unlike Worker
+version UUIDs. The observer now accepts that documented shape and reports fixed
+failure stage/status without raw provider diagnostics. The separate manually
+invoked **Observe Cloudflare Queue** workflow can collect five minutes of sanitized
+queue-version counts during a train without uploading, deploying, changing
+traffic, or making provider requests. It requires a reviewed full main SHA,
+stops on a different deployment owner, and deletes its ephemeral tail. It has no
+schedule and does not replace the train or its recovery owner.
+
+During real train [39842254378](https://github.com/openclaw/clawrouter/actions/runs/39842254378),
+[observer 39844089630](https://github.com/openclaw/clawrouter/actions/runs/39844089630)
+recorded **both consumer versions at the 10% split**: blue
+`d06cab69-8847-46da-b6b6-cc1585b42371` handled 14 batches/28 messages and green
+`e6de8adf-5c99-494f-b5dd-a24a96a8d8f5` handled 4 batches/7 messages. This disproves
+an assumption that all batches necessarily stay on blue or always use the latest
+upload; it does not establish an exact percentage or a permanent platform guarantee.
+
+That observer wrote its complete five-minute receipt and deleted its tail, but
+its CLI retained a native WebSocket handle awaiting the peer's close handshake;
+the job subsequently timed out. Deployment/observer entrypoints now exit only
+after all awaited work, cleanup and receipt writes finish, with a bounded stdout/
+stderr drain. A real WebSocket regression deliberately withholds the close reply
+and checks both successful and failed CLI exit codes. The running production train
+was unaffected because its frozen controller had not opened that optional stream.

@@ -1,0 +1,520 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "0e318fe32b1c7dfc3c8433d98a9be9f5ffd2e602",
+  "protocolSha256": "b472854c7ac3887eb17aa15ab8bab97459f0b9330c2c6da5bab3d2771c28eca4",
+  "resultSha256": "ea6c58899fbb590cf89f811086255eca67065420d4a32ad7b2aa63ac431ba625",
+  "auditSha256": "bc4bd4153388461d00f314cf28473cbf7053be534b3134ec005ae6ab55c988f7",
+  "qualificationProtocolSha256": "094f0ec42180594c23252be54b7075ea0e77c4031a08a124e766f29c91e464d1",
+  "qualificationSha256": "0048bd0f787bce9a48758394421184d4e30f372cd5960765efe9e24bddf7dc5f",
+  "productionQualified": false,
+  "controller": "verified-workflow-v1",
+  "taskCount": 2,
+  "calls": 19,
+  "totalCostMicros": 49063,
+  "costSavingPercent": 71.24281141108813,
+  "meanWorkflowIncreasePercent": 8.39319794364879,
+  "summary": {
+    "cascade": {
+      "passed": 6,
+      "falseAccepts": 0,
+      "rescues": 1,
+      "costMicros": 10151,
+      "meanWorkflowMs": 5191.408805499998
+    },
+    "strong": {
+      "passed": 6,
+      "falseAccepts": 0,
+      "rescues": 0,
+      "costMicros": 35299,
+      "meanWorkflowMs": 4789.423048666667
+    },
+    "cheap": {
+      "passed": 4,
+      "falseAccepts": 0,
+      "rescues": 0,
+      "costMicros": 3613,
+      "meanWorkflowMs": 3574.5251458333337
+    }
+  },
+  "perTask": [
+    {
+      "taskId": "visionmedia/bytes.js@581b2b5b96d10fe75bda7ae03ee6afab64b6abcb",
+      "summary": {
+        "cascade": {
+          "passed": 3,
+          "trials": 3,
+          "costMicros": 1814
+        },
+        "strong": {
+          "passed": 3,
+          "trials": 3,
+          "costMicros": 17010
+        },
+        "cheap": {
+          "passed": 3,
+          "trials": 3,
+          "costMicros": 1863
+        }
+      }
+    },
+    {
+      "taskId": "visionmedia/bytes.js@db70acb42f59ef8b1407d9efeac1ee3b4394e3ef",
+      "summary": {
+        "cascade": {
+          "passed": 3,
+          "trials": 3,
+          "costMicros": 8337
+        },
+        "strong": {
+          "passed": 3,
+          "trials": 3,
+          "costMicros": 18289
+        },
+        "cheap": {
+          "passed": 1,
+          "trials": 3,
+          "costMicros": 1750
+        }
+      }
+    }
+  ],
+  "models": {
+    "openai/gpt-6-luna": {
+      "provider": "openai",
+      "upstream": "gpt-6-luna",
+      "price": {
+        "input": 1.0000000000000001e-07,
+        "cached": 1e-08,
+        "write": 1.25e-07,
+        "output": 5e-07,
+        "request": 0,
+        "tiers": []
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna"
+    },
+    "openai/gpt-6.1-terra": {
+      "provider": "openai",
+      "upstream": "gpt-6.1-terra",
+      "price": {
+        "input": 1e-06,
+        "cached": 5e-08,
+        "write": 1.25e-06,
+        "output": 5e-06,
+        "request": 0,
+        "tiers": []
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+    }
+  },
+  "qualification": [
+    {
+      "id": "visionmedia/bytes.js@581b2b5b96d10fe75bda7ae03ee6afab64b6abcb",
+      "qualified": true,
+      "views": [
+        {
+          "publicOnly": false,
+          "reference": true,
+          "valid": true,
+          "passed": true,
+          "assertions": 30
+        },
+        {
+          "publicOnly": false,
+          "reference": false,
+          "valid": true,
+          "passed": false,
+          "assertions": 30
+        },
+        {
+          "publicOnly": true,
+          "reference": true,
+          "valid": true,
+          "passed": true,
+          "assertions": 29
+        },
+        {
+          "publicOnly": true,
+          "reference": false,
+          "valid": true,
+          "passed": false,
+          "assertions": 29
+        }
+      ]
+    },
+    {
+      "id": "visionmedia/bytes.js@db70acb42f59ef8b1407d9efeac1ee3b4394e3ef",
+      "qualified": true,
+      "views": [
+        {
+          "publicOnly": false,
+          "reference": true,
+          "valid": true,
+          "passed": true,
+          "assertions": 30
+        },
+        {
+          "publicOnly": false,
+          "reference": false,
+          "valid": true,
+          "passed": false,
+          "assertions": 30
+        },
+        {
+          "publicOnly": true,
+          "reference": true,
+          "valid": true,
+          "passed": true,
+          "assertions": 29
+        },
+        {
+          "publicOnly": true,
+          "reference": false,
+          "valid": true,
+          "passed": false,
+          "assertions": 29
+        }
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "caseIndex": 0,
+      "repeat": 0,
+      "strategy": "cascade",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 4174.121042,
+      "costMicros": 604,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 604,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 0,
+      "strategy": "strong",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 3800.3144999999995,
+      "costMicros": 5670,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 5670,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 0,
+      "strategy": "cheap",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 3522.0503339999996,
+      "costMicros": 601,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 601,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 1,
+      "strategy": "strong",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 3630.212707999999,
+      "costMicros": 5670,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 5670,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 1,
+      "strategy": "cheap",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 3976.4354590000003,
+      "costMicros": 631,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 631,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 1,
+      "strategy": "cascade",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 3601.7906250000015,
+      "costMicros": 613,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 613,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 2,
+      "strategy": "cheap",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 3928.7882500000014,
+      "costMicros": 631,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 631,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 2,
+      "strategy": "cascade",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 3170.202541999999,
+      "costMicros": 597,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 597,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 2,
+      "strategy": "strong",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 3419.427042000003,
+      "costMicros": 5670,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 5670,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 0,
+      "strategy": "cascade",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 4979.545166999997,
+      "costMicros": 680,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 680,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 0,
+      "strategy": "strong",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 7897.968124999999,
+      "costMicros": 6103,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 6103,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 0,
+      "strategy": "cheap",
+      "publicPassed": false,
+      "fullPassed": false,
+      "workflowMs": 3039.140707999999,
+      "costMicros": 567,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 567,
+          "publicPassed": false,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": null
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 1,
+      "strategy": "strong",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 5393.273332999997,
+      "costMicros": 6063,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 6063,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 1,
+      "strategy": "cheap",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 3751.4318330000024,
+      "costMicros": 617,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 617,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 1,
+      "strategy": "cascade",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 6678.580166,
+      "costMicros": 797,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 797,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 2,
+      "strategy": "cheap",
+      "publicPassed": false,
+      "fullPassed": false,
+      "workflowMs": 3229.3042910000004,
+      "costMicros": 566,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 566,
+          "publicPassed": false,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": null
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 2,
+      "strategy": "cascade",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 8544.213290999993,
+      "costMicros": 6860,
+      "steps": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 567,
+          "publicPassed": false,
+          "assertions": 29
+        },
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 6293,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 2,
+      "strategy": "strong",
+      "publicPassed": true,
+      "fullPassed": true,
+      "workflowMs": 4595.342583999998,
+      "costMicros": 6123,
+      "steps": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 6123,
+          "publicPassed": true,
+          "assertions": 29
+        }
+      ],
+      "fullAssertions": 30
+    }
+  ],
+  "limitations": [
+    "Two historical repairs from one repository; repeated draws are not independent tasks.",
+    "One fallback rescue is directly observed; independent cheap-arm failures are separate draws.",
+    "Training contamination unknown; public tests include the regression and the withheld case is unchanged preservation coverage.",
+    "Cascade is slower than strong-only on observed mean workflow time.",
+    "Private experiment drivers and raw receipts limit independent reproduction.",
+    "Frozen usage-based API costs are not reconciled provider invoices.",
+    "External deterministic verification does not qualify the adviser/synthesizer serving policy."
+  ]
+}

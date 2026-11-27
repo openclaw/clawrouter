@@ -37,12 +37,14 @@ capabilities:
     methods: [POST]
 endpoints:
   responses:
+    modelPassthrough: {}
     path: /v1/responses
     requestFormat: openai.responses
     responseFormat: openai.responses
     streaming: sse
     timeoutMs: 600000
   chat_completions:
+    modelPassthrough: {}
     path: /v1/chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
@@ -54,6 +56,32 @@ models:
       upstream: openrouter/auto
       capabilities: [llm.chat]
       pricingRef: openrouter-auto
+    - id: openrouter/openai/gpt-6.1-terra
+      upstream: openai/gpt-6.1-terra
+      capabilities: [llm.responses, llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
+      requestParameters:
+        responses:
+          sources:
+            - https://openrouter.ai/api/v1/models
+            - https://openrouter.ai/docs/api_reference/responses/overview
+          checkedAt: "2026-11-03"
+          defaultReasoningEffort: medium
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses: &terraCapabilities
+            sources:
+              - https://openrouter.ai/api/v1/models
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1050000
+            maxOutputTokens: 128000
+          chat_completions: *terraCapabilities
+      # The live catalog advertises the endpoint, but routing/plugin fees and
+      # actual billed usage still need qualification. Do not inherit direct rates.
+      pricingRef: openrouter-gpt-6-1-terra-unqualified-2026-11-03
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
@@ -64,8 +92,3 @@ billing:
     - name: output_tokens
       source: usage.completion_tokens
       unit: token
-tests:
-  fixtures:
-    - name: chat-basic
-      request: providers/_fixtures/openrouter/chat-basic.request.json
-      response: providers/_fixtures/openrouter/chat-basic.response.json

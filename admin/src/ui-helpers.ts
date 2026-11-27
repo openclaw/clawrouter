@@ -1,20 +1,21 @@
-import { request as dashboardRequest } from "./dashboard-fetch";
 import providerIconManifest from "./provider-icons.json";
+import { dollarInputFromMicros, requestPricesInput } from "./request-price-input";
 import {
   catalogProviderIds,
-  currencyInput,
+  kindLabel,
   credentialOutcome,
   errorMessage,
   optionalNumber,
   parseGroups,
   playgroundAccessEndpoint,
   playgroundPayload,
+  playgroundServicePreset,
+  preferredPlaygroundEndpoint,
   playgroundResponseText,
   routeKey,
   tenantSummaryFallback,
   unique,
 } from "./domain";
-import { kindLabel } from "./components";
 import type {
   AccessPolicy,
   AccessRole,
@@ -64,17 +65,6 @@ export async function settled<T>(loader: () => Promise<T>): Promise<{ ok: true; 
     return { ok: false, error: errorMessage(error) };
   }
 }
-
-export async function localLoginAvailable(baseUrl: string): Promise<boolean> {
-  try {
-    const index = await dashboardRequest<{ endpoints?: { sessionLogin?: unknown } }>(baseUrl, "/v1");
-    return typeof index.endpoints?.sessionLogin === "string";
-  } catch {
-    return false;
-  }
-}
-
-export { isTextualResponse, localLogin, playgroundRequest, request } from "./dashboard-fetch";
 
 export function createPlaygroundTurn(input: Omit<PlaygroundTurn, "id" | "response" | "rawResponse"> & { raw: string }): PlaygroundTurn {
   return {
@@ -151,6 +141,9 @@ export function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGr
   const now = new Date().toISOString();
   const hasCredential = Boolean(form.credential.trim()) || Boolean(existing?.hasCredential);
   const credentialFields = Object.keys(parseCredentialBundle(form.credentialBundle)).sort();
+  // Pausing retains credentials; reconnecting a tombstone requires a supplied replacement.
+  const freshPrimary = form.kind === "api_key" ? form.credential.trim() || credentialFields.length : form.accessToken.trim();
+  if (existing?.revokedAt && !freshPrimary) throw new Error("revoked upstream grant requires a new primary credential");
   const effectiveCredentialFields = credentialFields.length ? credentialFields : existing?.credentialFields ?? [];
   const hasAccessToken = Boolean(form.accessToken.trim()) || Boolean(existing?.hasAccessToken);
   const hasRefreshToken = Boolean(form.refreshToken.trim()) || Boolean(existing?.hasRefreshToken);
@@ -174,7 +167,7 @@ export function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGr
     maintenance: { keepWarm: form.keepWarm },
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
-    revokedAt: form.enabled ? null : now,
+    revokedAt: null,
     hasCredential,
     credentialFields: effectiveCredentialFields,
     hasAccessToken,
@@ -221,27 +214,6 @@ export function demoRuleFromForm(form: AssignmentRuleForm): AssignmentRule {
     createdAt: now,
     updatedAt: now,
   };
-}
-
-export function formatBudget(value: number | null | undefined) {
-  if (value === undefined || value === null) return "unlimited";
-  if (value === 0) return "blocked";
-  return formatMicros(value);
-}
-
-export function budgetPercent(row: AdminUsageRow) {
-  const limit = row.budget.limitMicros ?? row.monthlyBudgetMicros;
-  const spent = row.budget.spentMicros;
-  if (row.budget.ledger === "blocked" || limit === 0) return 100;
-  if (limit === undefined || limit === null || spent === undefined || spent === null) return null;
-  return Math.min(100, Math.max(0, (spent / limit) * 100));
-}
-
-export function formatMicros(value: number | null | undefined) {
-  if (value === undefined || value === null) return "unknown";
-  if (!value) return "none";
-  if (value < 10_000) return "<$0.01";
-  return `$${(value / 1_000_000).toFixed(2)}`;
 }
 
 export function formatCount(value: number | null | undefined) {
@@ -320,7 +292,7 @@ export function serviceRouteRank(route: RouteCatalog["manifestProxy"][number]) {
   return 1;
 }
 
-export function serviceModelFromForm(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
+export function serviceModelFromForm(form: Pick<PlaygroundForm, "servicePath" | "servicePayload">, route?: RouteCatalog["manifestProxy"][number]) {
   if (route?.pathParams?.includes("model")) return form.servicePath;
   try {
     const body = JSON.parse(form.servicePayload) as { model?: unknown };
@@ -352,15 +324,27 @@ export function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     tokenRole: key.tokenRole ?? "",
     tenantId: key.tenantId ?? "default",
     enabled: key.enabled,
-    monthlyBudgetMicros: currencyInput(key.monthlyBudgetMicros),
-    requestCostMicros: key.requestCostMicros?.toString() ?? "",
+    monthlyBudgetMicros: dollarInputFromMicros(key.monthlyBudgetMicros),
+    dailyBudgetMicros: dollarInputFromMicros(key.dailyBudgetMicros),
+    weeklyBudgetMicros: dollarInputFromMicros(key.weeklyBudgetMicros),
+    serviceTierAllowed: (key.serviceTiers?.allowed ?? ["default", "flex", "priority"]).join(", "),
+    serviceTierModels: key.serviceTiers?.models ? JSON.stringify(key.serviceTiers.models, null, 2) : "",
+    limitHint: key.limitHint ?? "",
+    requestCostDollars: dollarInputFromMicros(key.requestCostMicros),
+    requestCostsDollars: requestPricesInput(key.requestCostsMicros),
     budgetScope: key.budgetScope ?? "policy",
+    budgetMode: key.budgetMode ?? "reserve",
     providers: key.providers,
     allProviders: key.providers.length === 0,
+    models: key.models?.join(", ") ?? "",
+    allModels: key.models == null,
+    poolStatus: key.poolStatus ?? "hidden",
     retainRequestContent: key.retainRequestContent,
     grantStrategy: key.grantRouting.strategy,
     grantStickiness: key.grantRouting.stickiness,
     grantFailover: key.grantRouting.failover,
+    grantEnvironmentFallback: key.grantRouting.environmentFallback ?? false,
+    grantIncludedQuotaReservePercent: String(key.grantRouting.includedQuotaReservePercent ?? 0),
     grantStaleState: key.grantRouting.staleState,
     grantStaleAfterSeconds: String(key.grantRouting.staleAfterSeconds),
     grantSwitchAtUsedPercent: String(key.grantRouting.switchAtUsedPercent ?? 90),
@@ -385,7 +369,10 @@ export function adminOverviewFromPolicies(keys: AccessPolicy[], credentials: Pro
   };
 }
 
-export function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessByProvider: Record<string, ProviderReadiness> = {}, accessByProvider: Map<string, ProviderAccess> = new Map()): ServiceItem[] {
+// Manifest declarations are searchable inventory, not additional Playground targets.
+type CatalogSearchItem = ServiceItem & { manifestSearchModelIds?: string[] };
+
+export function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessByProvider: Record<string, ProviderReadiness> = {}, accessByProvider: Map<string, ProviderAccess> = new Map()): CatalogSearchItem[] {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const modelRoutesByProvider = routes.openaiCompatible.reduce((groups, route) => {
     groups.set(route.provider, [...(groups.get(route.provider) ?? []), route]);
@@ -421,6 +408,7 @@ export function serviceItems(providers: ProviderRow[], routes: RouteCatalog, rea
       routeCount: routePaths.length,
       models: models.length,
       modelIds: models.map((model) => model.id),
+      manifestSearchModelIds: unique(providerRoutes.flatMap((route) => (route.models ?? []).map((model) => model.id))),
       access: accessByProvider.get(providerId),
       readiness: readinessByProvider[providerId],
       brandIcon: providerBrandIcon(providerId),
@@ -428,9 +416,40 @@ export function serviceItems(providers: ProviderRow[], routes: RouteCatalog, rea
   });
 }
 
-export function matchesServiceQuery(item: ServiceItem, query: string) {
+export function catalogPlaygroundTarget(service: ServiceItem, query: string, models: CatalogModel[], routes: RouteCatalog["manifestProxy"]) {
+  const needle = query.trim();
+  const providerModels = models.filter((model) => model.provider === service.provider);
+  const providerRoutes = routes.filter((route) => route.provider === service.provider);
+  // The Playground picker offers proxy models only when there are no conversation models.
+  const proxyModels = needle && !providerModels.length ? serviceModelOptions(providerRoutes) : [];
+  const ids = new Set([...service.modelIds, ...proxyModels.map((item) => item.model)]);
+  const folded = needle.toLowerCase();
+  const matches = needle ? [...ids].filter((id) => id.toLowerCase() === folded) : [];
+  const matchedModel = ids.has(needle) ? needle : matches.length === 1 ? matches[0] : undefined;
+  const model = matchedModel ? providerModels.find((item) => item.id === matchedModel) : providerModels[0];
+  if (model) {
+    const endpoint = matchedModel ? { endpoint: preferredPlaygroundEndpoint(model) } : {};
+    return { matchedModel, preset: { mode: "model" as const, model: model.id, ...endpoint } };
+  }
+
+  const proxy = proxyModels.find((item) => item.model === matchedModel);
+  // Route search matches without case or surrounding whitespace. Only an exact
+  // published path selects an operation; fragments keep the service default.
+  const route = matchedModel ? proxy?.route
+    : providerRoutes.find((candidate) => candidate.route.toLowerCase() === folded) ?? providerRoutes[0];
+  if (route) {
+    const preset = playgroundServicePreset(route, proxy?.model);
+    if (!matchedModel || serviceModelFromForm(preset, route) === matchedModel) return { matchedModel, preset: { mode: "service" as const, ...preset } };
+  }
+  return { matchedModel, preset: null };
+}
+
+export function matchesServiceQuery(item: CatalogSearchItem, query: string) {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
+  // A service with no published routes uses a display-only /v1/proxy fallback.
+  if (item.routeCount > 0 && item.route.toLowerCase().includes(needle)) return true;
+  if (item.manifestSearchModelIds?.some((id) => id.toLowerCase().includes(needle))) return true;
   return [item.id, item.name, item.provider, item.kind, item.category, item.capabilities.join(" "), item.modelIds.join(" ")]
     .join(" ")
     .toLowerCase()

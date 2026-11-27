@@ -40,6 +40,14 @@ For a custom manifest or another intentional Worker variable, add its name to
 the comma-separated `CLAWROUTER_SELF_HOST_VARS` value. Never add the raw
 `CLAWROUTER_ADMIN_TOKEN`; the Worker receives only its digest.
 
+The image includes the system CA bundle required by workerd's TLS verifier.
+For an operator-hosted HTTPS provider with a private CA, mount a maintained PEM
+bundle read-only into the container and set `NODE_EXTRA_CA_CERTS` to its container
+path. This setting belongs to the container environment; it does not need to be
+added to `CLAWROUTER_SELF_HOST_VARS`. Recreate the container after rotating the
+bundle. Additional CA trust does not override workerd's rejection of compromised
+certificate keys.
+
 ## Console sign-in
 
 Local console sign-in is opt-in. Add `CLAWROUTER_LOCAL_AUTH=enabled` to
@@ -133,6 +141,9 @@ node scripts/smoke-self-host.mjs
 
 The smoke script creates a temporary policy and credential through the admin
 API, verifies its scoped catalog, and revokes it.
+Health readiness waits up to 30 seconds, with a two-second deadline covering
+each request and its response body and 500 milliseconds between failed attempts.
+If readiness fails, the script exits with the last failure reason.
 
 ## Persistence, backup, and upgrades
 
@@ -142,6 +153,14 @@ filesystem-consistent backup of that volume. Losing it loses policies, proxy
 credentials, grants, budgets, settled usage records, and retained content.
 Pending, delayed, or retrying local queue messages are memory-only and are lost
 on a crash or restart; drain request traffic before planned maintenance.
+
+Retained content cleanup starts when the Worker is ready and repeats once per
+minute without request traffic. Its dedicated cursor and status row persists in
+the same volume. Watch `content archive cleanup` messages for the last completed
+pass and backlog; `content cleanup retry` means startup or a sweep failed and will
+be retried. Cleanup stops with the Worker. Physical deletion can lag expiry on
+large archives or during downtime, and local R2 has a backing-blob crash window;
+see [request content retention](content-retention.md) for the exact limits.
 
 Upgrading past 0.1.0 does not change the console posture: local sign-in is
 opt-in, so the dashboard keeps failing closed until the operator sets

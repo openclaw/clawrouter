@@ -1,0 +1,22 @@
+name = "clawrouter-search-semantics-fakeco"
+account_id = "91b59577e757131d68d55a471fe32aca"
+main = "worker/fixtures/search-semantics.ts"
+compatibility_date = "2026-06-05"
+workers_dev = false
+preview_urls = false
+keep_vars = true
+
+[vars]
+SEARCH_SEMANTICS_ENVIRONMENT = "fakeco"
+
+[[routes]]
+pattern = "https://clawrouter-fakeco.openclaw.ai/search-semantics/*"
+zone_id = "72b20df9e990ac41365dadace6499187"
+
+[[durable_objects.bindings]]
+name = "SEARCH_SEMANTICS"
+class_name = "SearchSemanticsObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SearchSemanticsObject"]

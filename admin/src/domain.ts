@@ -16,6 +16,21 @@ import type {
   ServiceOutcome,
 } from "./ui-types";
 
+export function kindLabel(kind: string) {
+  const labels: Record<string, string> = {
+    all: "all",
+    gateway_platform: "gateway",
+    llm: "model",
+    "llm-gateway": "gateway",
+    media: "media",
+    model_provider: "model",
+    oauth_platform: "oauth",
+    search: "search",
+    tool_provider: "tool",
+  };
+  return labels[kind] ?? kind.replace(/_/g, " ");
+}
+
 export interface CredentialSummary {
   credentialId: string;
   policyId: string;
@@ -25,6 +40,7 @@ export interface CredentialSummary {
 
 export function credentialOutcome(credential: ProxyCredential, policies: AccessPolicy[]): { label: string; tone: OutcomeTone; active: boolean } {
   const policy = policies.find((item) => item.policyId === credential.policyId);
+  if (credential.expired || credential.expiresAt && Date.parse(credential.expiresAt) <= Date.now()) return { label: "expired", tone: "revoked", active: false };
   if (!credential.enabled) return { label: "revoked", tone: "revoked", active: false };
   if (credential.principalEnabled === false) return { label: "owner disabled", tone: "revoked", active: false };
   if (!policy) return { label: "policy missing", tone: "revoked", active: false };
@@ -142,19 +158,6 @@ export function optionalNumber(value: string) {
   return parsed;
 }
 
-export function optionalCurrencyMicros(value: string) {
-  if (!value.trim()) return undefined;
-  const normalized = value.replace(/[$,\s]/g, "");
-  const parsed = Number(normalized);
-  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${value} is not a valid budget`);
-  return Math.round(parsed * 1_000_000);
-}
-
-export function currencyInput(value: number | null | undefined) {
-  if (value === undefined || value === null) return "";
-  return String(value / 1_000_000);
-}
-
 export function optionalDecimal(value: string) {
   if (!value.trim()) return undefined;
   const parsed = Number(value);
@@ -235,19 +238,6 @@ export function reconcileDirectUserBindings(current: PolicyBinding[], email: str
   return [...other, ...direct];
 }
 
-export function directUserBindingChanges(current: PolicyBinding[], email: string, policies: AccessPolicy[], policyIds: string[]) {
-  const existing = new Map(current
-    .filter((binding) => binding.principalType === "user" && binding.principalId === email)
-    .map((binding) => [binding.policyId, binding]));
-  const changes = reconcileDirectUserBindings(current, email, policies, policyIds)
-    .filter((binding) => binding.principalType === "user" && binding.principalId === email)
-    .filter((binding) => existing.get(binding.policyId)?.enabled !== binding.enabled);
-  return {
-    removals: changes.filter((binding) => !binding.enabled),
-    additions: changes.filter((binding) => binding.enabled),
-  };
-}
-
 export function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
   const limit = policy.monthlyBudgetMicros;
   const blocked = limit === 0;
@@ -262,13 +252,14 @@ export function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
     tokenRole: policy.tokenRole,
     monthlyBudgetMicros: policy.monthlyBudgetMicros,
     requestCostMicros: policy.requestCostMicros,
+    requestCostsMicros: policy.requestCostsMicros,
     budgetScope: policy.budgetScope ?? "policy",
     budget: {
       configured: !unmetered,
       ledger: unmetered ? "unmetered" : perPrincipal ? "per_principal" : blocked ? "blocked" : "untracked",
       limitMicros: limit,
       spentMicros: perPrincipal ? null : blocked ? 0 : null,
-      remainingMicros: perPrincipal ? null : blocked ? 0 : limit,
+      remainingMicros: !perPrincipal && blocked ? 0 : null,
       breakdown: perPrincipal ? [] : undefined,
     },
   };
@@ -446,7 +437,8 @@ export function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | un
   const provider = form.mode === "model" ? model?.provider : route?.provider;
   if (!provider) return null;
   const access = accessByProvider.get(provider);
-  if (!access?.allowed) return "Cloudflare Access identity is not granted this provider";
+  if (!access) return "Your access to this provider couldn’t be verified. You can keep editing your draft.";
+  if (!access.allowed) return "Cloudflare Access identity is not granted this provider";
   const readiness = readinessByProvider[provider];
   if (!readiness) return "provider readiness is unknown";
   if (!readiness.executable) return readiness.reasons[0] ?? `provider is ${readinessLabel(readiness)}`;

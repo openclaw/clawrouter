@@ -1,0 +1,150 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { formatConfiguredLimit, formatMicros, parseBudgetUsd, presentAccountedSpend, presentAllowanceWindows, presentBudget, presentCost, presentPolicyBudget, presentProviderBudget } from "../src/cost-presentation.ts";
+
+test("cap USD input preserves micro precision and rejects invalid or unsafe values", () => {
+  assert.equal(parseBudgetUsd("1.000001"), 1_000_001);
+  assert.equal(parseBudgetUsd("0"), 0);
+  assert.equal(parseBudgetUsd("0.000001"), 1);
+  assert.equal(parseBudgetUsd("9007199254.740991"), Number.MAX_SAFE_INTEGER);
+  for (const input of ["", "-1", "1e3", "0.0000001", "9007199254.740992"]) assert.ok(Number.isNaN(parseBudgetUsd(input)));
+});
+
+test("allowances show only configured windows including weekly capacity and reset", () => {
+  const weekly = { configured: true, ledger: "durable_object", spentMicros: 1_000_000, limitMicros: 5_000_000_000, remainingMicros: 4_999_000_000, resetsAt: "2026-10-19T00:00:00.000Z" };
+  const budget = { configured: false, ledger: "unmetered", daily: { configured: false, ledger: "unmetered" }, weekly };
+  assert.deepEqual(presentAllowanceWindows(budget), [{ label: "This week", text: "This week: $1.00 used / $5000.00 limit · $4999.00 remaining · resets 2026-10-19T00:00:00.000Z" }]);
+  assert.match(presentAllowanceWindows({ ...budget, weekly: { ...weekly, spentMicros: null, remainingMicros: null } })[0].text, /Unknown used.*Unknown remaining/);
+  assert.deepEqual(presentAllowanceWindows({ configured: false }), []);
+});
+
+test("zero amounts retain their recorded accounting basis", () => {
+  const cases = [
+    ["none", "Accounted · no charge"],
+    ["policy_fixed", "Fixed policy tariff"],
+    ["manifest_pricing", "Token-based estimate"],
+    ["manifest_reservation", "Retained reservation estimate"],
+    ["manifest_request", "Published request tariff"],
+    ["manifest_request_reservation", "Retained request reservation estimate"],
+    ["provider_reported", "Provider-reported charge"],
+  ];
+  for (const [basis, label] of cases) {
+    assert.deepEqual(presentCost(0, basis), { value: "$0.00", label, unavailable: false });
+  }
+  assert.equal(presentCost(0, "unpriced_usage").value, "Price unavailable");
+  assert.equal(presentCost(0, "unpriced_request", true).value, "Price unavailable");
+  assert.equal(presentCost(1, "flat_fallback").value, "<$0.01");
+  assert.equal(presentCost(1, "flat_fallback").label, "Fallback tariff");
+});
+
+test("estimates, published upper bounds and fixed tariffs are not invoice claims", () => {
+  assert.equal(presentCost(2_000_000, "manifest_pricing").label, "Token-based estimate");
+  assert.equal(presentCost(2_000_000, "manifest_pricing", true).label, "Token-based reservation estimate");
+  assert.equal(presentCost(2_000_000, "manifest_rate_upper_bound").label, "Token-based estimate (rate upper bound)");
+  assert.equal(presentCost(15, "request_character_estimate").label, "Request-character estimate");
+  assert.equal(presentCost(60, "request_character_estimate", true).label, "Input-byte reservation estimate");
+  assert.equal(presentCost(50000, "manifest_request", true).label, "Request-tariff reservation estimate");
+  assert.equal(presentCost(50000, "manifest_request_reservation").label, "Retained request reservation estimate");
+  assert.equal(presentCost(50000, "provider_reported").label, "Provider-reported charge");
+  assert.deepEqual(presentCost(2_000_000, "policy_fixed"), { value: "$2.00", label: "Fixed policy tariff", unavailable: false });
+});
+
+test("unknown and historical basis strings preserve amounts without reclassification", () => {
+  for (const basis of [undefined, null, "model_pricing", "unpriced_service_tier", "future_basis"]) {
+    assert.deepEqual(presentCost(2_000_000, basis), { value: "$2.00", label: "Accounting basis unavailable", unavailable: false });
+  }
+  assert.equal(formatMicros(null), "Unknown");
+  assert.equal(formatMicros(undefined), "Unknown");
+  assert.equal(formatMicros(0), "$0.00");
+});
+
+test("aggregates preserve accounted totals and unavailable counts without inventing a basis breakdown", () => {
+  const summary = { requestCount: 1_000, actualCostMicros: 2_000_000, unpricedRequestCount: 0 };
+  assert.deepEqual(presentAccountedSpend(summary), { label: "accounted spend", value: "$2.00", note: "May include estimates" });
+  assert.equal(presentAccountedSpend({ ...summary, actualCostMicros: 0 }).value, "$0.00");
+  assert.equal(presentAccountedSpend({ ...summary, unpricedRequestCount: 4 }).value, "$2.00 accounted; 4 unpriced");
+  assert.match(presentAccountedSpend({ ...summary, unpricedRequestCount: 4 }).note, /4 unpriced calls excluded/);
+  assert.equal(presentAccountedSpend({ ...summary, actualCostMicros: 0, unpricedRequestCount: 1_000 }).value, "Price unavailable");
+  assert.match(presentAccountedSpend({ ...summary, unpricedRequestCount: undefined }).note, /price coverage unavailable/);
+  assert.equal(presentAccountedSpend({ requestCount: 0, actualCostMicros: 0, unpricedRequestCount: 0 }).value, "$0.00");
+});
+
+test("partial Fusion totals remain lower bounds, including mixed unavailable calls", () => {
+  const partial = presentAccountedSpend({ requestCount: 2, actualCostMicros: 2_000_000, unpricedRequestCount: 1 }, false);
+  assert.equal(partial.value, "≥$2.00 accounted; 1 unpriced");
+  assert.match(partial.note, /partial call history/);
+  const unavailable = presentAccountedSpend({ requestCount: 2, actualCostMicros: 0, unpricedRequestCount: 2 }, false);
+  assert.equal(unavailable.value, "Price unavailable");
+  assert.match(unavailable.note, /partial call history/);
+});
+
+const balance = { configured: true, ledger: "durable_object", limitMicros: 10_000_000, spentMicros: 2_000_000, remainingMicros: 8_000_000 };
+
+test("dashboard limit labels retain integer microdollars while usage amounts stay rounded", () => {
+  for (const [micros, expected] of [[0, "$0.00"], [1, "$0.000001"], [10_000, "$0.01"], [15_001, "$0.015001"], [150_000, "$0.15"], [1_200_000, "$1.20"], [Number.MAX_SAFE_INTEGER, "$9007199254.740991"]]) {
+    assert.equal(formatConfiguredLimit(micros), expected);
+    const budget = { ...balance, limitMicros: micros, spentMicros: null, remainingMicros: null };
+    const policy = presentPolicyBudget({ monthlyBudgetMicros: micros, budget: { ...budget, ledger: "unavailable", limitMicros: undefined } }, formatConfiguredLimit);
+    assert.equal(policy.limit, expected + " monthly limit");
+    assert.equal(policy.used, "Used amount unavailable"); assert.equal(policy.remaining, "Remaining unavailable");
+    assert.equal(presentAllowanceWindows(budget, formatConfiguredLimit)[0].text, "This month: Unknown used / " + expected + " limit · Unknown remaining");
+  }
+  assert.equal(presentBudget({ ...balance, ledger: "invalid_policy" }, "policy", true, formatConfiguredLimit).limit, "Limit unavailable");
+  assert.equal(presentBudget({ ...balance, limitMicros: null }, "policy", true, formatConfiguredLimit).limit, "No cap at this scope");
+  assert.equal(presentAllowanceWindows({ configured: false, override: true, ledger: "unmetered", limitMicros: null }, formatConfiguredLimit)[0].text, "This month: Unknown used / unlimited · no cap · member override");
+  assert.equal(formatConfiguredLimit(Number.MAX_SAFE_INTEGER + 1), "Unknown");
+  const windows = presentAllowanceWindows({ configured: false, daily: { ...balance, limitMicros: 1 }, weekly: { ...balance, limitMicros: 15_001 } }, formatConfiguredLimit);
+  assert.match(windows[0].text, /\$0\.000001 limit/); assert.match(windows[1].text, /\$0\.015001 limit/);
+  assert.equal(formatMicros(15_001), "$0.02");
+  assert.equal(presentAllowanceWindows({ ...balance, limitMicros: 15_001, spentMicros: 12_501, remainingMicros: 2_500 }, formatConfiguredLimit)[0].text, "This month: $0.01 used / $0.015001 limit · <$0.01 remaining");
+});
+
+test("budget usage includes reservations and stays separate from remaining capacity", () => {
+  const budget = presentBudget(balance, "policy");
+  assert.equal(budget.used, "$2.00 used");
+  assert.equal(budget.remaining, "$8.00 remaining");
+  assert.equal(budget.limit, "$10.00 monthly limit");
+  assert.equal(budget.percent, 20);
+  assert.match(budget.note, /Shared policy pool · UTC calendar month · Used includes reservations/);
+  assert.equal(presentBudget({ ...balance, spentMicros: 0, remainingMicros: 10_000_000 }, "policy").used, "$0.00 used");
+  assert.equal(presentBudget({ ...balance, spentMicros: 12_000_000, remainingMicros: 0 }, "policy").percent, 100);
+});
+
+test("per-principal policy overviews do not fabricate one shared balance", () => {
+  const row = { policyId: "team", monthlyBudgetMicros: 10_000_000, budgetScope: "principal", enabled: true, budget: { configured: true, ledger: "per_principal", spentMicros: null, remainingMicros: null } };
+  const budget = presentPolicyBudget(row);
+  assert.equal(budget.percent, null);
+  assert.equal(budget.used, "Separate balance per principal");
+  assert.equal(budget.remaining, "Per-principal balances");
+  assert.equal(budget.scopeLabel, "Per principal");
+  assert.equal(budget.limit, "$10.00 monthly limit");
+  assert.equal(presentBudget(balance, "principal").percent, 20);
+});
+
+test("no cap at one scope does not promise unrestricted or free requests", () => {
+  for (const scope of ["policy", "principal", "provider"]) {
+    const budget = presentBudget({ ledger: "unmetered", limitMicros: null, spentMicros: null, remainingMicros: null }, scope);
+    assert.equal(budget.remaining, "No cap at this scope");
+    assert.equal(budget.used, "Used amount unavailable");
+    assert.equal(budget.percent, null);
+    assert.match(budget.note, /Other policy or provider limits still apply/);
+  }
+  const provider = presentProviderBudget({ providerId: "example", enabled: true, monthlyBudgetMicros: 10_000_000, spentMicros: 2_000_000, remainingMicros: 8_000_000 });
+  assert.equal(provider.scopeLabel, "Provider-wide");
+  assert.equal(provider.remaining, "$8.00 remaining");
+});
+
+test("missing or failed ledger observations never become a zero balance or healthy state", () => {
+  for (const ledger of ["unavailable", "invalid_policy", "untracked"]) {
+    const budget = presentBudget({ ...balance, ledger, spentMicros: null, remainingMicros: null }, "policy");
+    assert.equal(budget.used, "Used amount unavailable");
+    assert.equal(budget.remaining, "Remaining unavailable");
+    assert.equal(budget.percent, null);
+    assert.notEqual(budget.health.label, "healthy");
+  }
+  assert.equal(presentBudget({ ...balance, ledger: "unavailable" }, "policy").percent, null);
+  const blocked = presentBudget({ ...balance, ledger: "blocked", limitMicros: 0, spentMicros: 0, remainingMicros: 0 }, "policy");
+  assert.equal(blocked.health.label, "budget blocked");
+  assert.equal(blocked.remaining, "$0.00 remaining");
+  assert.equal(blocked.percent, 100);
+});

@@ -1,0 +1,72 @@
+import { grantOwnerIdentity, qualifiedApiKeyOwner } from "./grant-owner-facts.ts";
+import { isKeyedModelDiscovery, keyedCatalogProviders } from "./model-discovery-formats.ts";
+import { basetenCatalogRequest, readBasetenModels } from "./baseten-model-catalog.ts";
+import { arceeCatalogRequest, readArceeModels } from "./arcee-model-catalog.ts";
+import { novitaCatalogRequest, readNovitaModels } from "./novita-model-catalog.ts";
+import type { ProxySelection } from "./proxy-selection.ts";
+import type { UpstreamAuth } from "./providers.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
+import { policyAllowsModel } from "../shared/policy-models.ts";
+import type { AccessPolicy, AuthorizedIdentity, Env } from "./types.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
+
+const catalogs = {
+  "baseten.models": { provider: keyedCatalogProviders["baseten.models"], request: basetenCatalogRequest, read: readBasetenModels },
+  "arcee.models": { provider: keyedCatalogProviders["arcee.models"], request: arceeCatalogRequest, read: readArceeModels },
+  "novita.models": { provider: keyedCatalogProviders["novita.models"], request: novitaCatalogRequest, read: readNovitaModels },
+} as const satisfies Record<keyof typeof keyedCatalogProviders, unknown>;
+
+export function readKeyedModelDiscovery(format: keyof typeof catalogs, response: Response, signal: AbortSignal, allows: (id: string) => boolean) {
+  return catalogs[format].read(response, signal, allows);
+}
+
+// Only these native keyed catalogs use this boundary. Public metadata has a
+// separate request contract and must never inherit these credential headers.
+export async function prepareKeyedModelDiscovery(request: Request, env: Env, auth: AuthorizedIdentity,
+  selection: ProxySelection, upstream: UpstreamAuth, url: URL, headers: Headers): Promise<(signal: AbortSignal) => Promise<AccessPolicy>> {
+  // Capture admission before any asynchronous preparation or authority read.
+  const admittedModels = auth.policy.models == null ? null : [...auth.policy.models];
+  const { provider, endpoint } = selection, format = endpoint.request_format;
+  if (!isKeyedModelDiscovery(format)) unavailable();
+  const contract = catalogs[format], grant = upstream.grant, key = upstream.grantKey;
+  if (provider.id !== contract.provider || endpoint.response_format !== format || selection.method !== "GET" || endpoint.method !== "GET"
+    || endpoint.path !== "/models" || endpoint.path_params.length || Object.keys(selection.pathParams).length
+    || endpoint.auth != null || endpoint.upstreamPath !== undefined || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
+    || Object.keys(selection.body).length || Object.keys(endpoint.query).length || url.search || new URL(request.url).search
+    || upstream.query.size || upstream.transport !== null || !key || !qualifiedApiKeyOwner(grant, provider.id)) unavailable();
+  const scheme = provider.auth.schemes.find(scheme => scheme.type !== "oauth");
+  if (scheme?.type !== "bearer" || scheme.header.toLowerCase() !== "authorization" || scheme.format !== "Bearer ${secret}"
+    || scheme.secretKind !== "api_key") unavailable();
+  const authorization = upstream.headers.get("authorization"), match = authorization?.match(/^Bearer ([\x21-\x7e]{1,8192})$/);
+  if (!match || typeof grant.credential !== "string" || grant.credential !== match[1]) unavailable();
+  const native = contract.request(upstream.baseUrl, match[1], request.signal);
+  if (native.url !== url.href) unavailable();
+  // Use only the published request's headers; caller/static header controls
+  // cannot turn discovery into another account or add forwarded credentials.
+  for (const name of [...headers.keys()]) headers.delete(name);
+  native.headers.forEach((value, name) => headers.set(name, value));
+  const original = grantOwnerIdentity(grant), destination = native.url;
+  const owner = { providerId: provider.id, endpointId: endpoint.id, grantKey: key, lineage: grant.credentialLineage!,
+    routeSha256: await sha256Hex(JSON.stringify([format, native.url])), policyGeneration: auth.policy.generation };
+  const { publicControlAuthorization, authorizeResponseControl, assertControlCallerLive } = await import("./response-control-authorization.ts");
+  const { inspectGrantCredentials } = await import("./grant-credentials.ts");
+  const caller = publicControlAuthorization(auth);
+  return async signal => {
+    // Reuse canonical caller/policy authorization, then inspect the already
+    // selected owner without admission/credential caches or materialization.
+    const policy = await authorizeResponseControl(env, caller, owner, signal);
+    const current = await inspectGrantCredentials(env, key, signal);
+    signal.throwIfAborted(); assertControlCallerLive(caller);
+    if (!policy || !qualifiedApiKeyOwner(current, provider.id) || grantOwnerIdentity(current) !== original || url.href !== destination
+      || !filterGrantCandidates(provider.id, [{ key, grant: current, runtimeState: null }], new Set(),
+        grantRoutingPolicy(policy.grantRouting), key, undefined, Date.now()).available.length) unavailable();
+    // Use the canonical permission semantics; a later policy cannot broaden
+    // the model set admitted for this original owner and request.
+    return { ...policy, models: admittedModels === null ? policy.models == null ? null : [...policy.models]
+      : admittedModels.filter(id => policyAllowsModel(policy, provider.id, id)) };
+  };
+}
+
+function unavailable(): never { throw new HttpError(503, "model_discovery_owner_unavailable", "the original catalog credential or destination is unavailable"); }

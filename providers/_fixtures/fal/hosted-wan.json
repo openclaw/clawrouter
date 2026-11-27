@@ -1,0 +1,13 @@
+{
+  "qualification": { "live": false, "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7", "origin": "https://queue.fal.run", "authorizationScheme": "Key", "upstreamCostMicros": null, "inlineBytesAreSynthetic": true },
+  "requests": [
+    { "model": "fal-ai/wan/v2.2-a14b/text-to-video", "pathParams": { "owner": "fal-ai", "app": "wan", "variant": "v2.2-a14b", "subvariant": "text-to-video" }, "body": { "prompt": "A blue paper boat drifting downstream", "resolution": "720p", "aspect_ratio": "16:9" } },
+    { "model": "fal-ai/wan/v2.2-a14b/image-to-video", "pathParams": { "owner": "fal-ai", "app": "wan", "variant": "v2.2-a14b", "subvariant": "image-to-video" }, "body": { "prompt": "Animate the paper sail", "resolution": "480p", "image_url": "data:image/png;base64,iVBORw0KGgo=" } }
+  ],
+  "requestId": "synthetic_fal_wan_job",
+  "submit": { "request_id": "synthetic_fal_wan_job", "status": "IN_QUEUE" },
+  "running": { "request_id": "synthetic_fal_wan_job", "status": "IN_PROGRESS" },
+  "completed": { "request_id": "synthetic_fal_wan_job", "status": "COMPLETED" },
+  "result": { "video": { "url": "https://assets.example/boat.mp4", "content_type": "video/mp4" }, "seed": 42 },
+  "historicalKling": { "model": "fal-ai/kling-video/v2.1/master/text-to-video", "body": { "prompt": "A boat on a stream", "duration": "5", "aspect_ratio": "16:9" }, "executable": false, "disposition": "vendor_says_no_longer_supported", "observedDate": "2026-11-03", "source": "https://fal.ai/models/fal-ai/kling-video/v2.1/master/text-to-video/api", "replacementModel": null }
+}

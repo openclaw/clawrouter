@@ -1,9 +1,201 @@
 # Agent spend control
 
-ClawRouter enforces centralized model budgets with pre-request reservation and
-post-response settlement. Provider credentials remain server-side; clients use
+ClawRouter supports centralized model budgets with default low-latency soft
+enforcement and opt-in pre-request reservation. Provider credentials remain server-side; clients use
 a ClawRouter credential and receive only the providers and models allowed by
 their policy.
+
+## Soft budgets and dynamic caps
+
+New policies created through the admin API or console default to
+`budgetMode: "soft"`, so budget checks never sit in front of the upstream request.
+Stored policies keep their mode, and a stored policy without one keeps
+`"reserve"`: pre-dispatch reservation, pricing guards, dispatch receipts, and
+conservative settlement. Set `"reserve"` explicitly for hard caps; the remaining
+reservation sections describe it.
+
+To move existing policies to soft budgets, preview and then apply:
+
+```sh
+pnpm cf:budget-mode -- --all            # plan: policies not yet soft, with their limits
+pnpm cf:budget-mode -- --policy team_server --policy member_weekly --apply
+```
+
+`--mode reserve` switches back. The command needs `CLAWROUTER_BASE_URL` and
+`CLAWROUTER_ADMIN_TOKEN` (plus `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET`
+behind Access), reads each policy and writes it back unchanged except for
+`budgetMode`. Keep reserve for keys whose cap must never be exceeded.
+
+Soft mode forwards ordinary HTTP inference immediately after authentication and
+selection (both normally served from the isolate hot cache, see
+[hot-path performance](hot-path-performance.md#zero-hop-warm-path-2026-10-23)). Revocation, expiry, model allowlists and service-tier controls
+remain authoritative. It starts all configured policy daily/weekly/monthly and
+provider monthly `/status` reads concurrently with upstream fetch, without
+reserve or dispatch RPCs. A zero limit, or a scope this isolate observed as exhausted
+within the last 10 seconds, is denied before dispatch with its existing 402 code,
+policy hint and reset time. Otherwise a window found at spent >= limit while the
+upstream is still pending aborts it before delivery, recording a denied,
+no-charge usage event; provider work may already have incurred an upstream cost
+and this denial does not claim a provider refund.
+
+When headers arrive first, the router waits **at most 50 ms more** for the budget
+check. Because the reads start at dispatch, this only happens when the ledger is
+slower than the provider's own time to headers. Read errors and checks still
+pending after that grace period fail open; late results cannot retract an exposed
+response but mark the scope exhausted for later requests. Concurrent requests can
+therefore overspend a soft cap by the work in flight before exhaustion is seen. Soft mode admits requests
+without a complete price, charges the priced portion of observed usage (or an
+explicit fixed tariff), and records `unpriced_usage` when any price is unknown.
+Missing usage has no invented reservation charge. It is deliberately unsuitable
+for strict spend enforcement or provider invoice caps.
+
+Responses WebSocket turns use the same local pre-dispatch denials, parallel
+status reads and observed charges, without reserve or dispatch RPCs. A shared
+upstream socket cannot cancel just one turn: exhaustion observed during a turn
+marks the scope exhausted for the next create on any socket in this isolate.
+The in-flight turn completes and is charged; no budget check aborts it mid-turn.
+
+The existing backpressured delivery observer delivers actual charges through
+`ctx.waitUntil`, independently of usage publication. Each `/charge` writes an
+already-settled, dispatch-started `budget_reservations` receipt, so existing
+`effectiveSpent` includes it and reserve policies see the same debt. Receipts use
+the server-generated usage-event identity for the request plus the original
+window key and logical scope; caller-supplied correlation IDs cannot deduplicate separate calls.
+Retries reuse the frozen charge ID, address and amount. Conflicting duplicates
+are rejected; identical duplicates are acknowledged. Retention is 45 days,
+covering the longest monthly window. Failed delivery enqueues `budget_charge`
+through the same queue/retry/DLQ boundary as `budget_settlement`; a failure never
+blocks or fails the already-delivered response. Operators must recover exhausted
+queue retries from the DLQ. Queue acceptance is not proof of a ledger charge.
+WebSockets preserve their persistent-session accounting boundary: if both charge
+delivery and durable recovery fail, or usage publication fails, the socket
+reports `accounting_unavailable` and closes.
+
+Overshoot consists of requests already in flight when a window crosses its limit,
+including in-flight WebSocket turns (up to 16 active lanes per socket), plus normal
+soft observation/charge-delivery staleness. Fail-open outages or delayed retries
+can extend that staleness without a strict monetary bound.
+
+| Path | Soft policy behavior |
+| --- | --- |
+| HTTP JSON/SSE, native and manifest inference | Parallel check then observed charge |
+| HTTP Responses continuations | Same soft behavior; routing/identity publication invariants remain enforced |
+| Background create on creation-only transports | Ordinary HTTP soft behavior; no durable recovery job |
+| Fusion advisers | Ordinary HTTP soft behavior |
+| Fusion synthesizer | Reserve-only: its coverage is acquired before adviser work and verified against the final request |
+| Responses WebSocket turns, including continuations | Pre-dispatch local denial, parallel check, observed charge; no mid-turn abort — a crossed cap denies the next turn |
+| Durable background admission, collection, recovery and controls | Reserve-only: frozen financial outcome and original reserve/dispatch receipts remain owned by the durable scope; controls never add charges |
+
+Changing durable background recovery needs a versioned financial outcome
+protocol; it is not enabled by this policy flag.
+
+Administrators from the existing configured Access admin model manage caps at
+**Users → Caps**. Policy defaults are edited inline; principal-scoped policies
+also show current-window member spend and effective daily/weekly/monthly limits.
+The override editor supports a USD amount (zero blocks), unlimited, and inherit,
+with the authenticated writer and authority timestamp displayed. Members see
+only their own effective allowance; this adds no in-app role promotion.
+
+`PUT /v1/admin/policies/{policyId}/budget-limits` patches only supplied window
+values on the latest policy inside `ACCESS_CONTROL`. `PUT
+/v1/admin/access-users/{email}/budget-overrides/{policyId}` replaces that policy's
+window overrides only, preserving the latest user profile, assignment state and
+other policy overrides atomically. The body contains daily/weekly/monthly
+`*BudgetMicros` fields: absent inherits, a nonnegative safe integer sets the cap,
+and null removes it. `{}` restores all inherited windows. The authority stamps
+`updatedBy` and `updatedAt`; caller-supplied audit fields are rejected. An optional `If-Match` header compares the previous `updatedAt` (or `absent`);
+the console uses it to reject stale saves with 409 `budget_override_changed`. Profile,
+login and assignment writes preserve overrides. Writes require administrator
+authentication and the existing browser same-origin protection.
+
+The admission result already contains the key owner's user record; Access
+sessions already read their own record. Effective limits use that record without
+another inference round trip and only affect principal-scoped budgets. Ledger
+addresses/window keys and accumulated debt stay unchanged. A lower limit applies
+to the next admission; raising it unblocks without resetting spend. Key inspect,
+`/v1/usage`, session entitlements and administrator usage report effective limits
+and per-window `override` provenance. Removing a cap stops new charges to that
+window; retained earlier spend remains visible, and reinstating it uses that
+same debt.
+
+Member provisioning sets both member and optional team-server policies to soft.
+Repeatable `--github-team org/team` creates underscore-only `github_team` rule
+IDs with the org rule's groups/policies and `revokeOnLoss: true`. Explicit
+`--github-org` can accompany teams; without either, `openclaw` remains the default
+org. Supplying only teams creates no implicit org rule.
+
+## Reading costs and budgets
+
+Dashboard and Usage show **accounted spend** for the last 30 days. This total
+can include token-based estimates, fixed policy tariffs, and retained
+reservation estimates; it is not a provider invoice. Unpriced calls are counted
+separately. Recent request rows label their recorded accounting basis:
+
+| Label | Meaning |
+| --- | --- |
+| Token-based estimate | Reported usage priced at declared rates. A published rate upper bound is labeled separately when recorded. |
+| Fixed policy tariff | The operator's configured request amount, including an explicit zero. |
+| Retained reservation estimate | Usage was incomplete or dispatch outcome uncertain. |
+| Accounted · no charge | The recorded `none` basis, shown as `$0.00`. |
+| Price unavailable | No complete price is available; the call is excluded from accounted spend. |
+| Accounting basis unavailable | A historical or unknown basis; the recorded amount is preserved. |
+
+Fusion detail covers the calls visible in the recent-event window. Partial
+groups stay labeled partial; their sum does not replace the 30-day totals.
+Budget balances use the **UTC calendar month**, with an optional independent **UTC calendar day** cap. **Used** includes outstanding
+reservations, and **remaining** is the capacity reported by that budget ledger.
+Shared policy pools, per-principal balances, and provider-wide budgets stay
+separate. No cap at one scope does not remove other policy or provider limits.
+Unavailable balances remain unknown; failed refreshes keep their last-known
+timestamp and stale warning.
+
+## Daily and weekly limits and service tiers
+
+`dailyBudgetMicros` is an independent policy cap. `budgetScope: "principal"`
+shares it across all keys of a signed-in email (falling back to credential ID
+for unowned keys); `"policy"` shares it policy-wide. Both monthly and daily legs
+reserve the full request bound. Daily keys append `/day/YYYY-MM-DD` to the
+policy/principal path on the existing shard; monthly keys and receipts are
+unchanged. Refusal or failure of a later leg releases all earlier reservations.
+Dispatch, settlement, Fusion, WebSocket turns, and durable background recovery
+use the same variable-length leg list. Status adds `budget.daily`, including
+`limitMicros`, `spentMicros`, `remainingMicros` and `resetsAt`. Outstanding
+reservations count as spent capacity. Daily-only caps require priced requests;
+zero blocks admission. Daily exhaustion returns 402 `daily_budget_exhausted`,
+naming the limit and next midnight UTC.
+
+`weeklyBudgetMicros` is an independent cap with the same scope and reservation
+rules. Its key is `<policy/principal path>/week/YYYY-Www` on the same shard;
+`YYYY-Www` uses the ISO week-year and resets Monday at 00:00 UTC. All configured
+monthly, daily, weekly and provider legs must reserve successfully or the
+earlier holds roll back. `budget.weekly` reports limit, spent, remaining and
+`resetsAt`; weekly-only budgets require priced requests and zero blocks.
+Exhaustion returns 402 `weekly_budget_exhausted` with the limit, next Monday
+reset and policy hint. Member provisioning defaults to $5,000/week with no
+daily or monthly cap.
+
+Policies may specify `serviceTiers: {allowed: ["default", "flex", "priority"],
+models: {"openai/gpt-6.1-sol": ["default", "flex", "priority", "ultrafast"]}}`.
+A model override replaces the global list. The key's optional `serviceTiers`
+list intersects that selection; null inherits. Personal creation may only
+request tiers granted by the policy for at least one visible model. Built-in
+defaults allow Default, Flex and Fast (`priority`), and deny Ultrafast and unknown
+tiers, **including unbudgeted policies that previously forwarded them**.
+Only `team_server` may grant Ultrafast, only for `openai/gpt-6.1-sol`.
+
+OpenAI-format admission normalizes omitted/default/auto to `default`, `fast` to
+`priority`, and other strings to lowercase. This applies to native, manifest,
+unified HTTP, Fusion and Responses WebSocket creates at shared model admission.
+Non-OpenAI formats keep their existing tier behavior, including native Gemini
+pricing. Tier denial returns 400 `service_tier_not_allowed`, naming the model,
+requested tier and allowed list. Explicit tiers retain their original spelling.
+Omitted or `auto` tiers on OpenAI API Chat Completions and Responses routes become `service_tier: "default"`
+before reservation and forwarding; subscription transports and other providers
+retain their existing payloads.
+
+A policy's optional `limitHint` is appended to daily/weekly/monthly policy-budget,
+service-tier and model-allowlist refusals. Session entitlements also include it
+with per-policy daily and weekly status. See [member keys](member-keys.md) for rollout.
 
 ## Enforcement contract
 
@@ -20,6 +212,35 @@ Image, document, file-ID, screenshot, stored prompt, conversation, previous
 response, and stored-item inputs reserve the model's full declared input window
 because their billable token count cannot be inferred from the small serialized
 reference. Chat Completions output bounds are multiplied by `n`.
+
+One exception is qualified: on the Anthropic Messages wire, an inline `image`
+block with a `base64` PNG, JPEG, GIF or WebP source whose header matches its
+`media_type` reserves `ceil(width / 28) × ceil(height / 28)` visual tokens in
+place of its encoded bytes. Claude bills images by those 28-pixel patches and
+only downsizes them, so the original dimensions bound every model tier; the rest
+of the request still counts as serialized bytes. The exception is deliberately
+narrow:
+
+- Position: only a block that is a direct element of a `user` message's
+  `content`, or of the `content` array of a `tool_result` block in that message,
+  qualifies. Claude bills image-shaped objects anywhere else, such as
+  `tool_use.input`, as text, so they keep the full input window.
+- Block keys: only `type`, `source`, `cache_control`, and `transformations` with
+  `oversized_image` set to `downsize` or `error`; any other key keeps the full
+  window.
+- Strict headers: a PNG needs exactly one 13-byte `IHDR` before its first
+  `IDAT`. A JPEG marker walk must reach the start of scan through known
+  segments with exactly one frame header; stuffed `FF00`, reserved or
+  unsupported markers, stray bytes, or a second frame header keep the full
+  window, because real decoders may read a different frame from such streams.
+
+URL, Files API, malformed, mismatched or larger-than-8000-pixel images,
+documents, and images on other wires keep the full input window. For example, a
+1920×1080 screenshot adds 2,691 visual tokens instead of reserving the
+1,000,000-token Claude Opus 5.5 window. Settlement still uses the provider's
+reported usage. Ordinary soft-mode HTTP requests do not reserve before
+dispatch, so this bound changes admission for reserve-mode budgets and for the
+soft-mode paths that still reserve (background recovery and fusion synthesis).
 
 Input reservation includes the declared generic cache-write rate; duration-specific
 cache controls also select their declared write rates. After the response completes, ClawRouter settles reported input,
@@ -44,16 +265,17 @@ from earlier events; an incomplete stream retains its reservation.
 [Anthropic classifier refusals before any output](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback)
 report token usage but are not billed. ClawRouter preserves those counts in
 usage events and settles token-priced requests at zero after the complete
-response. Refusals after output begins remain billable. Explicit fixed policy
-prices still apply independently of upstream token billing.
+response with `cost_basis: none`. Refusals after output begins remain billable.
+Explicit fixed policy prices still apply independently of upstream token billing;
+successful fixed zero and positive tariffs retain `cost_basis: policy_fixed`.
 
 `requestCostMicros` on a policy is an explicit fixed-cost override. Routes
-without pricing use the legacy one-micro fallback only when no monthly budget
+without pricing use the legacy one-micro fallback only when no monthly, daily or weekly budget
 is configured. Every budgeted call fails closed until its route has versioned
 manifest pricing or a fixed policy price. A zero-cost route, such as Anthropic
 token counting, skips reservation.
 
-Gemini native requests containing `cachedContent`, `fileData`, or `inlineData`
+Gemini native requests containing `fileData` or `inlineData`
 reserve the full declared input window, including media in system instructions
 or typed function-response parts. With the bundled Standard Gemini 3.5 Flash
 rate card, 1,048,576 input tokens reserve **$1.572864 before output**.
@@ -63,7 +285,7 @@ candidate add $0.000900, for a total reservation of **$1.573764**.
 
 Each configured policy and provider monthly budget must have enough unreserved
 headroom for the entire request. Otherwise ClawRouter returns HTTP 402 before
-dispatch, even for a small cached-content or media request. This corrected bound
+dispatch, even for a small media request. This corrected bound
 also applies to existing callers after upgrading. Increase the applicable budget
 headroom, or explicitly choose the fixed `requestCostMicros` policy tariff when
 that accounting model fits your deployment. A fixed tariff records the operator's
@@ -75,26 +297,121 @@ rates and releases the unused reservation. Missing or malformed usage retains
 the reservation, as for other providers. The reservation is not an upstream
 invoice charge.
 
-Hosted web search adds fees and repeated model work that token pricing does not
-cover. Requests enabling Responses `web_search` or `web_search_preview` (including
-dated versions), Anthropic `web_search_*`, or Chat `web_search_options` now return
-`pricing_required` before dispatch when either policy or provider has a monthly
-budget and no fixed policy price. Disable hosted search for token-priced budgets,
-or let the operator set an explicit fixed request tariff.
+Native Gemini `serviceTier` (or `service_tier`) selects Standard, Flex, or
+Priority pricing. Omitted, null, and `unspecified` select Standard; OpenAI's
+`default`, `auto`, and `fast` strings are not native Gemini aliases. Unknown or
+malformed tiers require a fixed tariff when either monthly budget is enabled;
+unmetered requests still forward.
 
-With both monthly limits disabled, hosted-search requests still forward. Their
+The September 23, 2026 [Gemini 3.5 Flash price snapshot](https://ai.google.dev/gemini-api/docs/pricing#gemini-3.5-flash)
+uses these USD rates per million tokens; the snapshot date does not claim an
+upstream price change:
+
+| Tier | Input | Cached input | Output, including thinking |
+| --- | ---: | ---: | ---: |
+| Standard | $1.50 | $0.15 | $9.00 |
+| Flex | $0.75 | $0.08 | $4.50 |
+| Priority | $2.70 | $0.27 | $16.20 |
+
+[Flex never upgrades automatically](https://ai.google.dev/gemini-api/docs/generate-content/flex-inference),
+so its reservation uses Flex rates. [Priority can downgrade to Standard](https://ai.google.dev/gemini-api/docs/generate-content/priority-inference),
+so its reservation covers both. Settlement uses the returned
+`usageMetadata.serviceTier` and `x-gemini-service-tier` header: one known source
+or matching sources establishes the tier; conflicting or invalid evidence
+retains the reservation. With neither source, Standard and Flex retain their
+documented service, while Priority retains its reservation. Tier headers do
+not supply missing token usage. Fixed tariffs and incomplete hosted-tool prices
+keep their existing accounting rules.
+
+Token rates alone do not always describe a complete request price. Sonar Pro has
+a [mandatory request fee](https://docs.perplexity.ai/docs/sonar/models/sonar-pro),
+including its default search mode. Its manifest retains the known token rates
+and declares `pricing.unpricedCosts: [request_fee]` until fee metering is available.
+The documented example of 26 input and 832 output tokens costs $0.018558 including
+the low-context fee, rather than the token-only $0.012558.
+
+ClawRouter also recognizes these incomplete request prices by wire format:
+
+- OpenAI Responses web search (including dated variants), file search, code
+  interpreter, image generation, and shell tools with hosted container
+  environments, including Responses Lite `additional_tools` and
+  [tool search `tool_search_output` input declarations](https://developers.openai.com/api/docs/guides/tools-tool-search#understand-what-gets-loaded);
+  Chat `web_search_options`; Anthropic `web_search_*` and separately billed
+  `code_execution_*`.
+- OpenAI Responses MCP, programmatic tool calling, hosted tool search, and
+  `multi_agent.enabled`. Their server work lacks a qualified cumulative
+  reservation bound. Hosted tool search is conservatively unqualified under
+  measured budgets; this does not assert a separate fee or an observed overrun.
+- Anthropic web fetch, fee-waived code execution, advisor, server tool search,
+  and MCP toolsets/server declarations. Server tool loops can accumulate input
+  across iterations; one context window does not bound the total.
+- Anthropic `context_management.edits` with `compact_20260112` and on-demand
+  `compaction: {type: summarize}`. [Compaction usage](https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand#count-compaction-usage)
+  is billed through iterations outside the ordinary top-level totals.
+- Opaque Responses `prompt` references, because
+  [saved prompts retain tool configuration](https://developers.openai.com/api/docs/assistants/migration).
+- Gemini Google Search, legacy search retrieval, and Maps grounding fees.
+- Gemini URL context, File Search, code execution, and MCP servers, whose hosted token work
+  is not fully bounded or metered by the ordinary model counters. A tool can
+  have no separate fee and still make token-only settlement incomplete.
+- Gemini `cachedContent` references, because a
+  [cached resource can retain tools and tool configuration](https://ai.google.dev/api/caching).
+  The opaque reference cannot establish a complete token-only request price.
+
+These calls return `pricing_required` before dispatch when either policy or
+provider has a monthly budget and no fixed policy price. Choose a model/request
+with complete token pricing, or let the operator set an explicit fixed tariff.
+This applies to existing callers after upgrading, including native and manifest
+proxy routes and every Responses WebSocket turn.
+
+With both monthly limits disabled, these requests still forward. Their
 billable usage records zero accounted micros with `cost_basis: unpriced_usage`,
 meaning **price unavailable**, even when complete tokens and a known served tier
 are returned. Pre-dispatch denials and proven nonbillable responses remain known
 zero. Free token counting and fixed policy tariffs keep their existing behavior.
-Basic Anthropic web fetch has only token charges and retains its full-input-window
-reservation. Other hosted tools remain outside complete fee accounting.
+Model discovery and Fusion preflight apply the same completeness guard for both
+policy and provider budgets. Unmetered models remain available; Fusion displays
+their incomplete prices as unavailable rather than a zero-cost estimate.
+Anthropic [waives code-execution fees](https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool#usage-and-pricing)
+when `web_fetch_20260209`, `web_search_20260209`, or a later version is present;
+the waived combination still needs a fixed tariff under a measured budget
+because cumulative server-loop token usage is unqualified. Web search retains
+its separate fee. This does not introduce a tool-fee or sub-inference meter.
 Client-executed function, custom, namespace, local-shell, and apply-patch tools
-use the model's token rates; a function named `web_search` is still a function.
+use the model's token rates, as does OpenAI tool search with `execution: client`.
+Claude client tools, historical compaction blocks, and `clear_*` context edits
+do not introduce these server-work gaps. A function named `web_search` is still
+a function.
 A fixed `requestCostMicros` is an operator-defined
 tariff, not a measurement of provider tool charges.
 
-Full hosted-search metering remains unqualified. The published
+Responses requests with a nonempty `previous_response_id` also consume the
+parent response's durable tool-pricing evidence before reservation. Only a
+final `token_only` proof allows ordinary token pricing. Retained hosted
+fees or server work remain unpriced even when the delta omits their declarations.
+Legacy, pending, corrupt, future-version, and otherwise unknown evidence returns
+`pricing_required` under either measured budget; fixed tariffs and unmetered
+requests keep the behavior above. A served tier or token total cannot clear this
+captured gap. Enabling a provider budget can therefore reject an existing chain
+without changing the policy generation. Missing, expired, or changed routing
+ownership still returns `continuation_restart_required` instead.
+
+Deploy the durable proof producer before this consumer. The upgrade does not
+drain old writers, promote pending rows, or infer proof from a lost publication
+acknowledgment: each request uses the authoritative evidence present when it
+resolves its parent. An already-captured unknown remains unknown for that request.
+Start a supported token-priced request without the response ID, or configure an
+explicit fixed tariff, when an older chain has no qualified proof. Turn-state
+aliases remain routing affinity and never certify inherited tool prices.
+
+This boundary covers response-ID ancestry only. Full-input conversation and
+`item_reference` state, encrypted compaction witnesses, and complete compaction
+metering remain separate work. A producer-observed opaque compaction can leave
+a response row unknown; this change does not certify it or disable all full-input
+sessions. Root `tools` remain current-request configuration, not automatically
+inherited declarations.
+
+Complete hosted-tool metering remains unqualified. The published
 [OpenAI tool prices](https://developers.openai.com/api/docs/pricing) and
 [search contract](https://developers.openai.com/api/docs/guides/tools-web-search)
 do not establish a complete mapping from returned input usage to separately billed
@@ -106,7 +423,14 @@ or isolated upstream usage/cost reconciliation, plus a demonstrated finite bound
 on cumulative input and tool work. Anthropic also charges
 [searches separately](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool),
 while [web fetch](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool)
-has no additional tool fee. This guard does not claim an upstream invoice cap.
+has no additional tool fee. OpenAI containers and generated images need their
+own [billing contracts](https://developers.openai.com/api/docs/pricing), rather
+than a guessed flat fee per model response. Gemini
+[tool pricing](https://ai.google.dev/gemini-api/docs/pricing) and
+[URL-context usage](https://ai.google.dev/gemini-api/docs/generate-content/url-context)
+include hosted work beyond ordinary prompt and candidate counters. ClawRouter
+preserves reported token counts and totals without claiming they account for
+every charged dimension. This guard does not claim an upstream invoice cap.
 
 Pricing lives beside the model in `providers/*.provider.yaml`:
 
@@ -127,6 +451,39 @@ pricing:
     outputMicrosPerMillion: 22500000
 ```
 
+## Speech character estimates
+
+OpenAI [`tts-1`](https://developers.openai.com/api/docs/models/tts-1) has a
+published rate of $15 per million input characters. Send a JSON speech request
+to `/v1/audio/speech` with `model: "openai/tts-1"`, `input`, and `voice`, or use
+`/v1/native/openai/v1/audio/speech` with the native `tts-1` model spelling.
+The manifest route `/v1/proxy/openai/speech` accepts the same request inside
+its `body` envelope. API-key grants and configured API keys are supported;
+subscription grants remain Responses-only.
+
+The [speech API](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create)
+accepts at most 4096 input characters. ClawRouter validates 1–4096 Unicode code
+points before reserving either budget. Other speech fields pass through;
+`response_format` selects MP3, Opus, AAC, FLAC, WAV, or PCM, and `speed` retains
+its upstream meaning. ClawRouter rejects `instructions` and SSE for `tts-1`;
+`stream_format`, when supplied, must be `audio`. The manifest declares separate
+`openai.audio_speech` JSON request and `audio.binary` response formats.
+
+Admission reserves UTF-8 input bytes at 15 micros each, up to 245,760 micros.
+Only nonempty successful `audio/*` or `application/octet-stream` delivery through
+EOF settles to input code points at 15 micros each, up to 61,440 micros. The
+usage basis is `request_character_estimate`, not an invoice or token usage.
+Empty audio, wrong MIME, cancellation, and unknown dispatched outcomes retain
+the reservation; known HTTP rejection and known-unsent failures remain no-charge.
+Explicit fixed tariffs, including zero, keep their existing precedence. Catalog
+availability remains request-dependent rather than promising that every input
+fits the remaining balance.
+
+When existing content-retention policy requires it, the request JSON includes
+the speech input text. Generated audio is streamed without buffering or archiving;
+all token fields stay null. Transcription, multipart requests, Realtime, and
+other speech models are outside this contract.
+
 ## Per-provider budgets
 
 Provider connections can set a monthly budget that applies tenant-wide to all
@@ -137,12 +494,37 @@ exhausted provider limit returns HTTP 402 with `provider_budget_exhausted`.
 Leaving the provider budget blank keeps the provider unmetered and adds no
 provider-ledger call to the request path.
 
+Policy, principal, and provider budgets have distinct logical scopes, even when
+their identifiers share a storage address. For example, tenant `provider` with
+policy `openai` does not consume the OpenAI provider budget twice. Admission and
+budget status use the same scope recorded on each reservation receipt.
+
+Upgrades keep existing storage addresses, monthly balances, and settlement
+receipts. Older charges lack a scope tag and cannot be reliably separated, so
+they remain shared conservative debt for their original monthly window. Late
+settlement updates that original receipt; it never moves debt into a new month.
+No operator migration or budget reset is needed. During mixed-version deployment,
+older callers conservatively count all charges in the shared window. Rolling back
+to the durable-settlement implementation also retains every charge, but restores
+that shared-budget behavior until re-upgrade. Rollback to versions predating
+durable settlement is not covered by this compatibility guarantee.
+
 Rates are integer micro-US-dollars per million tokens. Update `pricingRef` and
 `effectiveAt` together when a provider changes price. Subscription traffic uses
 the equivalent public API list price for governance; it is not an invoice for
 the subscription.
 
-Bundled dated pricing also covers Together Qwen 2.5 7B, DeepSeek V4 Flash,
+Together GLM-5.2 uses the [published 1,048,575-token context ceiling](https://docs.together.ai/docs/serverless/models)
+for input reservation and retains its [131,072-token output limit](https://www.together.ai/models/glm-52).
+The September 23, 2026 snapshot corrects the earlier 262,144-token ceiling;
+it does not mark a provider price change. Rates remain $1.40 input, $0.26 cached
+input, and $4.40 output per million tokens. A full-window input bound with a
+1,000-token output limit reserves **$1.472405** in each configured budget.
+Existing callers with less headroom receive HTTP 402 before dispatch. Complete
+reported usage settles at the same rates and releases unused capacity; this
+reservation is not an upstream invoice charge.
+
+Bundled dated pricing also covers Together GLM-5.2, DeepSeek V4 Flash,
 MiniMax M3, Google Gemini 2.5 Flash, Groq Llama 3.1 8B Instant, and xAI Grok
 4.3, including provider cache and long-context tiers where applicable.
 Dynamic catalogs such as OpenRouter and generic Hugging Face model routes stay
@@ -157,12 +539,25 @@ Flex rate cards in `pricing.serviceTiers`. Rates come from the
 Fast is not a universal multiplier. GPT-5.6 uses the Sol alias and its current
 promotional prices, published through at least November 21, 2026.
 
-ClawRouter forwards `service_tier` unchanged. Absent or `auto` can inherit the
-provider project's default, so admission reserves the highest applicable known
-rates. Explicit tiers reserve their card and Standard downgrade rates. Unknown
+The `openai/gpt-6.1-sol` price snapshot dated October 18, 2026 also declares
+Ultrafast (`ultrafast`, without aliases). It includes short- and long-context
+input, cached-input, cache-write, and output rates; Standard cached input costs
+$0.10 per million tokens up to 272K input. Above 272K input, long-context rates
+apply to the entire request. The model reserves up to 922,000 input and 128,000
+output tokens within its 1,050,000-token context. Reasoning efforts are `low`,
+`medium` (default), `high`, `xhigh`, and `max`; tool calling uses Responses,
+while Chat Completions is supported without tools. See the
+[model contract](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
+
+ClawRouter explicitly sets `service_tier: "default"` for absent or `auto` tiers
+on Chat Completions and Responses requests routed to the OpenAI API, including native routes and
+Responses WebSocket creates. These requests use Default rates for reservation
+and, when the provider confirms Default service, settlement, rather than
+inheriting the provider project's default. Explicit tiers are forwarded unchanged
+and reserve their card and Standard downgrade rates. Subscription transports and
+other providers keep their existing tier behavior. Unknown
 requested tiers fail with `pricing_required` when either the policy or provider
-has a monthly budget. When both limits are disabled, existing and new policies
-continue forwarding the requested tier unchanged. Explicit fixed policy tariffs
+has a monthly budget. When budgets are disabled, requests still must pass the policy/key tier allowlist. Explicit fixed policy tariffs
 remain available. A short-only card stays in the reservation
 envelope when actual input may fit below its published limit.
 
@@ -187,15 +582,69 @@ This replaces the earlier zero-charge policy for pre-response transport failures
 missing headers cannot prove that upstream work was free. Pre-dispatch failures
 still release reservations to zero; HTTP error and cancellation outcomes are unchanged.
 Historical admission denials marked `unpriced_service_tier` remain known zero. No policy migration or new setting is required.
+New known-unsent and nonbillable outcomes record `cost_basis: none`, while
+preserving their original reservation and observed token fields. A zero amount
+alone does not establish this basis: free manifest rates retain their pricing
+basis, and unavailable prices remain `unpriced_usage`. Existing event strings
+and stored usage history are not rewritten.
 The bundled OpenAI route is pinned to the global `api.openai.com` endpoint.
 Regional data-residency endpoints are not exposed; a regional deployment needs
 a separate versioned price with OpenAI's 10% uplift or a fixed policy price.
 Request `stream_options.include_usage=true` for Chat Completions streams
 so successful terminal events can release unused reservation. Known model IDs
 retain the same pricing when called through native or manifest proxy routes.
-Background Responses do not provide final usage in their initial response;
-ClawRouter does not poll them for deferred settlement. Their reservation remains
-charged when complete billable usage is unavailable.
+Background Responses on a selected transport with declared creation, retrieval
+and cancellation support retain the original reservation while the router
+collects terminal usage for up to one hour from admission. This is a router
+collection limit, not an upstream storage guarantee; `store: false` does not
+promise results remain retrievable for that hour. Missing usage, upstream 404,
+or a disconnected caller does not establish a refund. A known-unsent creation
+releases its original holds, while uncertain dispatched work retains the
+conservative amount. JSON/SSE create, retrieve, cancel and collection share one
+immutable accounting event; repeated controls do not create new charges.
+Successful pending observations poll again after five seconds. Observation errors
+back off to at most 30 seconds; these are router scheduling policies, not a
+provider retention guarantee. Financial retries keep their separate backoff.
+
+Creation-only transports retain ordinary request-bound accounting. Complete
+observed usage settles the request; missing usage or uncertain delivery retains
+its conservative amount. They have no deferred collection or recovery locator.
+An allowed creation retry on another grant cannot switch accounting modes after
+reservation. Synthetic transport tests do not prove upstream acceptance.
+
+Financial recovery retries that frozen receipt automatically until seven days
+after admission. Authenticated operator replay remains available until 44 days
+after admission. Neither path repeats the generation request or resets the
+deadlines. Policy, provider and usage acknowledgements are independent; an absent
+or conflicting budget receipt remains unresolved. Usage retention expiry is not
+a financial acknowledgement. At day 44, unresolved recovery is marked expired,
+not paid. Each authorization scope admits at most 16 active admissions/collections
+and 64 total recovery records, including evictable completed summaries. Serialized
+job metadata is capped at 64 KiB at admission and subsequent transitions; this is
+not a bound on the SQLite file's physical size. Raw response IDs and collection
+headers are erased when collection ends; the original 30-day continuation binding
+can still authorize caller-supplied response IDs without reopening accounting.
+See the [background API and recovery operator contract](api-reference.md#background-responses).
+
+After any durable background admission, retain a recovery-aware Worker and
+`ACCESS_CONTROL` owner until outstanding observation and accounting obligations
+are resolved. Do not roll back to code without background recovery while
+obligations or inventory completeness are unknown. Roll forward to compatible
+code, preserving owner SQL, alarms, ledger identities and the original provider
+credential route. The 44-day replay deadline is not a drain period or settlement
+guarantee. An expired, absent or evicted record, usage-only acknowledgement, or
+cancel acknowledgement is not proof of settlement; completion requires all financial
+legs settled and a terminal usage-delivery disposition.
+
+To pause new traffic for an explicitly identified affected policy set, an
+administrator can use `POST /v1/admin/policies/{id}/revoke` and verify each policy
+is disabled. This pauses all requests on those policies and cannot retract
+already authorized or in-flight admissions. Do not disable, rotate or revoke the
+original upstream connection/credential as a drain switch: collection still needs
+that route. Inspect known locators/scopes and replay only frozen receipts; scoped
+lists are not a global inventory. If bounded inspection leaves obligations or
+inventory completeness unknown, retain or repair the recovery-aware runtime.
+
 The bundled Anthropic catalog includes Claude Opus 5, Sonnet 5, and Fable 5 with a 1M
 context window and 128K output limit, alongside the existing model routes.
 Fable 5 always uses adaptive thinking and requires
@@ -308,12 +757,28 @@ is a separate policy-controlled R2 archive; see [Content retention](content-rete
 
 ## Current boundary
 
-The enforcement slice covers token-priced model calls and rejects unpriced hosted
-search under measured budgets. Provider tool-call fees are not metered; unknown dynamic models require manifest pricing or a policy
+The enforcement slice covers token-priced model calls and rejects known incomplete
+request prices under measured budgets. Provider request/tool fees and cumulative
+hosted-tool work are not metered; unknown dynamic models require manifest pricing or a policy
 `requestCostMicros` override. This is not a hard provider invoice cap.
 
 Reservations have a 15-minute admission lease. Before upstream dispatch, both
 policy and provider ledgers must record that the request may incur charges.
+Ordinary HTTP requests without fail-closed retention or post-reservation account
+revalidation, and Responses WebSocket turns without required retention, request
+`dispatched: true` in `/reserve`. Each ledger writes its reservation and dispatch
+state atomically in one call. The Worker skips `/dispatch` only for individual
+legs whose response acknowledges `dispatched: true`; old ledger versions still
+receive the separate dispatch call. Failed multi-leg admission settles every
+successful leg to zero, including dispatch-started legs.
+
+If a Worker dies between the combined call and the upstream send, its reservation
+is already dispatch-started. It is retained/conservatively settled at lease
+expiry instead of released: this can over-charge unsent work, never under-charge
+potentially dispatched work. Required WebSocket retention, fail-closed HTTP
+retention (background jobs and Claude bodies above 8 MiB), account revalidation,
+and durable/recovery owners keep their two-step ordering.
+
 Expired reservations that never reached this transition settle to zero. Dispatched
 work retains its conservative charge across lease expiry, including long HTTP
 streams and delayed settlement recovery. Complete usage can replace that estimate

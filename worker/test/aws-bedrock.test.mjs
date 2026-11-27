@@ -3,13 +3,7 @@ import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import test from "node:test";
 
-import {
-  copyRequestHeaders,
-  providerById,
-  providerReadinessFromState,
-  signSigV4,
-  upstreamPath,
-} from "../providers.ts";
+import { providerReadinessFromState, signSigV4 } from "../providers.ts"; import { copyRequestHeaders, upstreamPath } from "../provider-request.ts"; import { providerById } from "../provider-catalog.ts";
 
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 
@@ -58,7 +52,7 @@ test("AWS Bedrock is ready with long-lived credentials and no session token", ()
   assert.deepEqual(readiness.optionalConfig, ["AWS_SESSION_TOKEN"]);
   assert.deepEqual(readiness.missingConfig, []);
   assert.equal(readiness.configPresent, true);
-  assert.deepEqual(readiness.executableEndpoints, ["invoke_model", "invoke_model_stream"]);
+  assert.deepEqual(readiness.executableEndpoints, ["embed_text", "invoke_model", "invoke_model_stream"]);
 });
 
 test("AWS Bedrock manifest requests accept raw path models and remove routed body models", () => {

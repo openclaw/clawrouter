@@ -8,6 +8,7 @@ import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import { fileURLToPath } from "node:url";
+import { waitForChildExit } from "./smoke-process.mjs";
 
 // Signal Wrangler directly; a package-manager launcher may leave its child alive.
 const wrangler = fileURLToPath(new URL(wranglerMetadata.bin.wrangler, import.meta.resolve("wrangler/package.json")));
@@ -104,7 +105,7 @@ const upstreamServer = createHttpServer(async (request, response) => {
     ? "local proposal"
     : JSON.stringify(body.messages).includes("local proposal") ? "fused answer" : "proposal missing";
   response.writeHead(200, { "content-type": "application/json", ...(authorization === "Bearer healthy" ? { "x-clawrouter-grant-failover": "1", "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "80", "x-ratelimit-reset-requests": "120" } : {}) });
-  response.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }], usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 } }));
+  response.end(JSON.stringify({ choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }], usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 } }));
 });
 await new Promise((resolve, reject) => upstreamServer.listen(upstreamPort, "127.0.0.1", resolve).once("error", reject));
 
@@ -124,11 +125,16 @@ for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => 
 try {
   const base = `http://127.0.0.1:${port}`;
   await waitUntilReady(`${base}/v1/health`);
-  const health = await json(`${base}/v1/health`);
+  const healthResponse = await fetch(`${base}/v1/health`);
+  assert.equal(healthResponse.status, 200);
+  const health = await healthResponse.json();
+  const versionId = healthResponse.headers.get("x-clawrouter-version-id");
+  assert.match(versionId, /^[0-9a-f-]{36}$/i, "workerd version metadata is bound");
   assert.deepEqual(health, {
     ok: true,
     service: "clawrouter-edge",
     version: packageMetadata.version,
+    versionId,
     runtime: "typescript",
     environment: "production",
     observability: {
@@ -213,7 +219,10 @@ try {
     assert.equal(invalidFusion.status, 400);
     assert.equal((await invalidFusion.json()).error.code, "fusion_config_invalid");
   }
-  for (const model of ["cohere/command-a-plus-05-2026", "cloudflare-ai-gateway/auto"]) {
+  const compatibleFusion = await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ ...bootstrapBody.fusion, adviserModels: ["cohere/command-a-plus-05-2026"] }) });
+  assert.equal(compatibleFusion.status, 200, "Cohere compatibility Chat is a qualified Fusion adviser");
+  assert.deepEqual((await compatibleFusion.json()).adviserModels, ["cohere/command-a-plus-05-2026"]);
+  for (const model of ["cohere/embed-v4.0", "cloudflare-ai-gateway/auto"]) {
     const incompatibleFusion = await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ ...bootstrapBody.fusion, adviserModels: [model] }) });
     assert.equal(incompatibleFusion.status, 400);
     assert.equal((await incompatibleFusion.json()).error.code, "fusion_model_incompatible");
@@ -352,18 +361,26 @@ try {
   assert.equal(legacyInspection.status, 200, "bootstrap imports genuine combined legacy keys before setting migration markers");
   const clientCatalog = await fetch(`${base}/v1/catalog`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(clientCatalog.status, 200);
-  assert.deepEqual((await clientCatalog.json()).providers.map((provider) => provider.id), ["firecrawl", "replicate"]);
+  assert.deepEqual((await clientCatalog.json()).providers.map((provider) => provider.id), ["firecrawl"], "authorized but unconfigured providers stay out of the client catalog");
   const mismatch = await fetch(`${base}/v1/proxy/firecrawl/scrape`, { method: "POST", headers: { authorization: `Bearer ${proxyKey}`, "content-type": "application/json" }, body: JSON.stringify({ body: { model: "openai/gpt-5.5", url: "https://example.com" } }) });
   assert.equal(mismatch.status, 400);
   assert.equal((await mismatch.json()).error.code, "model_provider_mismatch");
   const wrongNativeMethod = await fetch(`${base}/v1/native/firecrawl/v2/scrape`, { method: "DELETE", headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(wrongNativeMethod.status, 405);
   assert.equal((await wrongNativeMethod.json()).error.code, "method_not_allowed");
-  const directManifestGet = await fetch(`${base}/v1/proxy/replicate/prediction?prediction_id=pred_123`, { headers: { authorization: `Bearer ${proxyKey}` } });
-  assert.equal(directManifestGet.status, 503);
-  assert.equal((await directManifestGet.json()).error.code, "provider_not_configured", "GET manifest routes parse path params without a JSON envelope");
+  const unownedPrediction = await fetch(`${base}/v1/proxy/replicate/prediction?prediction_id=pred_123`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(unownedPrediction.status, 409);
+  assert.equal((await unownedPrediction.json()).error.code, "response_owner_unavailable", "unowned managed IDs fail before provider credential lookup");
+  // Keep direct-GET parameter parsing independent of managed job ownership.
+  // This key cannot use OpenAI; a parsed model_id reaches that policy verdict.
+  const directManifestGet = await fetch(`${base}/v1/proxy/openai/models_retrieve?model_id=gpt-6-luna`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(directManifestGet.status, 403);
+  assert.equal((await directManifestGet.json()).error.code, "provider_not_allowed", "GET manifest routes parse path params without a JSON envelope");
   const grant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/replicate`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "replicate", kind: "api_key", credential: "local-e2e-token" }) });
   assert.equal(grant.status, 200);
+  const configuredCatalog = await fetch(`${base}/v1/catalog`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(configuredCatalog.status, 200);
+  assert.deepEqual((await configuredCatalog.json()).providers.map((provider) => provider.id), ["firecrawl", "replicate"], "adding an account makes its authorized provider visible on the next catalog read");
   const bundledGrantUrl = `${base}/v1/admin/upstream-grants/policies/migrate/aws_bundle`;
   const credentials = Object.fromEntries([["access" + "KeyId", "local"], ["secret" + "AccessKey", "local"]]);
   const bundledGrant = await fetch(bundledGrantUrl, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "aws-bedrock", kind: "api_key", label: "original", credentials }) });
@@ -384,9 +401,9 @@ try {
   const unknownProviderGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/unknown_provider`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "missing-provider", kind: "api_key", credential: "local" }) });
   assert.equal(unknownProviderGrant.status, 400, "upstream grants require a catalog provider");
   assert.equal((await unknownProviderGrant.json()).error.code, "unknown_provider");
-  const missingPathParam = await fetch(`${base}/v1/proxy/replicate/prediction`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  const missingPathParam = await fetch(`${base}/v1/proxy/openai/models_retrieve`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(missingPathParam.status, 400);
-  assert.equal((await missingPathParam.json()).error.code, "missing_path_param");
+  assert.equal((await missingPathParam.json()).error.code, "invalid_model_id", "non-managed GET path params fail parsing before provider policy");
   const usageAfterInvalidRequest = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(usageAfterInvalidRequest.status, 200);
   assert.equal((await usageAfterInvalidRequest.json()).budget.spentMicros, 0, "invalid manifest requests must not reserve budget");
@@ -532,10 +549,38 @@ try {
   }
   const canonicalCredential = await fetch(`${base}/v1/admin/credentials/shape_credential`, { method: "PUT", headers: userHeaders, body: JSON.stringify({ policyId: " migrate ", secretSha256: credentialDigest.toUpperCase(), enabled: false, principalId: " Owner@Example.com ", policyGeneration: "injected", ignored: true }) });
   assert.equal(canonicalCredential.status, 200);
-  assert.deepEqual(await canonicalCredential.json(), { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, principalEnabled: true, active: false, principalId: "owner@example.com" });
+  const canonicalCredentialBody = await canonicalCredential.json();
+  assert.ok(Date.parse(canonicalCredentialBody.expiresAt) > Date.now(), "new credentials have a finite future expiry");
+  const expectedCredential = { credentialId: "shape_credential", name: null, policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, principalEnabled: true, active: false, principalId: "owner@example.com", expiresAt: canonicalCredentialBody.expiresAt, expired: false, serviceTiers: null };
+  assert.deepEqual(canonicalCredentialBody, expectedCredential);
   const credentialsAfterMutation = await fetch(`${base}/v1/admin/credentials`, { headers: userHeaders });
   assert.equal(credentialsAfterMutation.status, 200);
-  assert.deepEqual((await credentialsAfterMutation.json()).credentials.find((credential) => credential.credentialId === "shape_credential"), { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, principalEnabled: true, active: false, principalId: "owner@example.com" });
+  assert.deepEqual((await credentialsAfterMutation.json()).credentials.find((credential) => credential.credentialId === "shape_credential"), expectedCredential);
+  // Exercise naming through real workerd and its serialized credential authority.
+  // Exact response/list assertions also prove rename cannot restore a revoked key.
+  for (const [name, expected] of [["  Archived laptop  ", "Archived laptop"], ["   ", null], ["Again", "Again"], [null, null]]) {
+    const renamed = await fetch(`${base}/v1/admin/credentials/shape_credential/rename`, { method: "POST", headers: userHeaders, body: JSON.stringify({ name }) });
+    assert.equal(renamed.status, 200);
+    assert.equal(renamed.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await renamed.json(), { ...expectedCredential, name: expected });
+    const listed = await fetch(`${base}/v1/admin/credentials`, { headers: userHeaders });
+    assert.equal(listed.status, 200);
+    assert.deepEqual((await listed.json()).credentials.find((credential) => credential.credentialId === "shape_credential"), { ...expectedCredential, name: expected });
+  }
+  const namedSecret = "local-named-key-secret";
+  const named = await fetch(`${base}/v1/admin/credentials`, { method: "POST", headers: userHeaders, body: JSON.stringify({ credentialId: "named_credential", policyId: "migrate", name: "  Work laptop  ", secretSha256: sha256(namedSecret), serviceTiers: ["default"] }) });
+  assert.equal(named.status, 201);
+  const namedBody = await named.json();
+  assert.deepEqual(namedBody, { ...expectedCredential, credentialId: "named_credential", name: "Work laptop", enabled: true, active: true, principalId: null, serviceTiers: ["default"], expiresAt: namedBody.expiresAt });
+  assert.ok(Date.parse(namedBody.expiresAt) > Date.now());
+  for (const name of ["Home laptop", null]) {
+    const renamed = await fetch(`${base}/v1/admin/credentials/named_credential/rename`, { method: "POST", headers: userHeaders, body: JSON.stringify({ name }) });
+    assert.equal(renamed.status, 200);
+    assert.deepEqual(await renamed.json(), { ...namedBody, name });
+    const inspected = await fetch(`${base}/v1/key/inspect`, { headers: { authorization: `Bearer clawrouter-live-named_credential-${namedSecret}` } });
+    assert.equal(inspected.status, 200, "rename and clear preserve the original secret");
+    assert.equal((await inspected.json()).verification, "verified");
+  }
   const policiesBeforeInvalidRoots = await fetch(`${base}/v1/admin/policies`, { headers: userHeaders });
   assert.equal(policiesBeforeInvalidRoots.status, 200);
   const migratePolicyBeforeInvalidRoots = (await policiesBeforeInvalidRoots.json()).policies.find((policy) => policy.policyId === "migrate");
@@ -741,7 +786,9 @@ try {
       contentRef: null,
     },
   );
-  assert.doesNotMatch(JSON.stringify(attributedEvent), /private prompt sentinel|private tool sentinel|messages|completion|rotation123|clawrouter-live/i);
+  const { request_format: reportedFormat, ...attributedMetadata } = attributedEvent;
+  assert.equal(reportedFormat, "openai.chat_completions");
+  assert.doesNotMatch(JSON.stringify(attributedMetadata), /private prompt sentinel|private tool sentinel|messages|completion|rotation123|clawrouter-live/i);
   const invalidTrace = await fetch(`${base}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -779,7 +826,9 @@ try {
       contentRef: null,
     },
   );
-  assert.doesNotMatch(JSON.stringify(invalidTraceEvent), /invalid trace private sentinel|messages|completion|rotation123|clawrouter-live/i);
+  const { request_format: invalidTraceFormat, ...invalidTraceMetadata } = invalidTraceEvent;
+  assert.equal(invalidTraceFormat, "openai.chat_completions");
+  assert.doesNotMatch(JSON.stringify(invalidTraceMetadata), /invalid trace private sentinel|messages|completion|rotation123|clawrouter-live/i);
   for (const [tokenRef, credential] of [["no-fail-a", "no-fail-primary"], ["no-fail-b", "no-fail-backup"]]) {
     const stored = await fetch(`${base}/v1/admin/upstream-grants/policies/no_failover/${tokenRef}`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, credential }) });
     assert.equal(stored.status, 200);
@@ -808,8 +857,12 @@ try {
   const callsBeforeUnavailablePool = upstreamCalls.length;
   const revokedBackup = await fetch(`${base}/v1/admin/upstream-grants/policies/failover/local-b-backup/revoke`, { method: "POST", headers: adminHeaders });
   assert.equal(revokedBackup.status, 200);
+  // The only remaining grant is cooling from the upstream 429 (retry-after: 120),
+  // so the pool answers 429 with ClawRouter's own re-admission time.
   const unavailablePool = await failoverRequest();
-  assert.equal(unavailablePool.status, 503);
+  assert.equal(unavailablePool.status, 429);
+  const poolRetryAfter = Number(unavailablePool.headers.get("retry-after"));
+  assert.ok(Number.isInteger(poolRetryAfter) && poolRetryAfter >= 1 && poolRetryAfter <= 120, `cooling pool Retry-After ${unavailablePool.headers.get("retry-after")}`);
   assert.equal((await unavailablePool.json()).error.code, "upstream_grant_pool_unavailable");
   assert.equal(upstreamCalls.length, callsBeforeUnavailablePool, "cooled scoped grants never fall through to an unscoped provider credential");
   const budgetedConnectionUrl = `${base}/v1/admin/connections/local-openai`;
@@ -847,8 +900,9 @@ try {
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`, { cause: error });
 } finally {
+  const exited = waitForChildExit(child);
   child.kill("SIGTERM");
-  await Promise.race([new Promise((resolve) => child.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 5_000))]);
+  await exited;
   upstreamServer.closeAllConnections();
   await new Promise((resolve) => upstreamServer.close(resolve));
   rmSync(config, { force: true });

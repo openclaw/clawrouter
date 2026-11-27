@@ -1,0 +1,49 @@
+{
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "checkedAt": "2026-11-03",
+  "request": {
+    "text": "Synthetic [pause] speech",
+    "voice_id": "eve",
+    "language": "en",
+    "output_format": {
+      "codec": "mp3"
+    },
+    "speed": 1
+  },
+  "audioBytes": [
+    0,
+    255,
+    128,
+    1
+  ],
+  "voices": {
+    "voices": [
+      {
+        "voice_id": "eve",
+        "name": "Synthetic Eve",
+        "language": "en",
+        "gender": "female"
+      },
+      {
+        "voice_id": "ara",
+        "name": "Synthetic Ara"
+      }
+    ]
+  },
+  "pricingEvidence": {
+    "source": "https://docs.x.ai/developers/pricing",
+    "usdPerMillionCharacters": 15,
+    "activatedTariff": false,
+    "characterUnitQualified": false
+  },
+  "qualification": {
+    "liveCall": false,
+    "syntheticBytesOnly": true,
+    "nativeModelField": false,
+    "webSocketQualified": false,
+    "policyFixedIsUpstreamCost": false,
+    "unknownCostIsZero": false,
+    "remotePostReplay": false
+  }
+}
+

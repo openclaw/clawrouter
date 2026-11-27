@@ -4,7 +4,7 @@ import { queue } from "../ledgers.ts";
 
 test("usage delivery targets its policy shard and acknowledges success", async () => {
   const calls = [], message = queueMessage(usageEvent());
-  await queue({ messages: [message] }, mockEnv(calls, new Response("accepted")));
+  await queue({ messages: [message] }, mockEnv(calls, Response.json({ eventId: message.body.id, outcome: "stored" })));
   assert.deepEqual(calls.map((call) => call.name), ["policy:tenant:policy"]);
   assert.equal(message.ackCount, 1);
   assert.equal(message.retryCount, 0);

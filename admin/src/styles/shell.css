@@ -402,7 +402,41 @@
 .statusBar-success strong { background: var(--ok-wash); color: var(--ok); }
 .statusBar-pending strong { background: var(--warn-wash); color: var(--warn); }
 .statusBar-error strong { background: var(--bad-wash); color: var(--bad); }
-.statusBar-error { border-bottom-color: var(--bad); }
+.statusBar-error { border-bottom-color: var(--bad); flex-wrap: wrap; }
+.statusBar-error span { white-space: normal; overflow-wrap: anywhere; }
+
+.refreshNotice {
+  align-items: flex-start;
+  gap: 8px 16px;
+  padding-block: 10px;
+}
+
+.refreshNoticeCopy {
+  display: grid;
+  flex: 1 1 36ch;
+  gap: 3px;
+  min-width: 0;
+}
+
+.refreshNotice .refreshNoticeCaption {
+  justify-self: start;
+  font-size: 11px;
+}
+
+.refreshNoticeDetail {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.refreshNoticeDetail p {
+  font-size: 12px;
+}
+
+.refreshNoticeCopy .refreshNoticeImpact {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 660;
+}
 
 @media (max-width: 1180px) {
   .appShell {
@@ -509,11 +543,27 @@
 
   .topbar {
     position: static;
+    flex-wrap: wrap;
+    row-gap: 4px;
     padding: 8px 12px;
+  }
+
+  /* Keep a whole page name beside the status, or put the actions on the next line. */
+  .pageTitle {
+    flex: 1 1 min-content;
+    min-width: min-content;
+  }
+
+  .pageTitle h1 {
+    white-space: nowrap;
   }
 
   .pageTitle p {
     white-space: normal;
+  }
+
+  .topActions {
+    margin-inline-start: auto;
   }
 
   .topActions .status {

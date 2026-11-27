@@ -1,0 +1,1013 @@
+{
+  "schema": "fusion-test-complexity-routing-screen-v1",
+  "scope": "Exposed development traces only; no live routed workflow.",
+  "taskCount": 30,
+  "sourceGroups": 20,
+  "modelCalls": 0,
+  "newCostMicros": 0,
+  "method": {
+    "features": [
+      "publicTests",
+      "publicTestBytes",
+      "publicBaselineFailures"
+    ],
+    "rule": "Single threshold in either direction, fitted on training source groups only.",
+    "ranking": "Minimum training model cost, then fewer cheap routes, then lexicographic policy tuple.",
+    "selection": "Training requires quality at least strong and above cheap, zero losses or false accepts, at least 20% recorded and normalized cost savings, and no added elapsed time; otherwise constant strong.",
+    "evaluation": "Leave one whole source file out, including every sibling task. All feature thresholds come from training values.",
+    "candidate": "Independent cheap control, up to two attempts; original independent strong control follows public failure. Both traces charged on fallback. Hidden failures never trigger fallback.",
+    "routerMsPerTask": 1.0,
+    "overheadCaveat": "Nominal one-millisecond charge, including constant strong; not a production latency measurement. Feature metadata already exists in the frozen task protocol."
+  },
+  "summary": {
+    "passed": 29,
+    "cheapPassed": 23,
+    "baselinePassed": 29,
+    "losses": 0,
+    "falseAccepts": 0,
+    "candidateRoutes": 11,
+    "fallbacks": 3,
+    "costMicros": 268152,
+    "normalizedMicros": 268156,
+    "baselineCostMicros": 323571,
+    "baselineNormalizedMicros": 323573,
+    "elapsedMs": 473763.19662100007,
+    "baselineElapsedMs": 389221.9982870001
+  },
+  "developmentScreen": false,
+  "qualifiedGain": false,
+  "parentProtocolSha256": "f02a0a05bac102ab4982b07fa0ba77db2903eb8bc127111a6fdb1cc29b3fa7b0",
+  "protocolSha256": "ff4add77e1a940499a259d615efc1e67473e5e034a9c9e6db6b59cd84d0ece33",
+  "resultSha256": "c28573e01d4d987a3b35ea56d7fcffa718ba72ca988e9cfe0acc79600fab37f6",
+  "auditSha256": "2d7c429d41f28b02c9b220596a8f064095425dbf440398c2064e2421b6963adc",
+  "folds": [
+    {
+      "group": "lib/api/readable.js",
+      "policy": [
+        "publicBaselineFailures",
+        "le",
+        1
+      ],
+      "ids": [
+        "undici-57f50a278b86"
+      ]
+    },
+    {
+      "group": "lib/cache/memory-cache-store.js",
+      "policy": [
+        "publicBaselineFailures",
+        "le",
+        1
+      ],
+      "ids": [
+        "undici-47c2493a992e",
+        "undici-3e622dc7947b"
+      ]
+    },
+    {
+      "group": "lib/core/connect.js",
+      "policy": [
+        "publicTests",
+        "le",
+        13
+      ],
+      "ids": [
+        "undici-d983b4f9ac1a"
+      ]
+    },
+    {
+      "group": "lib/dispatcher/balanced-pool.js",
+      "policy": [
+        "publicBaselineFailures",
+        "le",
+        1
+      ],
+      "ids": [
+        "undici-8f5868fbdbc8"
+      ]
+    },
+    {
+      "group": "lib/dispatcher/client-h1.js",
+      "policy": [
+        "publicTestBytes",
+        "ge",
+        28759
+      ],
+      "ids": [
+        "undici-a490364ec273",
+        "undici-a287effccc5e",
+        "undici-7d3cf924c262"
+      ]
+    },
+    {
+      "group": "lib/dispatcher/dispatcher1-wrapper.js",
+      "policy": null,
+      "ids": [
+        "undici-5e6e0e96e86f"
+      ]
+    },
+    {
+      "group": "lib/global.js",
+      "policy": [
+        "publicBaselineFailures",
+        "le",
+        1
+      ],
+      "ids": [
+        "undici-a0922b0b6b5d"
+      ]
+    },
+    {
+      "group": "lib/handler/deduplication-handler.js",
+      "policy": [
+        "publicBaselineFailures",
+        "le",
+        1
+      ],
+      "ids": [
+        "undici-bee01389d78a",
+        "undici-f387057bd1e0"
+      ]
+    },
+    {
+      "group": "lib/handler/redirect-handler.js",
+      "policy": [
+        "publicTests",
+        "ge",
+        24
+      ],
+      "ids": [
+        "undici-762f3b5a743a"
+      ]
+    },
+    {
+      "group": "lib/handler/retry-handler.js",
+      "policy": [
+        "publicBaselineFailures",
+        "le",
+        4
+      ],
+      "ids": [
+        "undici-c5b3a6e478d1",
+        "undici-0160a719063f",
+        "undici-f2e02f69a3c1"
+      ]
+    },
+    {
+      "group": "lib/interceptor/cache.js",
+      "policy": null,
+      "ids": [
+        "undici-65fd635cc9bb",
+        "undici-ee5e88705110"
+      ]
+    },
+    {
+      "group": "lib/interceptor/decompress.js",
+      "policy": [
+        "publicBaselineFailures",
+        "le",
+        1
+      ],
+      "ids": [
+        "undici-f36ea9cab02a"
+      ]
+    },
+    {
+      "group": "lib/interceptor/deduplicate.js",
+      "policy": null,
+      "ids": [
+        "undici-471d4257259e"
+      ]
+    },
+    {
+      "group": "lib/mock/mock-utils.js",
+      "policy": [
+        "publicTests",
+        "ge",
+        21
+      ],
+      "ids": [
+        "undici-7f50f74d02c2",
+        "undici-b111adbb675e",
+        "undici-a18ef2d05af4"
+      ]
+    },
+    {
+      "group": "lib/util/cache.js",
+      "policy": [
+        "publicBaselineFailures",
+        "le",
+        1
+      ],
+      "ids": [
+        "undici-4fe5bc5fefe5"
+      ]
+    },
+    {
+      "group": "lib/web/cookies/index.js",
+      "policy": null,
+      "ids": [
+        "undici-b73952a4f74e"
+      ]
+    },
+    {
+      "group": "lib/web/cookies/parse.js",
+      "policy": [
+        "publicTestBytes",
+        "ge",
+        28759
+      ],
+      "ids": [
+        "undici-d43e421f839a",
+        "undici-6de6e9a14a1d"
+      ]
+    },
+    {
+      "group": "lib/web/cookies/util.js",
+      "policy": [
+        "publicTests",
+        "ge",
+        24
+      ],
+      "ids": [
+        "undici-6933139baebc"
+      ]
+    },
+    {
+      "group": "lib/web/eventsource/eventsource.js",
+      "policy": [
+        "publicBaselineFailures",
+        "le",
+        1
+      ],
+      "ids": [
+        "undici-b8b2ae8f199e"
+      ]
+    },
+    {
+      "group": "lib/web/websocket/receiver.js",
+      "policy": [
+        "publicBaselineFailures",
+        "le",
+        1
+      ],
+      "ids": [
+        "undici-2bc04d019f14"
+      ]
+    }
+  ],
+  "decisions": [
+    [
+      "undici-a490364ec273",
+      false
+    ],
+    [
+      "undici-a287effccc5e",
+      false
+    ],
+    [
+      "undici-c5b3a6e478d1",
+      true
+    ],
+    [
+      "undici-d983b4f9ac1a",
+      true
+    ],
+    [
+      "undici-5e6e0e96e86f",
+      false
+    ],
+    [
+      "undici-762f3b5a743a",
+      true
+    ],
+    [
+      "undici-b8b2ae8f199e",
+      false
+    ],
+    [
+      "undici-47c2493a992e",
+      false
+    ],
+    [
+      "undici-2bc04d019f14",
+      false
+    ],
+    [
+      "undici-6933139baebc",
+      true
+    ],
+    [
+      "undici-65fd635cc9bb",
+      false
+    ],
+    [
+      "undici-bee01389d78a",
+      false
+    ],
+    [
+      "undici-b73952a4f74e",
+      false
+    ],
+    [
+      "undici-0160a719063f",
+      true
+    ],
+    [
+      "undici-8f5868fbdbc8",
+      true
+    ],
+    [
+      "undici-ee5e88705110",
+      false
+    ],
+    [
+      "undici-d43e421f839a",
+      false
+    ],
+    [
+      "undici-3e622dc7947b",
+      false
+    ],
+    [
+      "undici-6de6e9a14a1d",
+      false
+    ],
+    [
+      "undici-f387057bd1e0",
+      false
+    ],
+    [
+      "undici-f2e02f69a3c1",
+      true
+    ],
+    [
+      "undici-7f50f74d02c2",
+      true
+    ],
+    [
+      "undici-b111adbb675e",
+      true
+    ],
+    [
+      "undici-a18ef2d05af4",
+      true
+    ],
+    [
+      "undici-471d4257259e",
+      false
+    ],
+    [
+      "undici-57f50a278b86",
+      true
+    ],
+    [
+      "undici-7d3cf924c262",
+      false
+    ],
+    [
+      "undici-4fe5bc5fefe5",
+      false
+    ],
+    [
+      "undici-a0922b0b6b5d",
+      false
+    ],
+    [
+      "undici-f36ea9cab02a",
+      false
+    ]
+  ],
+  "rows": [
+    {
+      "id": "undici-a490364ec273",
+      "group": "lib/dispatcher/client-h1.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 5028,
+      "baselineCostMicros": 28709,
+      "candidateNormalizedMicros": 5028,
+      "baselineNormalizedMicros": 28709,
+      "candidateElapsedMs": 30573.527457999997,
+      "baselineElapsedMs": 20407.58125,
+      "features": {
+        "publicTests": 9,
+        "publicTestBytes": 11659,
+        "publicBaselineFailures": 3
+      }
+    },
+    {
+      "id": "undici-a287effccc5e",
+      "group": "lib/dispatcher/client-h1.js",
+      "cheapPassed": false,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": true,
+      "candidateCostMicros": 29321,
+      "baselineCostMicros": 23971,
+      "candidateNormalizedMicros": 29322,
+      "baselineNormalizedMicros": 23971,
+      "candidateElapsedMs": 40550.26008200001,
+      "baselineElapsedMs": 12144.171291000006,
+      "features": {
+        "publicTests": 20,
+        "publicTestBytes": 16080,
+        "publicBaselineFailures": 8
+      }
+    },
+    {
+      "id": "undici-c5b3a6e478d1",
+      "group": "lib/handler/retry-handler.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 1073,
+      "baselineCostMicros": 10702,
+      "candidateNormalizedMicros": 1073,
+      "baselineNormalizedMicros": 10702,
+      "candidateElapsedMs": 20060.335332999995,
+      "baselineElapsedMs": 21913.030415999994,
+      "features": {
+        "publicTests": 24,
+        "publicTestBytes": 24224,
+        "publicBaselineFailures": 4
+      }
+    },
+    {
+      "id": "undici-d983b4f9ac1a",
+      "group": "lib/core/connect.js",
+      "cheapPassed": false,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": true,
+      "candidateCostMicros": 6027,
+      "baselineCostMicros": 4757,
+      "candidateNormalizedMicros": 6027,
+      "baselineNormalizedMicros": 4757,
+      "candidateElapsedMs": 19678.69008400003,
+      "baselineElapsedMs": 6693.418417000008,
+      "features": {
+        "publicTests": 2,
+        "publicTestBytes": 3445,
+        "publicBaselineFailures": 2
+      }
+    },
+    {
+      "id": "undici-5e6e0e96e86f",
+      "group": "lib/dispatcher/dispatcher1-wrapper.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 606,
+      "baselineCostMicros": 5277,
+      "candidateNormalizedMicros": 606,
+      "baselineNormalizedMicros": 5277,
+      "candidateElapsedMs": 7610.291750000004,
+      "baselineElapsedMs": 12293.213832999987,
+      "features": {
+        "publicTests": 2,
+        "publicTestBytes": 2488,
+        "publicBaselineFailures": 1
+      }
+    },
+    {
+      "id": "undici-762f3b5a743a",
+      "group": "lib/handler/redirect-handler.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 2115,
+      "baselineCostMicros": 10128,
+      "candidateNormalizedMicros": 2115,
+      "baselineNormalizedMicros": 10128,
+      "candidateElapsedMs": 14295.293250000017,
+      "baselineElapsedMs": 6035.393875000009,
+      "features": {
+        "publicTests": 95,
+        "publicTestBytes": 26933,
+        "publicBaselineFailures": 12
+      }
+    },
+    {
+      "id": "undici-b8b2ae8f199e",
+      "group": "lib/web/eventsource/eventsource.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 1127,
+      "baselineCostMicros": 10643,
+      "candidateNormalizedMicros": 1127,
+      "baselineNormalizedMicros": 10643,
+      "candidateElapsedMs": 6348.139500000048,
+      "baselineElapsedMs": 9284.866582999995,
+      "features": {
+        "publicTests": 8,
+        "publicTestBytes": 6061,
+        "publicBaselineFailures": 2
+      }
+    },
+    {
+      "id": "undici-47c2493a992e",
+      "group": "lib/cache/memory-cache-store.js",
+      "cheapPassed": false,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": true,
+      "candidateCostMicros": 11104,
+      "baselineCostMicros": 8985,
+      "candidateNormalizedMicros": 11104,
+      "baselineNormalizedMicros": 8985,
+      "candidateElapsedMs": 31436.144625000015,
+      "baselineElapsedMs": 13364.528665999998,
+      "features": {
+        "publicTests": 19,
+        "publicTestBytes": 8244,
+        "publicBaselineFailures": 6
+      }
+    },
+    {
+      "id": "undici-2bc04d019f14",
+      "group": "lib/web/websocket/receiver.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 915,
+      "baselineCostMicros": 9072,
+      "candidateNormalizedMicros": 915,
+      "baselineNormalizedMicros": 9072,
+      "candidateElapsedMs": 4315.706790999975,
+      "baselineElapsedMs": 5099.805417000025,
+      "features": {
+        "publicTests": 8,
+        "publicTestBytes": 7781,
+        "publicBaselineFailures": 4
+      }
+    },
+    {
+      "id": "undici-6933139baebc",
+      "group": "lib/web/cookies/util.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 723,
+      "baselineCostMicros": 7056,
+      "candidateNormalizedMicros": 723,
+      "baselineNormalizedMicros": 7056,
+      "candidateElapsedMs": 15859.73858299997,
+      "baselineElapsedMs": 4242.632209000003,
+      "features": {
+        "publicTests": 25,
+        "publicTestBytes": 20118,
+        "publicBaselineFailures": 1
+      }
+    },
+    {
+      "id": "undici-65fd635cc9bb",
+      "group": "lib/interceptor/cache.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 1019,
+      "baselineCostMicros": 11927,
+      "candidateNormalizedMicros": 1019,
+      "baselineNormalizedMicros": 11927,
+      "candidateElapsedMs": 7494.6339590000025,
+      "baselineElapsedMs": 13203.871792,
+      "features": {
+        "publicTests": 94,
+        "publicTestBytes": 136669,
+        "publicBaselineFailures": 1
+      }
+    },
+    {
+      "id": "undici-bee01389d78a",
+      "group": "lib/handler/deduplication-handler.js",
+      "cheapPassed": false,
+      "candidatePassed": false,
+      "baselinePassed": false,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": true,
+      "candidateCostMicros": 22327,
+      "baselineCostMicros": 20491,
+      "candidateNormalizedMicros": 22328,
+      "baselineNormalizedMicros": 20492,
+      "candidateElapsedMs": 63566.57591700001,
+      "baselineElapsedMs": 42078.482875,
+      "features": {
+        "publicTests": 16,
+        "publicTestBytes": 3820,
+        "publicBaselineFailures": 8
+      }
+    },
+    {
+      "id": "undici-b73952a4f74e",
+      "group": "lib/web/cookies/index.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 430,
+      "baselineCostMicros": 4602,
+      "candidateNormalizedMicros": 430,
+      "baselineNormalizedMicros": 4602,
+      "candidateElapsedMs": 2711.8714169999876,
+      "baselineElapsedMs": 4598.864084000001,
+      "features": {
+        "publicTests": 25,
+        "publicTestBytes": 19977,
+        "publicBaselineFailures": 1
+      }
+    },
+    {
+      "id": "undici-0160a719063f",
+      "group": "lib/handler/retry-handler.js",
+      "cheapPassed": false,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": true,
+      "candidateCostMicros": 15490,
+      "baselineCostMicros": 13365,
+      "candidateNormalizedMicros": 15490,
+      "baselineNormalizedMicros": 13365,
+      "candidateElapsedMs": 61897.88358300002,
+      "baselineElapsedMs": 31617.475999999995,
+      "features": {
+        "publicTests": 17,
+        "publicTestBytes": 19839,
+        "publicBaselineFailures": 2
+      }
+    },
+    {
+      "id": "undici-8f5868fbdbc8",
+      "group": "lib/dispatcher/balanced-pool.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 1432,
+      "baselineCostMicros": 7017,
+      "candidateNormalizedMicros": 1432,
+      "baselineNormalizedMicros": 7017,
+      "candidateElapsedMs": 10928.433124999981,
+      "baselineElapsedMs": 8464.378208000038,
+      "features": {
+        "publicTests": 24,
+        "publicTestBytes": 21461,
+        "publicBaselineFailures": 1
+      }
+    },
+    {
+      "id": "undici-ee5e88705110",
+      "group": "lib/interceptor/cache.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 1281,
+      "baselineCostMicros": 12592,
+      "candidateNormalizedMicros": 1281,
+      "baselineNormalizedMicros": 12592,
+      "candidateElapsedMs": 11937.261042000027,
+      "baselineElapsedMs": 13757.789875000017,
+      "features": {
+        "publicTests": 90,
+        "publicTestBytes": 134035,
+        "publicBaselineFailures": 2
+      }
+    },
+    {
+      "id": "undici-d43e421f839a",
+      "group": "lib/web/cookies/parse.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 698,
+      "baselineCostMicros": 9995,
+      "candidateNormalizedMicros": 698,
+      "baselineNormalizedMicros": 9995,
+      "candidateElapsedMs": 4663.367792000005,
+      "baselineElapsedMs": 14081.116207999992,
+      "features": {
+        "publicTests": 24,
+        "publicTestBytes": 15373,
+        "publicBaselineFailures": 1
+      }
+    },
+    {
+      "id": "undici-3e622dc7947b",
+      "group": "lib/cache/memory-cache-store.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 494,
+      "baselineCostMicros": 5276,
+      "candidateNormalizedMicros": 494,
+      "baselineNormalizedMicros": 5276,
+      "candidateElapsedMs": 3114.7844160000095,
+      "baselineElapsedMs": 5301.090582999983,
+      "features": {
+        "publicTests": 13,
+        "publicTestBytes": 5174,
+        "publicBaselineFailures": 4
+      }
+    },
+    {
+      "id": "undici-6de6e9a14a1d",
+      "group": "lib/web/cookies/parse.js",
+      "cheapPassed": false,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": true,
+      "candidateCostMicros": 9263,
+      "baselineCostMicros": 7737,
+      "candidateNormalizedMicros": 9263,
+      "baselineNormalizedMicros": 7737,
+      "candidateElapsedMs": 9791.748458000016,
+      "baselineElapsedMs": 5269.254249999998,
+      "features": {
+        "publicTests": 23,
+        "publicTestBytes": 18990,
+        "publicBaselineFailures": 1
+      }
+    },
+    {
+      "id": "undici-f387057bd1e0",
+      "group": "lib/handler/deduplication-handler.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 864,
+      "baselineCostMicros": 9641,
+      "candidateNormalizedMicros": 864,
+      "baselineNormalizedMicros": 9641,
+      "candidateElapsedMs": 12315.070917000005,
+      "baselineElapsedMs": 20764.362957999983,
+      "features": {
+        "publicTests": 35,
+        "publicTestBytes": 39954,
+        "publicBaselineFailures": 2
+      }
+    },
+    {
+      "id": "undici-f2e02f69a3c1",
+      "group": "lib/handler/retry-handler.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 714,
+      "baselineCostMicros": 6695,
+      "candidateNormalizedMicros": 714,
+      "baselineNormalizedMicros": 6695,
+      "candidateElapsedMs": 19541.003834000003,
+      "baselineElapsedMs": 19918.895708000004,
+      "features": {
+        "publicTests": 21,
+        "publicTestBytes": 38830,
+        "publicBaselineFailures": 1
+      }
+    },
+    {
+      "id": "undici-7f50f74d02c2",
+      "group": "lib/mock/mock-utils.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 1452,
+      "baselineCostMicros": 12592,
+      "candidateNormalizedMicros": 1452,
+      "baselineNormalizedMicros": 12592,
+      "candidateElapsedMs": 10415.373583,
+      "baselineElapsedMs": 9567.596583000006,
+      "features": {
+        "publicTests": 86,
+        "publicTestBytes": 21518,
+        "publicBaselineFailures": 2
+      }
+    },
+    {
+      "id": "undici-b111adbb675e",
+      "group": "lib/mock/mock-utils.js",
+      "cheapPassed": false,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": true,
+      "candidateCostMicros": 21388,
+      "baselineCostMicros": 18175,
+      "candidateNormalizedMicros": 21389,
+      "baselineNormalizedMicros": 18175,
+      "candidateElapsedMs": 39677.260166999986,
+      "baselineElapsedMs": 21692.845125000007,
+      "features": {
+        "publicTests": 110,
+        "publicTestBytes": 106938,
+        "publicBaselineFailures": 11
+      }
+    },
+    {
+      "id": "undici-a18ef2d05af4",
+      "group": "lib/mock/mock-utils.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 1230,
+      "baselineCostMicros": 9960,
+      "candidateNormalizedMicros": 1231,
+      "baselineNormalizedMicros": 9960,
+      "candidateElapsedMs": 6724.150082999986,
+      "baselineElapsedMs": 5484.795624999999,
+      "features": {
+        "publicTests": 117,
+        "publicTestBytes": 28759,
+        "publicBaselineFailures": 24
+      }
+    },
+    {
+      "id": "undici-471d4257259e",
+      "group": "lib/interceptor/deduplicate.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 364,
+      "baselineCostMicros": 3522,
+      "candidateNormalizedMicros": 364,
+      "baselineNormalizedMicros": 3522,
+      "candidateElapsedMs": 7790.965041999996,
+      "baselineElapsedMs": 8668.795915999974,
+      "features": {
+        "publicTests": 33,
+        "publicTestBytes": 38649,
+        "publicBaselineFailures": 1
+      }
+    },
+    {
+      "id": "undici-57f50a278b86",
+      "group": "lib/api/readable.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 1640,
+      "baselineCostMicros": 8256,
+      "candidateNormalizedMicros": 1640,
+      "baselineNormalizedMicros": 8256,
+      "candidateElapsedMs": 8654.309749999986,
+      "baselineElapsedMs": 7590.810874999996,
+      "features": {
+        "publicTests": 10,
+        "publicTestBytes": 4453,
+        "publicBaselineFailures": 1
+      }
+    },
+    {
+      "id": "undici-7d3cf924c262",
+      "group": "lib/dispatcher/client-h1.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 5610,
+      "baselineCostMicros": 20657,
+      "candidateNormalizedMicros": 5610,
+      "baselineNormalizedMicros": 20657,
+      "candidateElapsedMs": 17193.555333000026,
+      "baselineElapsedMs": 14038.479332999996,
+      "features": {
+        "publicTests": 1,
+        "publicTestBytes": 1085,
+        "publicBaselineFailures": 1
+      }
+    },
+    {
+      "id": "undici-4fe5bc5fefe5",
+      "group": "lib/util/cache.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 1276,
+      "baselineCostMicros": 11992,
+      "candidateNormalizedMicros": 1276,
+      "baselineNormalizedMicros": 11992,
+      "candidateElapsedMs": 12098.510124999972,
+      "baselineElapsedMs": 13727.049333000032,
+      "features": {
+        "publicTests": 82,
+        "publicTestBytes": 93053,
+        "publicBaselineFailures": 3
+      }
+    },
+    {
+      "id": "undici-a0922b0b6b5d",
+      "group": "lib/global.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 329,
+      "baselineCostMicros": 3695,
+      "candidateNormalizedMicros": 329,
+      "baselineNormalizedMicros": 3696,
+      "candidateElapsedMs": 5089.749458000006,
+      "baselineElapsedMs": 10391.221166000003,
+      "features": {
+        "publicTests": 2,
+        "publicTestBytes": 1398,
+        "publicBaselineFailures": 2
+      }
+    },
+    {
+      "id": "undici-f36ea9cab02a",
+      "group": "lib/interceptor/decompress.js",
+      "cheapPassed": true,
+      "candidatePassed": true,
+      "baselinePassed": true,
+      "candidateFalseAccept": false,
+      "baselineFalseAccept": false,
+      "fallback": false,
+      "candidateCostMicros": 614,
+      "baselineCostMicros": 6084,
+      "candidateNormalizedMicros": 614,
+      "baselineNormalizedMicros": 6084,
+      "candidateElapsedMs": 4959.641874999972,
+      "baselineElapsedMs": 7526.179833000002,
+      "features": {
+        "publicTests": 26,
+        "publicTestBytes": 29925,
+        "publicBaselineFailures": 2
+      }
+    }
+  ]
+}

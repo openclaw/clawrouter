@@ -1,0 +1,63 @@
+# Operator-hosted transport only: docs/configured-gateway-providers.md.
+# Endpoint/model source checked 2026-11-03: https://docs.getbifrost.ai/integrations/openai-sdk/overview
+# Discovery source: openclaw/openclaw@31ad71a8addc1d42fbc5478f7e114860f5cbf6c7 extensions/bifrost/models.ts.
+schema: clawrouter.service-provider.v1
+id: bifrost
+displayName: Bifrost gateway
+status: experimental
+class: openai_compatible
+service:
+  platform: bifrost
+  kind: gateway_platform
+  upstreamService: bifrost
+  configKeys: [BIFROST_API_KEY, BIFROST_BASE_URL, BIFROST_MODEL]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: ${base_url}
+routing:
+  nativePrefixes: [clawrouter-bifrost, bifrost]
+  modelPrefixes: [bifrost/]
+  baseUrlParam: base_url
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - { id: models.list, endpoint: models_list, methods: [GET] }
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+  - { id: models.list, endpoint: models_list_v1, methods: [GET] }
+  - { id: llm.chat, endpoint: chat_completions_v1, methods: [POST] }
+endpoints:
+  models_list: { method: GET, path: /models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  models_list_v1: { method: GET, path: /v1/models, upstreamPath: /models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
+  chat_completions_v1:
+    modelPassthrough: {}
+    path: /v1/chat/completions
+    upstreamPath: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: bifrost/configured
+      upstream: ${model}
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

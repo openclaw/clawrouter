@@ -1,0 +1,152 @@
+# Hosted Chat and public model metadata; frozen cards and limits: docs/chutes-native-chat.md.
+# Endpoint/model source checked 2026-11-03: https://www.chutes.ai/docs/help/faq
+# Catalog exposure and authority: docs/public-catalog-declarations.md.
+schema: clawrouter.service-provider.v1
+id: chutes
+displayName: Chutes hosted API
+status: experimental
+class: openai_compatible
+service:
+  platform: chutes
+  kind: model_provider
+  upstreamService: chutes
+  configKeys: [CHUTES_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://llm.chutes.ai/v1
+routing:
+  nativePrefixes: [clawrouter-chutes, chutes]
+  modelPrefixes: [chutes/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+  - id: models.list
+    endpoint: models_list
+    methods: [GET]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  models_list:
+    method: GET
+    path: /models
+    nativeProxy: true
+    requestFormat: chutes.models
+    responseFormat: chutes.models
+    headers:
+      accept: application/json
+    timeoutMs: 10000
+models:
+  entries:
+    - id: chutes/deepseek-ai/DeepSeek-V4-Flash-0731-TEE
+      displayName: "DeepSeek V4 Flash (0731, TEE)"
+      upstream: deepseek-ai/DeepSeek-V4-Flash-0731-TEE
+      capabilities: [llm.chat]
+    - id: chutes/deepseek-ai/DeepSeek-V3.2-TEE
+      displayName: "DeepSeek V3.2 TEE"
+      upstream: deepseek-ai/DeepSeek-V3.2-TEE
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://llm.chutes.ai/v1/models, https://chutes.ai/docs/models/chutes-deepseek-ai-deepseek-v3-2-tee]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://llm.chutes.ai/v1/models, https://chutes.ai/docs/models/chutes-deepseek-ai-deepseek-v3-2-tee]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 131072
+            maxOutputTokens: 65536
+    - id: chutes/moonshotai/Kimi-K2.6-TEE
+      displayName: "Kimi K2.6 TEE"
+      upstream: moonshotai/Kimi-K2.6-TEE
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://llm.chutes.ai/v1/models, https://chutes.ai/docs/models/chutes-moonshotai-kimi-k2-6-tee]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://llm.chutes.ai/v1/models, https://chutes.ai/docs/models/chutes-moonshotai-kimi-k2-6-tee]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 262144
+            maxOutputTokens: 65535
+    - id: chutes/zai-org/GLM-5.2-TEE
+      displayName: "GLM-5.2 TEE"
+      upstream: zai-org/GLM-5.2-TEE
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://llm.chutes.ai/v1/models, https://chutes.ai/docs/models/chutes-zai-org-glm-5-2-tee]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://llm.chutes.ai/v1/models, https://chutes.ai/docs/models/chutes-zai-org-glm-5-2-tee]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 1048576
+            maxOutputTokens: 65535
+    - id: chutes/Qwen/Qwen3.6-27B-TEE
+      displayName: "Qwen3.6 27B TEE"
+      upstream: Qwen/Qwen3.6-27B-TEE
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://llm.chutes.ai/v1/models, https://chutes.ai/docs/models/chutes-qwen-qwen3-6-27b-tee]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://llm.chutes.ai/v1/models, https://chutes.ai/docs/models/chutes-qwen-qwen3-6-27b-tee]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 262144
+            maxOutputTokens: 65536
+    - id: chutes/Qwen/Qwen3.5-397B-A17B-TEE
+      displayName: "Qwen3.5 397B A17B TEE"
+      upstream: Qwen/Qwen3.5-397B-A17B-TEE
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://llm.chutes.ai/v1/models, https://chutes.ai/docs/models/chutes-qwen-qwen3-5-397b-a17b-tee]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://llm.chutes.ai/v1/models, https://chutes.ai/docs/models/chutes-qwen-qwen3-5-397b-a17b-tee]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 262144
+            maxOutputTokens: 65536
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

@@ -36,7 +36,7 @@ Clients authenticate with one policy-scoped `clawrouter-` credential. The select
 
 | Surface | Path |
 | --- | --- |
-| OpenAI-compatible chat, responses, and embeddings | `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings` |
+| OpenAI-compatible chat, responses, decisions, and embeddings | `/v1/chat/completions`, `/v1/responses`, `/v1/decisions`, `/v1/embeddings` |
 | Anthropic messages | `/v1/messages`, `/v1/messages/count_tokens` |
 | Manifest-defined APIs | `/v1/proxy/<provider>/<endpoint>` |
 | Provider-native APIs | `/v1/native/<provider>/<provider-native-path>` |
@@ -91,6 +91,19 @@ pnpm check
 
 `pnpm build` compiles the provider snapshot and admin UI, then typechecks the Worker. `pnpm check` runs Worker, admin, and script tests.
 
+Numbered GitHub source releases use the [release workflow](RELEASING.md), independently of service deployments.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+OpenAI [image generation](docs/openai-images.md) is available through the standard
+Images API, native and manifest proxy routes with modality-specific accounting.
+
+### Deploy production
+
+Start **Deploy ClawRouter** in GitHub Actions on `main`. No release inputs or
+preparation scripts. The same action handles ordinary Worker, native payload and
+compatible contract changes, including isolated qualification and recovery.
+See [deployment compatibility](docs/deployment-compatibility.md) for developer
+requirements, standing credentials and failure recovery.

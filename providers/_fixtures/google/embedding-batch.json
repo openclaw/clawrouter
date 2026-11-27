@@ -1,0 +1,152 @@
+{
+  "synthetic": true,
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/google/embedding-batch.ts",
+  "model": "gemini-embedding-001",
+  "inputFile": "files/embedding-input-fixture",
+  "outputFile": "files/embedding-output-fixture",
+  "batchName": "batches/embedding-fixture",
+  "upload": {
+    "file": {
+      "name": "files/embedding-input-fixture",
+      "state": "ACTIVE",
+      "expirationTime": "2026-11-05T00:00:00Z",
+      "uri": "https://untrusted.example/never-authenticate"
+    }
+  },
+  "create": {
+    "batch": {
+      "displayName": "synthetic-embedding-batch",
+      "inputConfig": {
+        "file_name": "files/embedding-input-fixture"
+      }
+    }
+  },
+  "requests": [
+    {
+      "custom_id": "row-a",
+      "request": {
+        "content": {
+          "parts": [
+            {
+              "text": "synthetic query"
+            }
+          ]
+        },
+        "taskType": "RETRIEVAL_QUERY",
+        "outputDimensionality": 128
+      }
+    },
+    {
+      "custom_id": "row-b",
+      "request": {
+        "content": {
+          "parts": [
+            {
+              "text": "synthetic document"
+            }
+          ]
+        },
+        "taskType": "RETRIEVAL_DOCUMENT",
+        "outputDimensionality": 128
+      }
+    }
+  ],
+  "observations": [
+    {
+      "body": {
+        "name": "batches/embedding-fixture",
+        "done": false,
+        "metadata": {
+          "state": "BATCH_STATE_PENDING"
+        }
+      },
+      "terminal": null
+    },
+    {
+      "body": {
+        "name": "batches/embedding-fixture",
+        "metadata": {
+          "state": "JOB_STATE_RUNNING"
+        },
+        "response": {
+          "responsesFile": "files/partial-not-authorized"
+        }
+      },
+      "terminal": null
+    },
+    {
+      "body": {
+        "name": "batches/embedding-fixture",
+        "done": true,
+        "response": {
+          "responsesFile": "files/embedding-output-fixture"
+        }
+      },
+      "terminal": "succeeded"
+    },
+    {
+      "body": {
+        "name": "batches/embedding-fixture",
+        "metadata": {
+          "state": "BATCH_STATE_SUCCEEDED",
+          "output": {
+            "responsesFile": "files/embedding-output-fixture"
+          }
+        }
+      },
+      "terminal": "succeeded"
+    },
+    {
+      "body": {
+        "name": "batches/embedding-fixture",
+        "metadata": {
+          "state": "JOB_STATE_FAILED"
+        }
+      },
+      "terminal": "failed"
+    },
+    {
+      "body": {
+        "name": "batches/embedding-fixture",
+        "done": true,
+        "error": {
+          "code": 1,
+          "message": "synthetic cancellation"
+        }
+      },
+      "terminal": "canceled"
+    },
+    {
+      "body": {
+        "name": "batches/embedding-fixture",
+        "metadata": {
+          "state": "BATCH_STATE_CANCELLED"
+        }
+      },
+      "terminal": "canceled"
+    },
+    {
+      "body": {
+        "name": "batches/embedding-fixture",
+        "metadata": {
+          "state": "BATCH_STATE_EXPIRED"
+        }
+      },
+      "terminal": null,
+      "observationUnavailable": "expired_or_unknown"
+    }
+  ],
+  "cancel": {
+    "status": 200,
+    "body": {},
+    "terminal": null,
+    "followUp": "retrieve"
+  },
+  "billing": {
+    "actualProviderCostMicrousd": null,
+    "partialWorkCanBeBillable": true,
+    "cancelAckProvesRefund": false,
+    "settlementBasis": "policy_fixed"
+  }
+}

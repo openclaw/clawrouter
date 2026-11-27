@@ -14,26 +14,18 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
 async function provisionCloudflare() {
   const deployment = deploymentTarget();
   assertDeploymentMutation(deployment);
+  const accountId = requiredEnv("CLOUDFLARE_ACCOUNT_ID");
+  const token = requiredEnv("CLOUDFLARE_API_TOKEN");
 
   run("pnpm", ["exec", "wrangler", "whoami"], { stdio: "inherit" });
   runAllowExists("pnpm", ["exec", "wrangler", "queues", "create", deployment.queueName]);
   runAllowExists("pnpm", ["exec", "wrangler", "queues", "create", deployment.queueDlqName]);
 
-  const kv = deployment.environment === "fakeco"
-    ? await createExactKvNamespace({
-        accountId: requiredEnv("CLOUDFLARE_ACCOUNT_ID"),
-        token: requiredEnv("CLOUDFLARE_API_TOKEN"),
-        title: deployment.policyKvNamespace,
-      })
-    : JSON.parse(run("pnpm", [
-        "exec",
-        "wrangler",
-        "kv",
-        "namespace",
-        "create",
-        deployment.policyKvNamespace,
-        "--json",
-      ]).stdout);
+  const kv = await createExactKvNamespace({
+    accountId,
+    token,
+    title: deployment.policyKvNamespace,
+  });
 
   console.log("");
   console.log("Cloudflare resources ready:");
@@ -79,12 +71,15 @@ export async function createExactKvNamespace({
   } catch {
     throw new Error(`Cloudflare KV namespace create returned non-JSON HTTP ${response.status}`);
   }
-  if (!response.ok || body.success === false || !body.result?.id) {
+  if (
+    !response.ok || body?.success !== true ||
+    typeof body.result?.id !== "string" || !body.result.id.trim()
+  ) {
     throw new Error(
-      `Cloudflare KV namespace create failed: ${body.errors?.[0]?.message ?? `HTTP ${response.status}`}`,
+      `Cloudflare KV namespace create failed: ${body?.errors?.[0]?.message ?? `HTTP ${response.status}`}`,
     );
   }
-  if (body.result.title && body.result.title !== title) {
+  if (body.result.title !== title) {
     throw new Error(
       `Cloudflare created KV namespace ${JSON.stringify(body.result.title)} instead of ${JSON.stringify(title)}`,
     );

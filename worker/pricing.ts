@@ -1,16 +1,182 @@
-import type { ModelPricing, ServiceTierPricing, TokenRates } from "./types";
-import { googleField, googleInt32 } from "./google-protocol.ts";
+import { hostedToolPricingGap, claudeSearchTypes } from "./hosted-tool-pricing.ts";
+import type { DeepSeekSearchRequestPricing, ImageRequestPricing, OutcomeRequestPricing } from "../shared/request-pricing.ts";
+import type { ValidatedNativeUsage } from "./native-response.ts";
+import { actualImageCost, estimateImageCost } from "./image-generation.ts";
+import { googleImageRequest } from "./google-image-classification.ts";
+import { googleAudioRequest } from "./google-audio-classification.ts";
+import { jsonBodyBytes } from "./json-body.ts";
+import { claudeImageBlockBound, type InlineImageBound } from "./image-input-bound.ts";
+import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
+import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
+import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
+import type { ToolPricing } from "./types";
+import type { XaiImageRequest } from "./xai-images.ts";
+
+export interface HostedSearchPrice { version: string; microsPerCall: number | null }
+// Freeze the declared request tariff, not a guess from the response or model name.
+// An inherited/opaque or mixed search generation has no qualified unit rate.
+export function hostedSearchPrice(card: ToolPricing | undefined, body: unknown, upstream?: string, retained = false): HostedSearchPrice | undefined {
+  if (!card || !isObject(body)) return undefined;
+  const tagged = Array.isArray(body.input) ? body.input.flatMap(item => isObject(item) && ["additional_tools", "tool_search_output"].includes(item.type as string) && Array.isArray(item.tools) ? item.tools : []) : [];
+  const types = (Array.isArray(body.tools) ? body.tools : []).concat(tagged)
+    .flatMap(tool => isObject(tool) && typeof tool.type === "string" && /^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type) ? [tool.type] : []);
+  if (!types.length) return undefined;
+  // A current declaration cannot exclude a differently priced retained tool.
+  // A witness classifies ancestry, not the precise retained search tariff.
+  // Ordinary encrypted reasoning is not a ToolParam inventory; it does not
+  // change the declared current-request tariff. Its token bound and any
+  // compaction witness knowledge remain independently conservative.
+  if (retained || body.previous_response_id != null || body.conversation != null || body.prompt != null
+    || Array.isArray(body.input) && body.input.some(item => isObject(item) && ["compaction", "item_reference"].includes(item.type as string))
+    || isObject(body.multi_agent) && body.multi_agent.enabled === true
+    || (Array.isArray(body.tools) ? body.tools : []).concat(tagged).some(tool => isObject(tool) && (tool.type === "mcp" || tool.type === "programmatic_tool_calling" || tool.type === "tool_search" && tool.execution !== "client"))) return { version: card.version, microsPerCall: null };
+  const rates = types.map(type => type.startsWith("web_search_preview") ? upstream && Object.hasOwn(card.previewMicrosPerCallByModel, upstream) ? card.previewMicrosPerCallByModel[upstream] : null : card.webSearchMicrosPerCall);
+  return { version: card.version, microsPerCall: rates.every(rate => rate === rates[0]) ? rates[0] : null };
+}
+
+// Messages web tools have known tariffs but no qualified cumulative token bound.
+// max_uses caps the search fee, not repeated model-input processing. Never use
+// one context window (or max_content_tokens) to admit a hard-budget server loop.
+const claudeFetchTypes = new Set(["web_fetch_20250910", "web_fetch_20260209", "web_fetch_20260309", "web_fetch_20260318"]);
+export interface AnthropicWebPrice extends HostedSearchPrice { search: boolean; usageComplete: boolean }
+export function anthropicWebPrice(card: ToolPricing | undefined, body: unknown): AnthropicWebPrice | undefined {
+  if (!card || !isObject(body) || !Array.isArray(body.tools)) return undefined;
+  const tools = body.tools;
+  const web = tools.filter(tool => isObject(tool) && (claudeSearchTypes.has(String(tool.type)) || claudeFetchTypes.has(String(tool.type))));
+  if (!web.length) return undefined;
+  // Other server tools, MCP and compaction keep their independent pricing gaps.
+  // Top-level token counters cannot attest separately billed iterations.
+  const usageComplete = requestPricingGap(undefined, { ...body, tools: tools.filter(tool => !web.includes(tool)) }, "anthropic.messages") === null;
+  return { version: card.version, microsPerCall: card.webSearchMicrosPerCall, usageComplete, search: web.some(tool => isObject(tool) && claudeSearchTypes.has(String(tool.type))) };
+}
+
+export function hostedSearchCost(price: HostedSearchPrice | undefined, count: number): number | null {
+  return price?.microsPerCall == null ? null : saturatingMultiply(price.microsPerCall, count);
+}
+
+// Source-qualified request component. Shared admission must freeze it alongside
+// the inference bound; declaring it alone does not clear requestPricingGap.
+export type { ImageRequestPricing, OutcomeRequestPricing } from "../shared/request-pricing.ts";
+
+export interface RequestCostReceipt {
+  costMicros: number;
+  basis: "provider_reported" | "manifest_request";
+  pricingVersion: string;
+}
+
+// One qualified native Search dispatch can incur this fee regardless of count.
+// This pure bound does not register admission or observe a billable outcome.
+export function deepSeekSearchReserve(pricing: Readonly<DeepSeekSearchRequestPricing>): number | null {
+  if (!isObject(pricing) || Object.keys(pricing).some(key => ![
+    "unit", "protocol", "version", "effectiveAt", "source", "successfulNonemptyRequestMicros", "emptyRequestMicros",
+  ].includes(key)) || pricing.unit !== "request" || pricing.protocol !== "deepseek.search"
+    || typeof pricing.version !== "string" || !/^[a-zA-Z0-9._:-]{1,128}$/.test(pricing.version)
+    || pricing.effectiveAt !== "2026-11-01T00:00:00+08:00"
+    || pricing.source !== "https://api-docs.deepseek.com/guides/search/"
+    || pricing.successfulNonemptyRequestMicros !== 750 || pricing.emptyRequestMicros !== 0) return null;
+  return pricing.successfulNonemptyRequestMicros;
+}
+
+// Only the native reader's validated observation can select the empty rate.
+// Missing or contradictory evidence leaves shared settlement holding its reserve.
+export function deepSeekSearchCost(pricing: Readonly<DeepSeekSearchRequestPricing>, usage: ValidatedNativeUsage): RequestCostReceipt | null {
+  if (deepSeekSearchReserve(pricing) === null || !isObject(usage) || usage.outcome !== "success") return null;
+  const observed = usage.nativeRequestUsage;
+  if (!isObject(observed) || observed.operation !== "deepseek.search" || observed.pricingVersion !== pricing.version
+    || observed.billableRequests !== 0 && observed.billableRequests !== 1) return null;
+  return { costMicros: observed.billableRequests === 0 ? pricing.emptyRequestMicros : pricing.successfulNonemptyRequestMicros,
+    basis: "manifest_request", pricingVersion: pricing.version };
+}
+
+// Freeze this projection only after prepareXaiImage validates the native body.
+// It carries no prompt, image reference, credential or raw output bytes.
+export type ImageRequestSelection = Pick<XaiImageRequest, "model" | "servingModel" | "mode" | "count" | "inputImages" | "resolution" | "quality" | "qualityBasis">;
+
+export function imageRequestReserve(pricing: ImageRequestPricing, request: ImageRequestSelection): number | null {
+  if (!qualifiedImageSelection(pricing, request)) return null;
+  const card = pricing.rates[request.servingModel as keyof ImageRequestPricing["rates"]];
+  if (!isObject(card) || !isObject(card.outputMicrosPerImage)) return null;
+  const input = nonNegativeInteger(card.inputMicrosPerImage);
+  const outputs = card.outputMicrosPerImage as Record<string, unknown>;
+  const quality = request.qualityBasis === "service_default" ? ["low", "medium"] : [request.quality];
+  const selected = request.qualityBasis === "legacy" ? [outputs[request.resolution]]
+    : quality.map(key => key && isObject(outputs[key]) ? outputs[key][request.resolution] : undefined);
+  const rates = selected.map(nonNegativeInteger);
+  if (input == null || input === 0 || rates.some(rate => rate == null || rate === 0)) return null;
+  // Bound every edit reference per requested output, without claiming that
+  // this conservative multiplicity is the observed bill. Auto may choose
+  // either qualified quality; the explicit upstream alias is always low.
+  const reserve = (input * request.inputImages + Math.max(...rates as number[])) * request.count;
+  return Number.isSafeInteger(reserve) ? reserve : null;
+}
+
+export function imageRequestCost(pricing: ImageRequestPricing, request: ImageRequestSelection, response: unknown, complete: boolean): RequestCostReceipt | null {
+  if (imageRequestReserve(pricing, request) == null || !complete || !isObject(response)
+    || response.model !== request.servingModel || response.error != null
+    || response.status !== undefined && response.status !== "done" || !isObject(response.usage)) return null;
+  // Cost is independent of successful image delivery. The shared runtime must
+  // attest bounded original HTTP/JSON EOF and separately validate image bytes.
+  // Never infer a refund from moderation, partial delivery or a missing receipt.
+  return tickedCostReceipt(response.usage.cost_in_usd_ticks, pricing.version);
+}
+
+function qualifiedImageSelection(pricing: ImageRequestPricing, request: ImageRequestSelection): boolean {
+  if (pricing.unit !== "image" || pricing.protocol !== "xai.images" || pricing.source !== "https://docs.x.ai/developers/pricing"
+    || typeof pricing.version !== "string" || !pricing.version.length
+    || pricing.receipt !== "xai.usage.cost_in_usd_ticks" || !isObject(pricing.rates) || !isObject(pricing.alias)
+    || pricing.alias.selectedModel !== "grok-imagine-image-quality" || pricing.alias.servingModel !== "grok-imagine-image-2.0"
+    || pricing.alias.quality !== "low" || pricing.alias.effectiveAt !== "2026-11-02"
+    || pricing.alias.source !== "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2"
+    || !Number.isSafeInteger(request.count) || request.count < 1 || request.count > 4
+    || !Number.isSafeInteger(request.inputImages) || request.inputImages < 0 || request.inputImages > 3
+    || !["1k", "2k"].includes(request.resolution)
+    || (request.mode === "generate" ? request.inputImages !== 0 : request.mode !== "edit" || request.inputImages === 0)) return false;
+  if (request.model === pricing.alias.selectedModel) return request.servingModel === pricing.alias.servingModel && request.quality === "low" && request.qualityBasis === "retired_alias";
+  if (request.model === "grok-imagine-image") return request.servingModel === request.model && request.quality === null && request.qualityBasis === "legacy";
+  return request.model === "grok-imagine-image-2.0" && request.servingModel === request.model
+    && ["low", "medium"].includes(request.quality as string) && ["explicit", "service_default"].includes(request.qualityBasis);
+}
+
+export function requestOutcomeReserve(pricing: OutcomeRequestPricing, inferenceMicros: number | null): number | null {
+  if (!qualifiedOutcome(pricing) || inferenceMicros == null || !Number.isSafeInteger(inferenceMicros) || inferenceMicros < 0
+    || inferenceMicros > Number.MAX_SAFE_INTEGER - pricing.maximumAdditionalMicros) return null;
+  return inferenceMicros + pricing.maximumAdditionalMicros;
+}
+
+// Only a complete, original upstream Response can supply a total-charge receipt.
+// An HTTP error, refusal text or even an exact $0.05 receipt does not identify
+// a violation. Missing evidence remains unknown, never a zero-cost failure.
+export function requestOutcomeCost(pricing: OutcomeRequestPricing, response: unknown, complete: boolean): RequestCostReceipt | null {
+  if (!qualifiedOutcome(pricing) || !complete || !isObject(response) || response.object !== "response"
+    || typeof response.id !== "string" || !response.id.length || response.id.length > 256
+    || !["completed", "incomplete"].includes(response.status as string) || !isObject(response.usage)) return null;
+  return tickedCostReceipt(response.usage.cost_in_usd_ticks, pricing.version);
+}
+
+function tickedCostReceipt(ticks: unknown, pricingVersion: string): RequestCostReceipt | null {
+  if (typeof ticks !== "number" || !Number.isSafeInteger(ticks) || ticks < 0) return null;
+  // 10^10 ticks/USD = 10^4 ticks/micro. Integer remainder avoids precision
+  // loss near MAX_SAFE_INTEGER; never add the fee again to this whole bill.
+  return { costMicros: Math.floor(ticks / 10000) + (ticks % 10000 === 0 ? 0 : 1), basis: "provider_reported", pricingVersion };
+}
+
+function qualifiedOutcome(pricing: OutcomeRequestPricing): boolean {
+  return pricing.unit === "request" && pricing.outcome === "xai.responses_violation"
+    && pricing.maximumAdditionalMicros === 50000 && pricing.receipt === "xai.usage.cost_in_usd_ticks";
+}
 
 export interface CostEstimate {
   reserveMicros: number;
-  inputTokens: number;
-  outputTokens: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
   pricingAvailable?: false;
 }
 
 export interface PricedTokens {
-  serviceTier?: string;
+  image?: { textInput: number; imageInput: number; imageOutput: number };
+  serviceTier?: string | null;
   billable?: false;
+  billedTokens?: { input: number | null; output: number | null };
   input: number | null;
   output: number | null;
   cached: number | null;
@@ -28,21 +194,120 @@ interface Rates {
   cacheWrite1hInput: number | null;
 }
 
-export function requestHasHostedSearch(body: Record<string, unknown>, capability: string): boolean {
-  if (capability === "llm.chat") return isObject(body.web_search_options);
-  if (capability !== "llm.responses" && capability !== "llm.messages") return false;
-  // Match hosted wire types, never user-defined function names or tool results.
-  return Array.isArray(body.tools) && body.tools.some((tool) => isObject(tool) && typeof tool.type === "string" &&
-    (capability === "llm.messages" ? /^web_search_\d{8}$/.test(tool.type) : /^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type)));
+export type PricingGap = "audio_upload_bound" | "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage" | "retained_tool_unknown" | "opaque_input_bound";
+
+const unpricedGoogleRequestFormats = new Set(["google.grounded_search", "google.audio_understanding", "google.video_understanding"]);
+const unpricedNativeAudioFormats = new Set(["groq.transcription", "mistral.transcription", "xai.stt", "xai.tts"]);
+
+export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge, selectedUpstreamModel?: string | null): PricingGap | null {
+  // GPT Image 2.5 publishes modality rates, not a whole-request reference-input
+  // token ceiling. Byte caps and GPT Image 1/vision formulas do not prove one.
+  if (requestFormat === "openai.images_edits") return "opaque_input_bound";
+  // These native uploads have neither a qualified duration bound nor a token tariff.
+  // Keep OpenAI's separately qualified soft-token settlement exception separate.
+  if (unpricedNativeAudioFormats.has(requestFormat)) return "opaque_input_bound";
+  if (unpricedGoogleRequestFormats.has(requestFormat)) return requestFormat === "google.grounded_search" ? "hosted_tool_fee" : "opaque_input_bound";
+  // Native media bounds do not qualify an image, music or speech tariff.
+  if (googleAudioRequest(selectedUpstreamModel, body, requestFormat)
+    || googleImageRequest(selectedUpstreamModel, body, requestFormat)) return "opaque_input_bound";
+  if (requestFormat === "openai.standalone_search") return "hosted_tool_usage";
+  const compact = requestFormat === "openai.responses_compact";
+  if (compact) requestFormat = "openai.responses";
+  // File/context caps do not qualify a whole-upload billable token ceiling.
+  if (requestFormat === "openai.audio_transcriptions") return "audio_upload_bound";
+  if (pricing?.unit == null && pricing?.unpricedCosts?.includes("request_fee")) return "model_request_fee";
+  if (requestFormat === "openai.chat_completions" && isObject(body.web_search_options)) return "hosted_tool_fee";
+  // Saved Responses prompts retain tools; an opaque reference cannot prove
+  // that the effective request has only the declared token charges.
+  if (requestFormat === "openai.responses" && body.prompt != null) return "hosted_tool_usage";
+  if (requestFormat === "openai.responses" && isObject(body.multi_agent) && body.multi_agent.enabled === true) return "hosted_tool_usage";
+  if (requestFormat === "anthropic.messages" && Array.isArray(body.mcp_servers) && body.mcp_servers.length) return "hosted_tool_usage";
+  // Claude bills compaction iterations outside the ordinary top-level usage.
+  if (requestFormat === "anthropic.messages" && (isObject(body.compaction) && body.compaction.type === "summarize"
+    || isObject(body.context_management) && Array.isArray(body.context_management.edits) && body.context_management.edits.some((edit) => isObject(edit) && edit.type === "compact_20260112"))) return "hosted_tool_usage";
+  // CachedContent retains tools and toolConfig. The reference alone cannot
+  // prove that generation has only the token costs represented by this card.
+  if (requestFormat === "google.generate_content" && googleField(body, "cachedContent", "cached_content") != null) return "hosted_tool_usage";
+  // Responses Lite and tool search load executable declarations through tagged
+  // input items. Do not search ordinary output data, content, or function schemas.
+  const current = hostedToolPricingGap(requestDeclaredTools(body, requestFormat), requestFormat);
+  if (current) return current;
+  if (requestFormat === "openai.responses" && responsesHasOpaqueInput(body) && opaqueInputLimit(pricing) == null) return "opaque_input_bound";
+  // C-S1 has no durable opaque-ancestry witness. Ciphertext and references
+  // cannot prove that retained executable tools have only token charges.
+  if (compact && (retainedToolBase(body, "token_only") !== "token_only"
+    || body.tools !== undefined && retainedToolBase({ input: [{ type: "additional_tools", tools: body.tools }] }, "token_only") !== "token_only"
+    || Array.isArray(body.input) && body.input.some(item => isObject(item) && (item.type === "compaction" || item.type === "item_reference" || item.type === "reasoning" && item.encrypted_content != null)))) return "retained_tool_unknown";
+  if (requestFormat !== "openai.responses" || typeof body.previous_response_id !== "string" || body.previous_response_id === "") return null;
+  // A response ID can retain executable declarations omitted from this delta.
+  // Only final parent knowledge proves ordinary token pricing; omission is unknown.
+  return parentTools === "token_only" ? null : parentTools === "hosted_tool_fee" || parentTools === "hosted_tool_usage" ? parentTools : "retained_tool_unknown";
 }
 
-export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, requestFormat?: string): CostEstimate {
-  const google = requestFormat === "google.generate_content";
-  const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
-  const inputLimit = pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
-  const inputTokens = (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body))
-    ? inputLimit
-    : Math.min(inputLimit, saturatingAdd(bytes, pricing.inputTokenOverhead));
+// Opt in only after the shared runtime binds the qualified outcome tariff to
+// admission and settlement. The ordinary classifier keeps its request-fee gap.
+export function outcomeRequestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, requestPricing: OutcomeRequestPricing, parentTools?: ToolKnowledge): PricingGap | null {
+  if (!pricing || pricing.unit != null || requestFormat !== "openai.responses" || !qualifiedOutcome(requestPricing)) return "model_request_fee";
+  // The native contract supports these ToolParam types. Unknown declarations
+  // cannot be certified as client execution merely because no fee is known.
+  const tools = requestDeclaredTools(body, requestFormat);
+  if (body.tools != null && !Array.isArray(body.tools)
+    || tools.some(tool => !isObject(tool) || !["function", "web_search", "x_search", "code_interpreter", "file_search", "image_generation", "mcp"].includes(tool.type as string))) return "hosted_tool_usage";
+  // xAI automatically enables document search for native file attachments.
+  // Inspect message content parts, never text, function schemas or arguments.
+  if (Array.isArray(body.input) && body.input.some(item => isObject(item) && (item.type === "input_file"
+    || Array.isArray(item.content) && item.content.some(part => isObject(part) && part.type === "input_file")))) return "hosted_tool_usage";
+  // Legacy native search is an execution selector, not ordinary user JSON.
+  if (body.search_parameters != null && (!isObject(body.search_parameters) || body.search_parameters.mode !== "off")) return "hosted_tool_usage";
+  // Generic token-only history does not attest xAI's implicit file-search state.
+  if (body.previous_response_id != null || body.conversation != null) return "retained_tool_unknown";
+  return requestPricingGap({ ...pricing, unpricedCosts: pricing.unpricedCosts?.filter(cost => cost !== "request_fee") }, body, requestFormat, parentTools);
+}
+
+function requestDeclaredTools(body: Record<string, unknown>, requestFormat: string): unknown[] {
+  const inputTools = requestFormat === "openai.responses" && Array.isArray(body.input)
+    ? body.input.flatMap(item => isObject(item) && ["additional_tools", "tool_search_output"].includes(item.type as string) && Array.isArray(item.tools) ? item.tools : []) : [];
+  return (Array.isArray(body.tools) ? body.tools : []).concat(inputTools);
+}
+
+export type PricingEndpoint = Pick<CompiledEndpoint, "request_format" | "outputTokenLimit"> & Partial<Pick<CompiledEndpoint, "id">> & {
+  selectedUpstreamModel?: string | null;
+};
+
+export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, endpoint?: PricingEndpoint, requestPricing?: OutcomeRequestPricing): CostEstimate {
+  if (unpricedGoogleRequestFormats.has(endpoint?.request_format ?? "") || unpricedNativeAudioFormats.has(endpoint?.request_format ?? ""))
+    return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
+  if (googleAudioRequest(endpoint?.selectedUpstreamModel, body, endpoint?.request_format ?? "")
+    || googleImageRequest(endpoint?.selectedUpstreamModel, body, endpoint?.request_format ?? ""))
+    return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
+  if (requestPricing && (!qualifiedOutcome(requestPricing) || pricing.unit != null || endpoint?.request_format !== "openai.responses"))
+    return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
+  if (pricing.unit === "image_token") return endpoint?.request_format === "openai.images_edits" || body.images !== undefined
+    ? { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false } : estimateImageCost(pricing, body);
+  if (pricing.unit === "character") {
+    // UTF-8 bytes bound code points without assuming an upstream tokenizer.
+    // Empty catalog probes retain the full bounded envelope; dispatch validates input.
+    const bytes = typeof body.input === "string" ? new TextEncoder().encode(body.input).byteLength : pricing.maxInputCharacters * 4;
+    return { reserveMicros: characterCost(bytes, pricing), inputTokens: null, outputTokens: null };
+  }
+  const google = endpoint?.request_format === "google.generate_content";
+  const compact = endpoint?.request_format === "openai.responses_compact";
+  // A GenerateContent continuation restores prior generated context upstream;
+  // its token and repeated original prompt do not bound that context's size.
+  const opaque = google ? googleField(body, "continuationToken", "continuation_token") != null
+    : (!endpoint || endpoint.request_format === "openai.responses" || compact) && responsesHasOpaqueInput(body);
+  const opaqueLimit = opaque ? opaqueInputLimit(pricing) : null;
+  if (opaque && opaqueLimit == null) return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
+  const inputLimit = opaqueLimit ?? pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
+  // Claude base64 images with a recognized header replace their encoded bytes
+  // with their visual-token ceiling. Every other media input stays unbounded.
+  const images: InlineImageBound | undefined = endpoint?.request_format === "anthropic.messages" ? { encodedBytes: 0, tokens: 0 } : undefined;
+  const unbounded = opaque || (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body, images));
+  // Opaque/history/media inputs already reserve the full bound; their encoded
+  // size cannot refine it. Avoid serializing the conversation just to discard it.
+  const bytes = unbounded ? 0 : endpoint?.request_format === "anthropic.messages" ? jsonBodyBytes(body) : new TextEncoder().encode(JSON.stringify(body)).byteLength;
+  const inputTokens = unbounded ? inputLimit
+    : Math.min(inputLimit, saturatingAdd(saturatingAdd(bytes - (images?.encodedBytes ?? 0), images?.tokens ?? 0), pricing.inputTokenOverhead));
   const config = google ? googleField(body, "generationConfig", "generation_config") : undefined;
   // Native maxOutputTokens includes both thoughts and visible candidate tokens.
   // Only the selected wire format decides which caller limits are meaningful.
@@ -50,21 +315,49 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
     .map(nonNegativeInteger)
     .filter((value): value is number => value != null);
   const choices = Math.max(1, (google ? googleInt32(googleField(config, "candidateCount", "candidate_count")) : nonNegativeInteger(body.n)) ?? 1);
-  const outputTokens = saturatingMultiply(requestedOutput.length ? Math.max(...requestedOutput) : pricing.defaultMaxOutputTokens, choices);
-  const rates = resolveRates(pricing, inputTokens, body.service_tier, true);
+  const limit = endpoint?.outputTokenLimit;
+  const declaredOutput = limit ? nonNegativeInteger(body[limit.field]) : null;
+  // Undocumented aliases and malformed/omitted limits cannot lower a declared
+  // endpoint bound. This qualifies the estimate; the upstream body is unchanged.
+  const output = limit ? declaredOutput != null && declaredOutput >= limit.minimum && declaredOutput <= limit.maximum ? declaredOutput : limit.maximum
+    : requestedOutput.length ? Math.max(...requestedOutput) : pricing.defaultMaxOutputTokens;
+  // No caller output-limit contract exists for compact. Use the authoritative
+  // model maximum even if chat/ordinary-Responses-looking fields are present.
+  // xAI's qualified Responses max_output_tokens bounds visible output only,
+  // excluding reasoning/function calls. Keep the full model output envelope.
+  const outputTokens = compact || requestPricing ? pricing.defaultMaxOutputTokens : saturatingMultiply(output, choices);
+  const rates = resolveRates(pricing, inputTokens, google ? googleRequestServiceTier(body) : body.service_tier, true, google);
   if (!rates) return { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false };
   const inputRate = reservationInputRate(body, rates);
-  return {
-    reserveMicros: saturatingAdd(tokenCost(inputTokens, inputRate), tokenCost(outputTokens, rates.output)),
-    inputTokens,
-    outputTokens,
-  };
+  const inferenceMicros = saturatingAdd(tokenCost(inputTokens, inputRate), tokenCost(outputTokens, rates.output));
+  const reserveMicros = requestPricing ? requestOutcomeReserve(requestPricing, inferenceMicros) : inferenceMicros;
+  return reserveMicros == null ? { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false } : { reserveMicros, inputTokens, outputTokens };
 }
 
-export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens): number | null {
+// Bounds without a request: inspect every declared tier/context, including cache
+// rates. A zero balance alone cannot exclude output-only or zero-price requests.
+export function modelReservationBounds(pricing: ModelPricing): { minimumMicros: number; zero: boolean } {
+  if (pricing.unit === "image_token") return { minimumMicros: pricing.imageOutputMicrosPerMillion > 0 ? 1 : 0, zero: pricing.textInputMicrosPerMillion === 0 && pricing.imageInputMicrosPerMillion === 0 && pricing.imageOutputMicrosPerMillion === 0 };
+  if (pricing.unit === "character") return { minimumMicros: characterCost(1, pricing), zero: pricing.inputMicrosPerMillionCharacters === 0 };
+  const cards = pricing.serviceTiers?.length ? pricing.serviceTiers : [pricing];
+  const rates = cards.flatMap((card) => [card, ...(card.longContext ? [card.longContext] : [])]).map(ratesFromPricing);
+  const zero = rates.every((rate) => Object.values(rate).every((value) => value == null || value === 0));
+  return { minimumMicros: rates.every((rate) => reservationInputRate({}, rate) > 0) ? 1 : 0, zero };
+}
+
+export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens, requestFormat?: string): number | null {
+  if (unpricedGoogleRequestFormats.has(requestFormat ?? "") || unpricedNativeAudioFormats.has(requestFormat ?? "")) return null;
+  if (requestFormat === "google.image_generate" || requestFormat === "google.music_generate"
+    || requestFormat === "google.speech_generate_content" || requestFormat === "google.speech_interactions") return null;
+  if (pricing.unit === "image_token") return requestFormat === "openai.images_generations" || requestFormat === "openai.images_edits" ? actualImageCost(pricing, tokens) : null;
+  if (pricing.unit === "character") return null;
   if (tokens.billable === false) return 0;
+  if (requestFormat === "cohere.chat" || tokens.billedTokens !== undefined) {
+    if (!tokens.billedTokens) return null;
+    tokens = { ...tokens, ...tokens.billedTokens, cached: null, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null };
+  }
   if (tokens.input == null) return null;
-  const rates = resolveRates(pricing, tokens.input, tokens.serviceTier, false);
+  const rates = resolveRates(pricing, tokens.input, tokens.serviceTier, false, requestFormat === "google.generate_content");
   if (!rates) return null;
   if (tokens.output == null && rates.output > 0) return null;
   if (rates.cacheWriteInput != null && tokens.cacheWrite == null) return null;
@@ -86,22 +379,38 @@ export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens): nu
   ]);
 }
 
+export function actualCharacterCost(pricing: ModelPricing | null | undefined, input: unknown): number | null {
+  return pricing?.unit === "character" && typeof input === "string"
+    ? characterCost([...input].length, pricing) : null;
+}
+
+function characterCost(characters: number, pricing: CharacterPricing): number {
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(characters * pricing.inputMicrosPerMillionCharacters / 1_000_000));
+}
+
 // Requested tiers choose admission bounds; only the served tier can choose a
-// settlement price. Omitted/auto requests can inherit an upstream paid default.
-function resolveRates(pricing: ModelPricing, inputTokens: number, tier: unknown, reserve: boolean): Rates | null {
+// settlement price. OpenAI omitted/auto requests can inherit a paid default;
+// native Gemini defaults to Standard and never upgrades Flex.
+function resolveRates(pricing: TokenPricing & { autoServiceTier?: "unpriced" }, inputTokens: number, tier: unknown, reserve: boolean, google = false): Rates | null {
+  if (google) {
+    tier = googleServiceTier(tier);
+    if (tier == null) return null;
+  }
   const tiers = pricing.serviceTiers;
-  if (!tiers?.length) return contextRates(pricing, inputTokens, reserve);
+  // Automatic selection can include contracts absent from the published cards.
+  if (tier === "auto" && pricing.autoServiceTier === "unpriced") return null;
+  if (!tiers?.length) return !google || tier === "standard" ? contextRates(pricing, inputTokens, reserve) : null;
   const selected = tiers.find((card) => card.id === tier || card.aliases.includes(tier as string));
   if (!reserve) return selected && (selected.maxInputTokens == null || inputTokens <= selected.maxInputTokens)
     ? contextRates(selected, inputTokens, false) : null;
   if (tier != null && tier !== "auto" && !selected) return null;
-  const candidates = selected ? tiers.filter((card) => card === selected || card.id === "default") : tiers;
+  const candidates = selected ? tiers.filter((card) => card === selected || ((!google || tier === "priority") && card.id === "default")) : tiers;
   // A byte upper bound may cross a tier's published context limit while actual
   // tokens do not. Its short rates must remain in the admission envelope.
   return candidates.map((card) => contextRates(card, Math.min(inputTokens, card.maxInputTokens ?? inputTokens), true)).reduce(maxRates);
 }
 
-function contextRates(pricing: Pick<ModelPricing, keyof TokenRates | "longContext"> | ServiceTierPricing, inputTokens: number, reserve: boolean): Rates {
+function contextRates(pricing: Pick<TokenPricing, keyof TokenRates | "longContext"> | ServiceTierPricing, inputTokens: number, reserve: boolean): Rates {
   const base = ratesFromPricing(pricing), long = pricing.longContext;
   if (!long || inputTokens <= long.thresholdInputTokens) return base;
   const extended = ratesFromPricing(long);
@@ -130,10 +439,26 @@ function ratesFromPricing(pricing: TokenRates): Rates {
   return { input: pricing.inputMicrosPerMillion, output: pricing.outputMicrosPerMillion, cachedInput: pricing.cachedInputMicrosPerMillion, cacheWriteInput: pricing.cacheWriteInputMicrosPerMillion, cacheWrite5mInput: pricing.cacheWrite5mInputMicrosPerMillion, cacheWrite1hInput: pricing.cacheWrite1hInputMicrosPerMillion };
 }
 
-function requestHasUnboundedInput(body: Record<string, unknown>): boolean {
+// Only Responses protocol input items carry this state. Never search literal
+// text, function arguments, schemas, or compaction/output-request controls.
+// Ciphertext size (including malformed/empty state) cannot bound decoded input.
+function responsesHasOpaqueInput(body: Record<string, unknown>): boolean {
+  return Array.isArray(body.input) && body.input.some((item) => isObject(item)
+    && (item.type === "compaction" || item.type === "reasoning" && Object.hasOwn(item, "encrypted_content")));
+}
+
+function opaqueInputLimit(pricing: ModelPricing | null | undefined): number | null {
+  if (!pricing || pricing.unit != null) return null;
+  const limit = pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
+  return typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
+}
+
+function requestHasUnboundedInput(body: Record<string, unknown>, images?: InlineImageBound): boolean {
   if (["previous_response_id", "conversation", "prompt"].some((key) => body[key] != null)) return true;
   if (body.input != null && contentHasUnboundedInput(body.input)) return true;
-  if (Array.isArray(body.messages) && body.messages.some((message) => isObject(message) && contentHasUnboundedInput(message.content))) return true;
+  if (Array.isArray(body.messages) && body.messages.some((message) => isObject(message) && (images && message.role === "user"
+    ? claudeUserContentHasUnboundedInput(message.content, images)
+    : contentHasUnboundedInput(message.content)))) return true;
   return Array.isArray(body.tools) && body.tools.some((tool) => isObject(tool) && providerAddedTool(tool.type));
 }
 
@@ -151,12 +476,36 @@ function googleContentHasMedia(value: unknown): boolean {
   ));
 }
 
+// Claude bills an image block as visual tokens only as a direct block of user
+// content or of a user tool_result's content. Qualified blocks accumulate into
+// `images`; an image-shaped object anywhere else (tool_use input, unknown fields,
+// nested results) is billed as text or rejected and keeps the unbounded check.
+function claudeUserContentHasUnboundedInput(content: unknown, images: InlineImageBound): boolean {
+  if (!Array.isArray(content)) return contentHasUnboundedInput(content);
+  return content.some((block) => {
+    if (!isObject(block)) return false;
+    if (block.type === "tool_result" && Array.isArray(block.content)) {
+      return Object.entries(block).some(([key, item]) => key !== "content" && contentHasUnboundedInput(item))
+        || block.content.some((item) => !qualifiedClaudeImage(item, images) && contentHasUnboundedInput(item));
+    }
+    return !qualifiedClaudeImage(block, images) && contentHasUnboundedInput(block);
+  });
+}
+
+function qualifiedClaudeImage(block: unknown, images: InlineImageBound): boolean {
+  const image = isObject(block) ? claudeImageBlockBound(block) : null;
+  if (!image) return false;
+  images.encodedBytes += image.encodedBytes;
+  images.tokens = saturatingAdd(images.tokens, image.tokens);
+  return true;
+}
+
 function contentHasUnboundedInput(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(contentHasUnboundedInput);
   if (!isObject(value)) return false;
   const kind = typeof value.type === "string" ? value.type : "";
-  if (["image", "image_url", "document", "file", "input_image", "input_file", "item_reference", "computer_screenshot"].includes(kind)) return true;
-  if ("image_url" in value || "file_id" in value) return true;
+  if (["image", "image_url", "video_url", "document", "file", "input_image", "input_file", "item_reference", "computer_screenshot"].includes(kind)) return true;
+  if ("image_url" in value || "video_url" in value || "file_id" in value) return true;
   return Object.values(value).some(contentHasUnboundedInput);
 }
 

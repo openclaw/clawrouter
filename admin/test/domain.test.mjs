@@ -3,10 +3,8 @@ import test from "node:test";
 import {
   catalogProviderIds,
   credentialOutcome,
-  directUserBindingChanges,
   effectiveAccess,
   knownPolicyProviders,
-  optionalCurrencyMicros,
   optionalNumber,
   parseEligibleGrants,
   playgroundAccessEndpoint,
@@ -103,18 +101,6 @@ test("reconciling user bindings preserves inherited bindings and tombstones remo
   assert.equal(next.find((binding) => binding.policyId === "tools" && binding.principalType === "user")?.enabled, true);
 });
 
-test("direct user binding changes separate removals from additions", () => {
-  const current = [
-    { policyId: "models", principalType: "user", principalId: "user@example.com", enabled: true, priority: 8 },
-    { policyId: "tools", principalType: "user", principalId: "user@example.com", enabled: false, priority: 20 },
-    { policyId: "wildcard", principalType: "group", principalId: "maintainers", enabled: true, priority: 30 },
-  ];
-  const changes = directUserBindingChanges(current, "user@example.com", policies, ["tools"]);
-
-  assert.deepEqual(changes.removals.map((binding) => binding.policyId), ["models"]);
-  assert.deepEqual(changes.additions.map((binding) => binding.policyId), ["tools"]);
-});
-
 test("policy edits discard stale provider ids before saving", () => {
   assert.deepEqual(
     knownPolicyProviders(["openai", "github", "firecrawl", "openai"], ["firecrawl", "openai"]),
@@ -126,6 +112,9 @@ test("service outcome and playground blocker require both access and readiness",
   const allowed = services[0];
   assert.equal(serviceOutcome(allowed).label, "usable");
   assert.equal(playgroundBlocker(modelForm(), { id: "openai/default", provider: "openai", capabilities: [] }, undefined, new Map([["openai", allowed.access]]), { openai: allowed.readiness }), null);
+
+  // Missing access is not a denial, even if the provider is known to be ready.
+  assert.match(playgroundBlocker(modelForm(), { id: "openai/default", provider: "openai", capabilities: [] }, undefined, new Map(), { openai: allowed.readiness }), /access to this provider couldn’t be verified/);
 
   const denied = { ...allowed, access: { ...allowed.access, allowed: false, policies: [] } };
   assert.equal(serviceOutcome(denied).label, "denied");
@@ -259,7 +248,6 @@ test("service route presets cover every bundled request format family", () => {
 });
 
 test("budget parsing and fallback summaries keep blocked and wildcard states explicit", () => {
-  assert.equal(optionalCurrencyMicros("$1.25"), 1_250_000);
   assert.equal(optionalNumber("0"), 0);
   assert.throws(() => optionalNumber("-1"), /non-negative/);
 
@@ -271,6 +259,11 @@ test("budget parsing and fallback summaries keep blocked and wildcard states exp
   assert.equal(perMaintainer.budget.ledger, "per_principal");
   assert.equal(perMaintainer.budget.spentMicros, null);
   assert.deepEqual(perMaintainer.budget.breakdown, []);
+
+  const unknown = policyUsageFallback({ policyId: "team", enabled: true, providers: ["openai"], monthlyBudgetMicros: 10_000_000 });
+  assert.equal(unknown.budget.limitMicros, 10_000_000);
+  assert.equal(unknown.budget.spentMicros, null);
+  assert.equal(unknown.budget.remainingMicros, null);
 
   const summaries = tenantSummaryFallback(policies, [
     { credentialId: "models_a", policyId: "models", enabled: true },

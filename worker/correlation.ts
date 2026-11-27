@@ -42,6 +42,28 @@ export interface CorrelatedRequest {
 // Preserve the ingress Request/body stream. Reconstructing it solely to add headers can
 // retain an unconsumed body tee across a long-lived Worker process.
 const ingressMetadata = new WeakMap<Request, CorrelationMetadata>();
+const backgroundRecovery = new WeakMap<Request, string>();
+export const backgroundRecoveryHeader = "x-clawrouter-background-recovery";
+
+// This locator is response-only metadata, never caller authority or a usage ACK.
+export function setBackgroundRecovery(request: Request, locator: string): void { backgroundRecovery.set(request, locator); }
+export function withBackgroundRecovery(response: Response, request: Request): Response {
+  response.headers.delete(backgroundRecoveryHeader);
+  const locator = backgroundRecovery.get(request);
+  if (locator) response.headers.set(backgroundRecoveryHeader, locator);
+  return response;
+}
+
+// A body probe transfers one ingress stream rather than cloning/teeing it.
+// Preserve out-of-band attribution and propagate any later recovery locator.
+export function transferRequestContext(source: Request, target: Request): () => void {
+  const metadata = ingressMetadata.get(source);
+  if (metadata) ingressMetadata.set(target, metadata);
+  return () => {
+    const locator = backgroundRecovery.get(target);
+    if (locator) backgroundRecovery.set(source, locator);
+  };
+}
 
 export function correlateIngressRequest(input: Request): CorrelatedRequest {
   const suppliedRequestId = input.headers.get("x-request-id");
@@ -112,7 +134,10 @@ export function parseTraceparent(value: string | null): { traceId: string; spanI
 
 export function withRequestId(response: Response, requestId: string): Response {
   const copy = new Response(response.body, { status: response.status, statusText: response.statusText, headers: response.headers, ...(response.webSocket ? { webSocket: response.webSocket } : {}) });
-  copy.headers.set("x-request-id", requestId);
+  copy.headers.set("x-clawrouter-request-id", requestId);
+  // Keep native upstream IDs intact. The legacy alias remains available when
+  // neither provider ID exists; the router-specific header is authoritative.
+  if (!copy.headers.has("x-request-id") && !copy.headers.has("request-id")) copy.headers.set("x-request-id", requestId);
   return copy;
 }
 

@@ -1,0 +1,72 @@
+schema: clawrouter.service-provider.v1
+id: anthropic-vertex
+displayName: Anthropic Vertex
+status: experimental
+class: anthropic_compatible
+service:
+  platform: google
+  kind: model_provider
+  upstreamService: anthropic
+  configKeys: []
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_token
+baseUrls:
+  default: https://aiplatform.googleapis.com
+routing:
+  nativePrefixes: [anthropic-vertex]
+  modelPrefixes: [anthropic-vertex/]
+adapter:
+  request: anthropic
+  response: anthropic
+  stream: anthropic_sse
+  error: anthropic_error
+capabilities:
+  - id: llm.chat
+    endpoint: messages
+    methods: [POST]
+  - id: llm.messages
+    endpoint: messages
+    methods: [POST]
+endpoints:
+  messages:
+    method: POST
+    path: /v1/messages
+    pathParams: []
+    requestFormat: anthropic.messages
+    responseFormat: anthropic.messages
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: anthropic-vertex/claude-sonnet-4-6
+      displayName: "Claude Sonnet 4.6"
+      upstream: claude-sonnet-4-6
+      capabilities: [llm.chat, llm.messages]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          messages:
+            sources:
+              - https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/sonnet-4-6
+            checkedAt: "2026-11-04"
+            contextWindow: 1000000
+            maxOutputTokens: 128000
+            inference: {chat: true}
+      endpointPricing:
+        messages:
+          pricingRef: anthropic-vertex-sonnet-4-6-messages-unpriced
+          pricing: null
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+  counters:
+    - name: input_tokens
+      source: usage.input_tokens
+      unit: token
+    - name: output_tokens
+      source: usage.output_tokens
+      unit: token

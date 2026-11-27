@@ -1,0 +1,13 @@
+{
+  "source": "https://docs.x.ai/developers/model-capabilities/audio/text-to-speech",
+  "checkedAt": "2026-11-03",
+  "frozenSource": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7:extensions/xai/tts.ts",
+  "request": {"text": "Synthetic speech fixture.", "voice_id": "eve", "language": "en", "output_format": {"codec": "pcm"}, "speed": 1.1},
+  "query": "language=en&voice=eve&codec=pcm&speed=1.1",
+  "client": [{"type": "text.delta", "delta": "Synthetic speech fixture."}, {"type": "text.done"}],
+  "server": [{"type": "audio.delta", "delta": "AAE="}, {"type": "audio.delta", "delta": "AgM="}, {"type": "audio.done", "trace_id": "00000000-0000-4000-8000-000000000001"}],
+  "error": {"type": "error", "message": "Synthetic provider error"},
+  "audioBytes": [0, 1, 2, 3],
+  "billing": {"basis": "native session input characters", "upstreamCostMicros": null, "interruptDebit": "unqualified", "policyFixedIsVendorCost": false},
+  "localClosure": {"vendorCancellationAcknowledged": false, "replayAllowed": false}
+}

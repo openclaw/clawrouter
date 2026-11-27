@@ -1,0 +1,26 @@
+{
+  "synthetic": true,
+  "openclawRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "protocol": "runway.tasks",
+  "version": "2024-11-06",
+  "text": { "method": "POST", "path": "/v1/text_to_video", "body": { "model": "gen4.5", "promptText": "Synthetic landscape", "ratio": "1280:720", "duration": 5 } },
+  "image": { "method": "POST", "path": "/v1/image_to_video", "body": { "model": "gen4_turbo", "promptText": "Synthetic image motion", "promptImage": "https://media.example/image.png", "ratio": "960:960", "duration": 5 } },
+  "video": { "method": "POST", "path": "/v1/video_to_video", "body": { "model": "gen4_aleph", "promptText": "Synthetic video edit", "videoUri": "https://media.example/input.mp4", "ratio": "1280:720" } },
+  "created": { "id": "00000000-0000-4000-8000-000000000001" },
+  "retrieve": { "method": "GET", "path": "/v1/tasks/${id}", "minimumPollSeconds": 5 },
+  "observations": [
+    { "native": { "status": "PENDING" }, "terminal": null },
+    { "native": { "status": "THROTTLED" }, "terminal": null },
+    { "native": { "status": "RUNNING", "output": ["https://media.example/partial.mp4"] }, "terminal": null },
+    { "native": { "status": "SUCCEEDED", "output": ["https://media.example/result.mp4"] }, "terminal": "succeeded" },
+    { "native": { "status": "FAILED", "failure": "Synthetic failure" }, "terminal": "failed" },
+    { "native": { "status": "CANCELLED" }, "terminal": "canceled" }
+  ],
+  "cancel": {
+    "method": "DELETE", "path": "/v1/tasks/${id}", "status": 204,
+    "terminal": null, "observationUnavailable": "canceled_or_deleted",
+    "guaranteesStoppedExecution": false, "refundQualified": false, "followUp": null
+  },
+  "retention": { "taskSeconds": null, "outputUrlSeconds": { "min": 86400, "max": 172800 } },
+  "billing": { "unit": "credits", "actualProviderCostMicrousd": null, "estimatedCostIsFinal": false, "policyFixedIsSeparate": true }
+}

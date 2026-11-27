@@ -1,155 +1,374 @@
-import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type UsageInspection } from "./token-usage.ts";
+import { gemini4Hop, googleStreamBilling } from "./google-hop-billing.ts";
+import { inputRetirement } from "./input-retirement.ts";
+import { extractVoyageEmbeddingUsage } from "./voyage-embeddings.ts";
+import type { ValidatedNativeUsage } from "./native-response.ts";
+import { createResponseReceiptInspection, perplexitySearchOutcome, type RequestTariffOutcome, type RequestTariff } from "./request-tariff.ts";
+import { createNativeEventObserver } from "./native-events.ts";
+import { createRadiusEventInspector } from "./provider-radius.ts";
+import { createOllamaChatInspector, ollamaChatFormat } from "./provider-ollama.ts";
+import { createBedrockEventStreamInspector } from "./bedrock-eventstream.ts";
+import { extractImageUsageTokens } from "./image-generation.ts";
+import { extractCompactUsageTokens } from "./responses-compact.ts";
+import { createResponsesUsageInspector, type ResponsesInspectionTools } from "./responses-usage.ts";
+import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type ResponsesObservation, type UsageInspection, type UsageTokenContext } from "./token-usage.ts";
+import { HttpOperation } from "./http-operation.ts";
+import { nativeErrorEnvelope, type NativeErrorContext, type NativeErrorDetails } from "./native-errors.ts";
 
-export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled" }
+import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
+
+export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled"; binaryComplete?: true; nonbillable?: true; hostedSearch?: HostedSearchUsage; requestTariffOutcome?: import("./request-tariff.ts").RequestTariffOutcome; requestCostReceipt?: import("./pricing.ts").RequestCostReceipt }
+export interface ResponseBodyInspection {
+  push(bytes: Uint8Array): Promise<void>; end(): Promise<void>;
+  acceptJson?(value: unknown, failed?: boolean): void;
+  tools?: ResponsesInspectionTools;
+  qualify?(): Promise<void>;
+  observe?(fact: ResponsesObservation): Promise<void>;
+}
+
+export function proxyResponseHeaders(response: Response, providerId: string): Headers {
+  const headers = new Headers(response.headers);
+  for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade", "x-clawrouter-grant-failover", "x-clawrouter-error-code", "openai-organization", "openai-project", "anthropic-organization-id", "anthropic-workspace-id"]) headers.delete(name);
+  headers.set("x-clawrouter-upstream-provider", providerId);
+  return headers;
+}
 
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
-// the client and buffer arbitrary output. JSON and individual SSE frames are
-// bounded; a long stream can still report authoritative late terminal facts.
-export function observeUsage(response: Response, signal?: AbortSignal): { response: Response; result: Promise<ObservedUsage> } {
-  if (!response.body) return { response, result: Promise.resolve({ tokens: null, outcome: null, delivery: "complete" }) };
+// the client and buffer arbitrary output. Responses retain only bounded scalar
+// metadata; other formats keep their existing bounded JSON/frame inspection.
+export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>): { response: Response; result: Promise<ObservedUsage>; retired: Promise<void> } {
+  const signal = operation.signal;
+  const speech = responseFormat === "audio.binary";
+  const gemini = response.ok && gemini4Hop(usageContext);
+  if (!response.body && gemini) { operation.stop("complete"); return { response, retired: Promise.resolve(),
+    result: Promise.resolve({ tokens: null, nonbillable: true, outcome: "provider_error", delivery: "complete" }) }; }
+  if (!response.body) { operation.stop("complete"); return { response, retired: Promise.resolve(), result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  const sse = contentType.includes("text/event-stream") ? createSseUsageInspector() : null;
-  let inspect = !sse && contentType.includes("json");
-  const decoder = new TextDecoder();
-  const reader = response.body.getReader();
-  let text = "", bytes = 0, finished = false;
+  const mime = contentType.split(";")[0].trim();
+  const audio = /^audio\/[!#$%&'*+.^_`|~0-9a-z-]+$/.test(mime) || mime === "application/octet-stream";
+  const eventStream = !speech && contentType.includes("text/event-stream"), json = !speech && contentType.includes("json");
+  const images = responseFormat === "openai.images_generations";
+  const compact = responseFormat === "openai.responses_compact";
+  const revokeRejection = response.ok && operation.receivedRejection ? () => operation.revokeRejection() : undefined;
+  const receipt = tariff?.kind === "outcome_request" ? createResponseReceiptInspection(tariff) : undefined;
+  const responses = compact && json ? createResponsesUsageInspector(false, bodyInspection?.tools, undefined, extractCompactUsageTokens) : images && json ? createResponsesUsageInspector(false, undefined, undefined, extractImageUsageTokens) : responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe, undefined, revokeRejection, receipt) : null;
+  const bedrock = responseFormat === "aws_bedrock.eventstream" && mime === "application/vnd.amazon.eventstream" ? createBedrockEventStreamInspector() : null;
+  const radius = responseFormat === "radius.messages" && eventStream ? createNativeEventObserver(createRadiusEventInspector()) : null;
+  const nativeChat = responseFormat === ollamaChatFormat || responseFormat === "radius.messages";
+  const ollama = responseFormat === ollamaChatFormat && ["application/json", "application/x-ndjson"].includes(mime) ? createOllamaChatInspector(mime === "application/json" ? "json" : "ndjson") : null;
+  const checkpoints = gemini && responseFormat === "google.stream_generate_content" && mime === "text/event-stream" ? googleStreamBilling(usageContext?.googleCandidates) : undefined;
+  const unaryHop = gemini && responseFormat === "google.generate_content" && mime === "application/json";
+  let upstreamEof = false;
+  const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson, usageContext, checkpoints?.accept) : null;
+  let inspect = !validated && !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
+  const searchTariff = responseFormat === "perplexity.search" && tariff?.kind === "successful_request";
+  const decoder = new TextDecoder("utf-8", { fatal: searchTariff });
+  let requestTariffOutcome: RequestTariffOutcome = "unknown";
+  const reader = response.body.getReader(), sourceRetired = replayRetirements.get(response.body);
+  const input = sourceRetired ? replayInputOwner(reader, sourceRetired) : inputRetirement(reader);
+  let text = "", bytes = 0, nonempty = false, finished = false;
+  let completedJson: UsageInspection | undefined;
   let resolve!: (result: ObservedUsage) => void;
   const result = new Promise<ObservedUsage>(done => { resolve = done; });
-  function finish(delivery: ObservedUsage["delivery"], reason?: unknown): Promise<void> {
-    if (finished) return Promise.resolve();
+  let resolveRetired!: () => void, rejectRetired!: (reason: unknown) => void;
+  const retired = new Promise<void>((yes, no) => { resolveRetired = yes; rejectRetired = no; });
+  void retired.catch(() => undefined);
+  let pulling: Promise<void> | undefined;
+  // Abort notifies delivery/accounting immediately. The actual callback must
+  // still settle before its retained chunk/inspection owner can retire.
+  async function publication<T>(pending: Promise<T>): Promise<T> {
+    try { return await pending; }
+    catch (error) { operation.stop("publication", error); throw error; }
+  }
+  function inspectJson(value: unknown): UsageInspection {
+    return { tokens: responseFormat === "voyage.embeddings"
+      ? response.ok && mime === "application/json" ? extractVoyageEmbeddingUsage(value) : null
+      : extractUsageTokens(value, usageContext), outcome: responseOutcome(value) };
+  }
+  function finish(delivery: ObservedUsage["delivery"], reason?: unknown): void {
+    if (finished) return;
     finished = true;
-    signal?.removeEventListener("abort", aborted);
-    let inspection: UsageInspection = sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
-    if (delivery === "complete" && inspect) {
+    signal.removeEventListener("abort", aborted);
+    if (delivery === "canceled") operation.cancel(reason);
+    else operation.stop(delivery === "complete" ? "complete" : "upstream", reason);
+    delivery = operation.delivery ?? delivery;
+    let inspection: UsageInspection = validated ?? radius?.result() ?? ollama?.result(delivery === "complete") ?? bedrock?.result(delivery === "complete") ?? responses?.result(delivery === "complete") ?? sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
+    if (nativeChat && (!ollama && !radius || delivery === "complete" && !inspection.outcome)) inspection.outcome = "provider_error";
+    if (delivery === "complete" && completedJson) inspection = completedJson;
+    else if (delivery === "complete" && inspect) {
       try {
         text += decoder.decode();
         const value: unknown = JSON.parse(text);
-        inspection = { tokens: extractUsageTokens(value), outcome: responseOutcome(value) };
+        if (searchTariff && mime === "application/json") requestTariffOutcome = perplexitySearchOutcome(value, response.status);
+        inspection = inspectJson(value);
       } catch { inspection.outcome = "provider_error"; }
     }
-    text = "";
-    resolve({ ...inspection, delivery });
+    if (responseFormat === "perplexity.search") inspection.tokens = null;
+    if (searchTariff && requestTariffOutcome === "failed") inspection.outcome = "provider_error";
+    responses?.stop(); text = "";
+    // Binary delivery supplies completion only, never synthetic token usage.
+    // A partial, empty, or wrong-MIME response cannot discount the reservation.
+    const binaryComplete = speech && response.ok && delivery === "complete" && audio && nonempty;
+    if (speech && !binaryComplete) inspection.outcome = "provider_error";
+    const hostedSearch = responses && !images && !compact ? responses.hostedUsage(delivery === "complete") : undefined;
+    const requestCostReceipt = receipt?.result(delivery === "complete") ?? validated?.requestCostReceipt;
+    // A local publication failure after upstream EOF is not a dropped Google hop.
+    const hop = checkpoints?.finish(inspection) ?? (unaryHop && (!upstreamEof && delivery !== "complete" || upstreamEof && inspection.outcome === "provider_error")
+      ? { tokens: null, outcome: "provider_error" as const, nonbillable: true as const } : undefined);
+    if (hop) inspection = hop;
+    resolve({ ...inspection, delivery, ...(operation.receivedRejection ? { nonbillable: true as const } : {}), ...(binaryComplete ? { binaryComplete: true as const } : {}),
+      ...(hostedSearch ? { hostedSearch } : {}), ...(requestCostReceipt ? { requestCostReceipt } : {}),
+      ...(searchTariff ? { requestTariffOutcome: delivery === "complete" ? requestTariffOutcome : "unknown" as const } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
-    const cleanup = delivery === "canceled" ? reader.cancel(reason).catch(() => undefined) : Promise.resolve();
-    reader.releaseLock();
-    return cleanup;
+    const cleanup = input.retire(delivery === "complete" ? "eof" : "cancel", reason);
+    // finish() never awaits this from inside pull: joining our own active pull
+    // here is safe only because the pull returns without awaiting retirement.
+    void Promise.all([cleanup, pulling]).then(resolveRetired, rejectRetired);
+    // Downstream cancellation remains prompt. Only retired certifies cleanup
+    // and permits the proxy's separately retained capacity owner to release.
   }
   let downstream: ReadableStreamDefaultController<Uint8Array>;
   function aborted() {
     if (finished) return;
-    void finish("canceled", signal?.reason);
-    downstream.error(signal?.reason);
+    void finish("canceled", signal.reason);
+    downstream.error(signal.reason);
   }
   const body = new ReadableStream<Uint8Array>({
     start(controller) { downstream = controller; },
-    async pull(controller) {
+    pull(controller) {
+      const work = (async () => {
       try {
-        const next = await reader.read();
+        const next = await input.read(() => reader.read());
         if (finished) return; // A pending read can resolve after consumer cancellation.
-        if (next.done) { finish("complete"); controller.close(); return; }
-        sse?.push(next.value);
+        if (next.done) {
+          upstreamEof = true;
+          sse?.end();
+          if (inspect && bodyInspection?.acceptJson) {
+            try {
+              text += decoder.decode();
+              const value: unknown = JSON.parse(text);
+              completedJson = inspectJson(value);
+              bodyInspection.acceptJson(value);
+            } catch { completedJson = { tokens: null, outcome: "provider_error" }; }
+            text = ""; inspect = false;
+          }
+          if (bodyInspection) await publication(bodyInspection.end()); if (finished) return;
+          if (responses) await (bodyInspection?.observe ? publication(responses.end()) : responses.end()); if (finished) return;
+          if (responses && bodyInspection?.qualify) await publication(bodyInspection.qualify()); if (finished) return;
+          finish("complete"); controller.close(); return;
+        }
+        nonempty ||= next.value.byteLength > 0;
+        if (bodyInspection?.observe) await publication(bodyInspection.push(next.value));
+        if (finished) return;
+        if (responses) { await (bodyInspection?.observe ? publication(responses.push(next.value)) : responses.push(next.value)); if (finished) return; }
+        if (!checkpoints) sse?.push(next.value);
+        bedrock?.push(next.value);
+        ollama?.push(next.value);
+        radius?.push(next.value);
         if (inspect) {
           bytes += next.value.byteLength;
           if (bytes > usageInspectionLimit) { inspect = false; text = ""; }
           else text += decoder.decode(next.value, { stream: true });
         }
-        controller.enqueue(next.value);
-      } catch (error) { if (!finished) { finish("failed"); controller.error(error); } }
+        // Identity registration owns publication; the same reader still owns
+        // demand, cancellation, and usage when the durable write fails.
+        if (bodyInspection && !bodyInspection.observe) await publication(bodyInspection.push(next.value));
+        if (finished) return;
+        if (responses && bodyInspection?.qualify) await publication(bodyInspection.qualify());
+        if (!finished) {
+          // A Google receipt commits when its frame reaches the downstream reader,
+          // not while a publication callback may still reject the chunk.
+          if (checkpoints) sse?.push(next.value);
+          controller.enqueue(next.value);
+        }
+      } catch (error) { if (!finished) { finish("failed", error); controller.error(error); } }
+      })();
+      pulling = work;
+      return work.finally(() => { if (pulling === work) pulling = undefined; });
     },
     cancel(reason) { return finish("canceled", reason); },
   }, { highWaterMark: 0 });
   // workerd can drop its response pump without calling the JS stream's cancel.
   // Ingress abort is the authoritative caller-lifecycle signal in that case.
-  if (signal?.aborted) aborted();
-  else signal?.addEventListener("abort", aborted, { once: true });
-  return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result };
+  if (signal.aborted) aborted();
+  else signal.addEventListener("abort", aborted, { once: true });
+  return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result, retired };
 }
 
-export async function normalizePreStreamError(response: Response, streamingRequested: boolean): Promise<Response> {
+// Inspect only a bounded error prefix and replay it through the original reader.
+// Oversized, fragmented or malformed errors retain their original wire response.
+export async function inspectJsonError(response: Response, operation: HttpOperation): Promise<{ response: Response; body?: string }> {
+  if (!response.body) return { response };
+  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  const decoder = new TextDecoder();
+  let bytes = 0, body = "", done = false;
+  try {
+    for (let reads = 0; reads < 128; reads++) {
+      const next = await operation.wait(reader.read());
+      done = next.done;
+      if (done) return { response: replayResponse(response, reader, chunks, true), body: body + decoder.decode() };
+      chunks.push(next.value);
+      bytes += next.value.byteLength;
+      if (bytes > 64 * 1024) break;
+      body += decoder.decode(next.value, { stream: true });
+    }
+  } catch {
+    if (operation.signal.aborted) {
+      void reader.cancel(operation.signal.reason).catch(() => undefined); reader.releaseLock();
+      operation.signal.throwIfAborted();
+    }
+  }
+  return { response: replayResponse(response, reader, chunks, done) };
+}
+
+export async function normalizePreStreamError(response: Response, streamingRequested: boolean, operation = new HttpOperation(), native?: NativeErrorContext): Promise<Response> {
   if (!streamingRequested) return response;
   const eventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") === true;
   if (response.status >= 400) {
-    if (eventStream && response.body) return normalizeFirstSseEvent(response, response.status);
-    const body = await readLimited(response, 64 * 1024).catch(() => "");
-    return mappedUpstreamError(response, upstreamError(body), response.status);
+    try {
+      if (eventStream && response.body) return await normalizeFirstSseEvent(response, response.status, operation, native);
+      const body = await readLimited(response, 64 * 1024, operation);
+      // Valid native JSON errors are already the wire contract: preserve even
+      // whitespace and extension fields instead of rebuilding their envelope.
+      if (native && nativeJsonError(body, native)) return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+      return mappedUpstreamError(response, upstreamError(body), response.status, native);
+    } catch {
+      // Failure to read error details cannot replace an accepted HTTP status.
+      // The operation still owns cancellation and the accounting cause.
+      return mappedUpstreamError(response, {}, response.status, native);
+    }
   }
   if (!response.ok || !eventStream || !response.body) return response;
-  return normalizeFirstSseEvent(response, null);
+  return normalizeFirstSseEvent(response, null, operation, native);
 }
 
 const FIRST_SSE_EVENT_LIMIT = 8 * 1024;
 
-async function normalizeFirstSseEvent(response: Response, errorStatus: number | null): Promise<Response> {
+async function normalizeFirstSseEvent(response: Response, errorStatus: number | null, operation: HttpOperation, native?: NativeErrorContext): Promise<Response> {
   const reader = response.body!.getReader();
   const chunks: Uint8Array[] = [];
   const sniffed = new Uint8Array(FIRST_SSE_EVENT_LIMIT);
   let sniffedLength = 0;
   let eventStart = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (value?.byteLength) {
-      chunks.push(value);
-      const copyLength = Math.min(value.byteLength, FIRST_SSE_EVENT_LIMIT - sniffedLength);
-      if (copyLength > 0) {
-        sniffed.set(value.subarray(0, copyLength), sniffedLength);
-        sniffedLength += copyLength;
+  let transferred = false;
+  try {
+    while (true) {
+      // Missing details on a known rejection must leave its fallback body readable.
+      // A failed HTTP 200 sniff still owns the failure before reader cleanup.
+      const { done, value } = await operation.wait(reader.read(), errorStatus === null ? "upstream" : undefined);
+      if (value?.byteLength) {
+        chunks.push(value);
+        const copyLength = Math.min(value.byteLength, FIRST_SSE_EVENT_LIMIT - sniffedLength);
+        if (copyLength > 0) {
+          sniffed.set(value.subarray(0, copyLength), sniffedLength);
+          sniffedLength += copyLength;
+        }
+      }
+      while (eventStart < sniffedLength) {
+        const boundary = sseEventBoundary(sniffed, eventStart, sniffedLength);
+        if (!boundary) break;
+        const event = classifySseEvent(sniffed.subarray(eventStart, boundary.start));
+        eventStart = boundary.end;
+        if (event.kind === "empty") continue;
+        // A native HTTP-200 error event is still SSE, even when it is the
+        // first event. Retain the sniff/deadline but never invent an HTTP 502.
+        if (errorStatus !== null || event.kind === "error") {
+          const upstream = event.upstream;
+          const status = errorStatus ?? (typeof upstream.code === "number" && Number.isInteger(upstream.code) && upstream.code >= 400 && upstream.code <= 599 ? upstream.code : 502);
+          // Preserve the pre-output rejection's zero charge independently of
+          // native HTTP-200 SSE delivery, including later client cancellation.
+          operation.acceptRejection(status);
+          if (errorStatus !== null || !native) return mappedUpstreamError(response, upstream, status, native);
+        }
+        transferred = true;
+        return replayResponse(response, reader, chunks, done);
+      }
+      if (done || sniffedLength === FIRST_SSE_EVENT_LIMIT) {
+        if (errorStatus === null) { transferred = true; return replayResponse(response, reader, chunks, done); }
+        return mappedUpstreamError(response, {}, errorStatus, native);
       }
     }
-    while (eventStart < sniffedLength) {
-      const boundary = sseEventBoundary(sniffed, eventStart, sniffedLength);
-      if (!boundary) break;
-      const event = classifySseEvent(sniffed.subarray(eventStart, boundary.start));
-      eventStart = boundary.end;
-      if (event.kind === "empty") continue;
-      if (errorStatus !== null || event.kind === "error") {
-        await reader.cancel().catch(() => undefined);
-        const upstream = event.upstream;
-        const status = errorStatus ?? (typeof upstream.code === "number" && Number.isInteger(upstream.code) && upstream.code >= 400 && upstream.code <= 599 ? upstream.code : 502);
-        return mappedUpstreamError(response, upstream, status);
-      }
-      return replayResponse(response, reader, chunks, done);
-    }
-    if (done || sniffedLength === FIRST_SSE_EVENT_LIMIT) {
-      if (errorStatus === null) return replayResponse(response, reader, chunks, done);
-      if (!done) await reader.cancel().catch(() => undefined);
-      return mappedUpstreamError(response, {}, errorStatus);
-    }
+  } finally {
+    if (!transferred) { void reader.cancel(operation.signal.reason).catch(() => undefined); reader.releaseLock(); }
   }
 }
 
+// The published body carries its predecessor's physical retirement independently
+// of cancellation's data-error policy. Weak keys do not extend response lifetime.
+const replayRetirements = new WeakMap<ReadableStream<Uint8Array>, Promise<void>>();
+function replayInputOwner(reader: ReadableStreamDefaultReader<Uint8Array>, predecessor?: Promise<void>) {
+  const failures: unknown[] = [];
+  const source = predecessor?.then(() => undefined, error => { failures.push(error); });
+  const input = inputRetirement({
+    cancel(reason) {
+      try { return reader.cancel(reason); }
+      catch (error) { failures.push(error); throw error; }
+    },
+    releaseLock() { try { reader.releaseLock(); } catch (error) { failures.push(error); } },
+  }, source);
+  let started = false, resolve!: () => void, reject!: (error: unknown) => void;
+  const retired = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  void retired.catch(() => undefined);
+  return {
+    read: input.read,
+    retired,
+    retire(kind: "eof" | "cancel", reason?: unknown) {
+      if (started) return retired;
+      started = true;
+      // Publish first: a native cancel can synchronously re-enter this owner.
+      void input.retire(kind, reason).then(() => {
+        if (failures.length === 1) reject(failures[0]);
+        else if (failures.length) reject(new AggregateError(failures, "replay retirement failed"));
+        else resolve();
+      }, error => { failures.push(error); reject(failures.length === 1 ? error : new AggregateError(failures, "replay retirement failed")); });
+      return retired;
+    },
+  };
+}
 function replayResponse(response: Response, reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], readerDone: boolean): Response {
-  let chunkIndex = 0;
+  const owner = replayInputOwner(reader, response.body ? replayRetirements.get(response.body) : undefined);
+  let chunkIndex = 0, canceled = false;
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (chunkIndex < chunks.length) {
-        controller.enqueue(chunks[chunkIndex++]);
-        return;
-      }
-      if (readerDone) {
-        controller.close();
-        return;
-      }
+      if (canceled) return;
+      const end = async (failed: boolean, primary?: unknown) => {
+        const failures: unknown[] = failed ? [primary] : [];
+        try { await owner.retire("eof"); } catch (error) { failures.push(error); }
+        if (canceled) return;
+        if (failures.length) controller.error(failures.length === 1 ? failures[0] : new AggregateError(failures, "replay read and retirement failed"));
+        else controller.close();
+      };
+      let next: ReadableStreamReadResult<Uint8Array>;
       try {
-        const { done, value } = await reader.read();
-        if (done) controller.close();
-        else controller.enqueue(value);
-      } catch (error) { controller.error(error); }
+        if (chunkIndex < chunks.length) { controller.enqueue(chunks[chunkIndex++]); return; }
+        if (readerDone) { await end(false); return; }
+        next = await owner.read(() => reader.read());
+      } catch (error) { if (!canceled) await end(true, error); return; }
+      if (canceled) return;
+      if (next.done) await end(false);
+      else { try { controller.enqueue(next.value); } catch (error) { await end(true, error); } }
     },
-    cancel(reason) { return reader.cancel(reason); },
+    cancel(reason) { canceled = true; return owner.retire("cancel", reason); },
   }, { highWaterMark: 0 });
-  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  const replay = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  replayRetirements.set(replay.body!, owner.retired);
+  return replay;
 }
 
-function sseEventBoundary(bytes: Uint8Array, start: number, length: number): { start: number; end: number } | null {
-  let lineStart = start;
-  for (let index = start; index < length; index += 1) {
+export interface SseBoundaryCursor { offset: number; lineStart: number; eof?: boolean }
+export function sseEventBoundary(bytes: Uint8Array, start: number, length: number, cursor?: SseBoundaryCursor): { start: number; end: number } | null {
+  let lineStart = cursor?.lineStart ?? start;
+  for (let index = cursor?.offset ?? start; index < length; index += 1) {
     if (bytes[index] !== 10 && bytes[index] !== 13) continue;
+    if (cursor && bytes[index] === 13 && index + 1 === length && !cursor.eof) {
+      cursor.offset = index; cursor.lineStart = lineStart; return null;
+    }
     const next = bytes[index] === 13 && index + 1 < length && bytes[index + 1] === 10 ? index + 2 : index + 1;
     if (index === lineStart) return { start: lineStart, end: next };
     lineStart = next;
     index = next - 1;
   }
+  if (cursor) { cursor.offset = length; cursor.lineStart = lineStart; }
   return null;
 }
 
@@ -178,18 +397,26 @@ function hasTopLevelError(data: string): boolean {
   } catch { return false; }
 }
 
-function mappedUpstreamError(response: Response, upstream: ReturnType<typeof upstreamError>, status: number): Response {
+function mappedUpstreamError(response: Response, upstream: NativeErrorDetails, status: number, native?: NativeErrorContext): Response {
   const headers = new Headers(response.headers);
   headers.delete("content-length");
   headers.set("content-type", "application/json; charset=utf-8");
-  return Response.json({ error: {
-    message: upstream.message ?? (response.ok ? "upstream request failed" : response.statusText || "upstream request failed"),
-    type: upstream.type ?? "upstream_error",
-    code: upstream.code ?? status,
-  } }, { status, statusText: status === response.status ? response.statusText : "", headers });
+  const message = upstream.message ?? (response.ok ? "upstream request failed" : response.statusText || "upstream request failed");
+  const body = native ? nativeErrorEnvelope(native, status, {
+    ...upstream, message, requestId: upstream.requestId === undefined ? headers.get("request-id") ?? native.requestId : upstream.requestId,
+  }) : { error: { message, type: upstream.type ?? "upstream_error", code: upstream.code ?? status } };
+  return Response.json(body, { status, statusText: status === response.status ? response.statusText : "", headers });
 }
 
-function upstreamError(body: string): { message?: string; type?: string; code?: string | number } {
+function nativeJsonError(body: string, native: NativeErrorContext): boolean {
+  try {
+    const value = JSON.parse(body), error = value?.error;
+    if (!error || typeof error.message !== "string" || typeof error.type !== "string") return false;
+    return native.format === "anthropic" ? value.type === "error" && (typeof value.request_id === "string" || value.request_id === null) : Object.hasOwn(error, "param") && Object.hasOwn(error, "code");
+  } catch { return false; }
+}
+
+function upstreamError(body: string): NativeErrorDetails {
   let value: unknown;
   try {
     const eventData = firstSseData(body);
@@ -200,7 +427,9 @@ function upstreamError(body: string): { message?: string; type?: string; code?: 
   return {
     message: typeof error.message === "string" ? error.message : undefined,
     type: typeof error.type === "string" ? error.type : undefined,
-    code: typeof error.code === "string" || typeof error.code === "number" ? error.code : undefined,
+    code: typeof error.code === "string" || typeof error.code === "number" || error.code === null ? error.code : undefined,
+    param: error.param,
+    requestId: "request_id" in value && (typeof value.request_id === "string" || value.request_id === null) ? value.request_id : undefined,
   };
 }
 
@@ -223,18 +452,18 @@ function firstSseData(body: string): string | null {
   return dataLines.length > 0 ? dataLines.join("\n") : null;
 }
 
-async function readLimited(response: Response, limit: number): Promise<string> {
+async function readLimited(response: Response, limit: number, operation: HttpOperation): Promise<string> {
   if (!response.body) return "";
   const reader = response.body.getReader(), decoder = new TextDecoder();
   let size = 0, text = "";
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await operation.wait(reader.read());
       if (done) break;
       size += value.byteLength;
-      if (size > limit) throw new Error("usage payload exceeds inspection limit");
+      if (size > limit) return "";
       text += decoder.decode(value, { stream: true });
     }
     return text + decoder.decode();
-  } finally { if (size > limit) await reader.cancel(); }
+  } finally { void reader.cancel(operation.signal.reason).catch(() => undefined); reader.releaseLock(); }
 }

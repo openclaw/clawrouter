@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "study": "Complete-retirement verification on saved Copilot repair candidates",
+  "scope": "Retrospective diagnostic after inspecting failures from one previously exposed task. No new model calls, independent holdout, production gain or deployment.",
+  "provenance": {
+    "sourceCommit": "46c901408fdff02d920c16adfaf8d559ea23cd17",
+    "protocolSha256": "d8d609fea59f3feabc9972fc2454eca73f34e04b1edc8372423bea914ef5556f",
+    "resultSha256": "ae756b777665d23c753e6e04c699c51d69fc88725f38283bb6afa573887e2b61",
+    "parentResultSha256": "fc8c62ebb055ac846de1504e7f2daaadbf14a48cb04c85e5440c362518c2fcc6",
+    "parentTerminalAuditSha256": "fa9c53fb99826895b7d92a07af62f506661c2253e563df4fb69e0b60de0233f0",
+    "parentReport": "https://github.com/openclaw/clawrouter/pull/1302"
+  },
+  "method": {
+    "inputs": "Original broken baseline, original reference repair and every one of the six previously generated candidates. No candidates excluded. Same exact-lock cached runtime; no image downloads or new resource allocation.",
+    "checks": [
+      "Reserve catalog admission and consume its response.",
+      "Start catalog observation, hold original physical work, abort its transport and require an empty 409 response.",
+      "Frontend-first ordering: consume a successful retirement acknowledgment while physical work is held; require admission capacity to remain charged and close not to run.",
+      "Physical-first ordering: release original work, wait for its completion and an event-loop turn; require capacity to remain charged and close not to run until retirement acknowledgment.",
+      "After both conditions, require retained work to finish, exactly one close and zero charged capacity."
+    ],
+    "bounds": "Each awaited transition has a one-second limit, with cleanup that releases physical work and attempts retirement. Each row runs in a separate protected sandbox. Two test assertions must complete with no skipped tests.",
+    "change": "Adds lifecycle acceptance coverage to the previously narrow empty-response check. Does not change production code or retroactively reclassify the parent experiment.",
+    "limits": "Probe was designed after inspecting the failed candidates and original regressions. Results measure discrimination on these saved artifacts, not unseen accuracy. A one-second local test bound is not a production latency SLO. One event-loop turn is a bounded observation, not a proof against arbitrarily delayed premature release. Private protocols/raw proof are retained by hash; this report is not a standalone reproduction bundle."
+  },
+  "rows": [
+    {
+      "id": "reference",
+      "reference": true,
+      "valid": true,
+      "passed": true,
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    {
+      "id": "baseline",
+      "reference": false,
+      "valid": true,
+      "passed": false,
+      "tests": 2,
+      "failures": 2,
+      "skipped": 0,
+      "exitCode": 1
+    },
+    {
+      "id": "history-fe532e69e69d/repeat-0/strong",
+      "reference": false,
+      "index": 0,
+      "valid": true,
+      "passed": false,
+      "tests": 2,
+      "failures": 2,
+      "skipped": 0,
+      "exitCode": 1
+    },
+    {
+      "id": "history-fe532e69e69d/repeat-0/cascade",
+      "reference": false,
+      "index": 1,
+      "valid": true,
+      "passed": true,
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    {
+      "id": "history-fe532e69e69d/repeat-1/cascade",
+      "reference": false,
+      "index": 2,
+      "valid": true,
+      "passed": true,
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    {
+      "id": "history-fe532e69e69d/repeat-1/strong",
+      "reference": false,
+      "index": 3,
+      "valid": true,
+      "passed": true,
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    {
+      "id": "history-fe532e69e69d/repeat-2/strong",
+      "reference": false,
+      "index": 4,
+      "valid": true,
+      "passed": false,
+      "tests": 2,
+      "failures": 2,
+      "skipped": 0,
+      "exitCode": 1
+    },
+    {
+      "id": "history-fe532e69e69d/repeat-2/cascade",
+      "reference": false,
+      "index": 5,
+      "valid": true,
+      "passed": true,
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0,
+      "exitCode": 0
+    }
+  ],
+  "comparison": {
+    "oldPublicAccepted": 6,
+    "oldPublicAcceptedButFullFailed": 2,
+    "newProbeAccepted": 4,
+    "newProbeAcceptedButPriorFullFailed": 0,
+    "newProbeRejectedPriorFullPasses": 0,
+    "referencePassed": true,
+    "baselinePassed": false,
+    "interpretation": "On the six saved candidates, the complete-retirement probe rejects both known false accepts and keeps all four full-suite passes. This is retrospective agreement, not an estimate of general false-accept rate."
+  },
+  "accounting": {
+    "newModelCalls": 0,
+    "newCostMicros": 0,
+    "cumulativeCostMicros": 312456087,
+    "remainingMicros": 87543913,
+    "campaignCapMicros": 400000000
+  },
+  "decision": {
+    "accepted": "Use both retirement orderings when constructing future cancellation verification; freeze a new protocol before any new inference. Keep the original benchmark receipts unchanged.",
+    "qualifiedProductionGain": false,
+    "deployment": "None. No routing default or production configuration changed.",
+    "nextEvidence": "Apply the frozen contract to independently selected unseen cancellation tasks before claiming general reliability or savings."
+  }
+}

@@ -1,0 +1,277 @@
+import { perRequestAuthority } from "./typescript-setup.mjs";
+perRequestAuthority();
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import test from "node:test";
+import { createGrantAuthority } from "./grant-authority-fixture.mjs";
+import { continuationAuthority } from "./continuation-authority.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
+
+const { default: worker } = await import("../index.ts");
+const { sha256Hex } = await import("../utils.ts");
+const { authorityCall } = await import("../authority.ts");
+const { snapshot } = await import("../provider-catalog.ts");
+const networkFetch = globalThis.fetch;
+const sol = "openai/gpt-6.1-sol";
+
+async function fixture(t) {
+  const policy = { enabled: true, generation: "v1", providers: ["openai"], models: null, tenantId: "fixture", monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: false,
+    serviceTiers: { allowed: ["default", "priority", "flex", "ultrafast"] } };
+  const limited = { ...policy, models: [sol], serviceTiers: { allowed: ["priority"], models: { [sol]: ["default", "priority"] } } };
+  const secrets = { full: "synthetic-full-catalog", limited: "synthetic-limited-catalog" };
+  const credentials = await Promise.all(Object.entries(secrets).map(async ([credentialId, secret]) => ({ credentialId, credential: { enabled: true, secretSha256: await sha256Hex(secret), policyId: credentialId, policyGeneration: "v1", ...(credentialId === "limited" ? { serviceTiers: ["default", "ultrafast"] } : {}) } })));
+  const records = new Map(), calls = [], pending = [], events = [];
+  const env = { OPENAI_API_KEY: "synthetic-upstream-only", POLICY_KV: {
+    async get(key, type) { const value = Array.isArray(key) ? new Map(key.map(k => [k, records.get(k) ?? null])) : records.get(key) ?? null;
+      if (!Array.isArray(key) && type === "stream" && value !== null) return accessBytesResponse(typeof value === "string" ? value : JSON.stringify(value), "").body;
+      return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
+    async put(key, value) { records.set(key, JSON.parse(value)); },
+    async list() { return { keys: [], list_complete: true }; },
+  }, USAGE_QUEUE: { send: async event => events.push(event) }, BUDGET_LEDGER: { get() { throw new Error("unmetered catalog must not reserve or observe budgets"); } } };
+  const authority = createGrantAuthority(undefined, env);
+  const continuations = continuationAuthority(t, env);
+  env.ACCESS_CONTROL = { idFromName: name => name, get: name => name.startsWith("http-continuations:")
+    ? continuations.get(name)
+    : { fetch(url, init) { calls.push(new URL(url).pathname); return authority.fetch(url, init); } } };
+  const call = (path, body) => authorityCall(env, path, body);
+  await call("/policies/initialize-all", [{ policyId: "full", policy }, { policyId: "limited", policy: limited }]);
+  await call("/credentials/initialize-all", credentials);
+  await call("/connections/initialize-all", [{ providerId: "openai", enabled: true }]);
+  calls.length = 0;
+  const upstream = t.mock.method(globalThis, "fetch", () => { throw new Error("catalog must not probe upstream or refresh credentials"); });
+  const server = createServer(async (incoming, outgoing) => {
+    try {
+      const chunks = [];
+      for await (const chunk of incoming) chunks.push(chunk);
+      const method = incoming.method;
+      const response = await worker.fetch(new Request("https://router.example" + incoming.url, { method, headers: incoming.headers, ...(["GET", "HEAD"].includes(method) ? {} : { body: Buffer.concat(chunks) }) }), env, { waitUntil: promise => pending.push(promise) });
+      const bytes = Buffer.from(await response.arrayBuffer());
+      outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+      outgoing.end(bytes);
+    } catch (error) { outgoing.writeHead(500); outgoing.end(String(error)); }
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await Promise.all(pending); });
+  const get = (key = "full", path = "/v1/catalog") => networkFetch("http://127.0.0.1:" + server.address().port + path, { headers: key ? { authorization: "Bearer clawrouter-live-" + key + "-" + (secrets[key] ?? "incorrect") } : {} });
+  const post = (key, path, body) => networkFetch("http://127.0.0.1:" + server.address().port + path, { method: "POST", headers: { authorization: "Bearer clawrouter-live-" + key + "-" + secrets[key], "content-type": "application/json" }, body: JSON.stringify(body) });
+  return { env, records, policy, limited, credentials, authority, call, calls, get, post, upstream, events, pending };
+}
+
+async function catalog(f, key = "full") {
+  const response = await f.get(key);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  const body = await response.json();
+  assert.equal(body.scope.credentialId, key);
+  return body.providers.find(provider => provider.id === "openai");
+}
+
+// This is synthetic Worker protocol evidence, not a live-provider or OpenClaw
+// transport certification. Follow the same scoped catalog a client consumes.
+for (const outcome of ["completed", "failed", "rejected"]) test(`catalog-selected Responses stream reports ${outcome} usage under its caller`, async t => {
+  const f = await fixture(t), provider = await catalog(f, "limited");
+  const model = provider.models.find(row => row.id === sol);
+  const route = provider.routes.find(row => row.endpoint === "responses");
+  assert.ok(model && route);
+  assert.equal(route.requestFormat, "openai.responses");
+  assert.ok(route.methods.includes("POST"));
+  assert.equal(model.requestParameters.responses.toolCalling, "supported");
+  assert.deepEqual(model.nativeCapabilities.endpoints.responses.input, ["text", "image"]);
+  const path = provider.nativeBaseUrl + route.path;
+  const history = [
+    { type: "reasoning", id: "rs_fixture", encrypted_content: "synthetic-reasoning" },
+    { type: "function_call", call_id: "call_fixture", name: "lookup", arguments: "{}" },
+    { type: "function_call_output", call_id: "call_fixture", output: "synthetic-result" },
+  ];
+  const tools = [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }];
+  const output = [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "synthetic-output" }] }];
+  const terminal = outcome === "rejected" ? { type: "error", error: { code: "server_error", message: "synthetic-rejection" } } : { type: `response.${outcome}`, response: {
+    id: "resp_fixture", model: model.upstream, status: outcome, service_tier: "default",
+    ...(outcome === "completed" ? { output, usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } }
+      : { error: { code: "server_error", message: "synthetic-failure" } }),
+  } };
+  const wire = `event: ${terminal.type}\ndata: ${JSON.stringify(terminal)}\n\n`;
+  f.upstream.mock.mockImplementation(async (url, init) => {
+    assert.equal(String(url), "https://api.openai.com/v1/responses");
+    assert.equal(new Headers(init.headers).get("authorization"), "Bearer synthetic-upstream-only");
+    const body = JSON.parse(init.body);
+    assert.equal(body.model, model.upstream);
+    assert.equal(body.stream, true);
+    assert.deepEqual(body.input, history);
+    assert.deepEqual(body.tools, tools);
+    assert.deepEqual(body.reasoning, { effort: "high" });
+    const bytes = new TextEncoder().encode(wire);
+    let offset = 0;
+    return new Response(new ReadableStream({ pull(controller) {
+      if (offset === bytes.length) { controller.close(); return; }
+      const end = Math.min(offset + 7, bytes.length);
+      controller.enqueue(bytes.slice(offset, end)); offset = end;
+    } }), { headers: { "content-type": "text/event-stream", "x-request-id": "upstream_fixture" } });
+  });
+  const response = await f.post("limited", path, { model: model.upstream, input: history, tools, reasoning: { effort: "high" }, stream: true, service_tier: "default", max_output_tokens: 32 });
+  const received = await response.text();
+  assert.equal(response.status, 200, received);
+  assert.equal(received, wire, "native SSE bytes and terminal error stay intact");
+  await Promise.all(f.pending);
+  assert.equal(f.upstream.mock.callCount(), 1);
+  const events = f.events.filter(event => event.type === "clawrouter.usage.v1");
+  assert.equal(events.length, 1, "one stream produces exactly one usage event");
+  const [event] = events;
+  assert.equal(event.credential_id, "limited");
+  assert.equal(event.policy_id, "limited");
+  assert.equal(event.provider, "openai");
+  assert.equal(event.model, model.id);
+  assert.equal(event.capability, "llm.responses");
+  assert.equal(event.request_id, response.headers.get("x-clawrouter-request-id"));
+  assert.equal(event.status, outcome === "completed" ? "success" : "provider_error", "HTTP 200 alone never proves success");
+  if (outcome === "completed") {
+    assert.equal(event.input_tokens, 100);
+    assert.equal(event.output_tokens, 20);
+    assert.equal(event.total_tokens, 120);
+    assert.equal(event.cost_basis, "manifest_pricing");
+    assert.equal(event.actual_cost_micros, 400, "100 input and 20 output tokens at the advertised Standard rates");
+  } else if (outcome === "rejected") {
+    assert.equal(event.actual_cost_micros, 0, "pre-output terminal errors are nonbillable");
+  } else {
+    assert.equal(event.cost_basis, "manifest_reservation");
+    assert.ok(event.actual_cost_micros > 0, "failed generation without usage cannot prove no billable work");
+  }
+  assert.doesNotMatch(JSON.stringify(event), /synthetic-reasoning|synthetic-result|synthetic-output|synthetic-upstream-only/);
+  await f.call("/credentials/mutate", { operation: "revoke", scope: "admin", credentialId: "limited", actor: { auth: "admin_token", role: "admin", email: "admin@example.com" } });
+  assert.equal((await f.get("limited")).status, 403);
+  const denied = await f.post("limited", path, { model: model.upstream, input: "revoked", stream: true });
+  assert.equal(denied.status, 403);
+  await denied.arrayBuffer();
+  assert.equal(f.upstream.mock.callCount(), 1, "a previously discovered route cannot bypass revoked credentials");
+});
+
+test("public same-key HTTP catalog carries authoritative input and context without guessing unknown models", async t => {
+  const f = await fixture(t), provider = await catalog(f);
+  const model = provider.models.find(model => model.id === sol);
+  assert.equal(model.nativeCapabilities.version, "clawrouter.native-capabilities.v1");
+  for (const endpoint of ["responses", "chat_completions"]) {
+    const facts = model.nativeCapabilities.endpoints[endpoint];
+    assert.deepEqual(facts.input, ["text", "image"]);
+    assert.equal(facts.contextWindow, 1050000);
+    assert.equal(facts.contextTokens, 272000);
+    assert.equal(facts.maxOutputTokens, 128000);
+    assert.equal(facts.inference.chat, true);
+    assert.equal(facts.inference.decision, undefined);
+  }
+  assert.deepEqual(provider.models.find(model => model.id === "openai/tts-1").nativeCapabilities.endpoints.speech.input, ["text"]);
+  assert.equal(provider.models.find(model => model.id === "openai/gpt-4.1-mini").nativeCapabilities, undefined, "undeclared facts stay unknown even for recognizable names");
+  assert.equal(model.requestParameters.responses.toolCalling, "supported");
+  assert.equal(model.requestParameters.chat_completions.toolCalling, "unsupported");
+  assert.equal(model.pricing.maxInputTokens, 922000, "native context must not rewrite the budget envelope");
+  const offers = provider.offers.filter(offer => offer.modelId === sol);
+  assert.ok(offers.filter(offer => offer.endpoint !== "standalone_search").every(offer => offer.eligible));
+  const search = offers.filter(offer => offer.endpoint === "standalone_search");
+  assert.ok(search.length > 0);
+  assert.ok(search.every(offer => !offer.eligible && offer.reasonCode === "pricing_required"), "unmetered policy still needs an explicit standalone search tariff");
+  assert.ok(f.calls.every(path => path === "/admission/resolve"), "discovery performs no authority mutations");
+});
+
+test("catalog tier permission is offer/key scoped, preserves model support, and never survives revoked auth", async t => {
+  const f = await fixture(t);
+  for (const key of ["full", "limited", "full"]) {
+    const provider = await catalog(f, key), model = provider.models.find(model => model.id === sol);
+    assert.deepEqual(model.nativeCapabilities.endpoints.responses.supportedServiceTiers, ["default", "priority", "flex", "ultrafast"]);
+    const offers = provider.offers.filter(offer => offer.modelId === sol && offer.endpoint === "responses");
+    assert.ok(offers.length > 0);
+    for (const offer of offers) assert.deepEqual(offer.permittedServiceTiers, key === "full" ? ["default", "priority", "flex", "ultrafast"] : ["default"]);
+    if (key === "limited") assert.deepEqual(provider.models.map(model => model.id), [sol]);
+    assert.ok(provider.offers.filter(offer => offer.modelId === null).every(offer => offer.permittedServiceTiers === undefined), "unknown passthrough is not declared tier capable");
+  }
+  assert.equal((await f.get(null)).status, 401);
+  assert.equal((await f.get("missing")).status, 401);
+  const revoked = await f.call("/credentials/mutate", { operation: "revoke", scope: "admin", credentialId: "full", actor: { auth: "admin_token", role: "admin", email: "admin@example.com" } });
+  assert.equal(revoked.outcome, "updated");
+  assert.equal((await f.get("full")).status, 403);
+});
+
+test("subscription-only endpoint scope does not leak native or request-parameter facts from chat", async t => {
+  const f = await fixture(t);
+  delete f.env.OPENAI_API_KEY;
+  f.records.set("oauth/full/subscription", { provider: "openai", kind: "subscription", enabled: true, accessToken: "synthetic-subscription", accountId: "synthetic-account" });
+  f.authority.seedLegacy("oauth/full/subscription", "openai");
+  const provider = await catalog(f), model = provider.models.find(model => model.id === sol);
+  assert.deepEqual(provider.routes.map(route => route.endpoint), ["responses"]);
+  assert.deepEqual(Object.keys(model.nativeCapabilities.endpoints), ["responses"]);
+  assert.deepEqual(Object.keys(model.requestParameters), ["responses"]);
+  assert.equal(model.pricing.defaultMaxOutputTokens, 128000);
+  const denied = provider.offers.filter(offer => offer.endpoint !== "responses" && offer.modelId === sol);
+  assert.ok(denied.length > 0, "denied endpoint offers remain inspectable");
+  assert.ok(denied.every(offer => !offer.eligible));
+  const chat = denied.filter(offer => offer.endpoint === "chat_completions");
+  assert.ok(chat.length > 0);
+  assert.ok(chat.every(offer => offer.permittedServiceTiers?.length === 0), "known blocked chat tier support stays empty");
+  const compact = denied.filter(offer => offer.endpoint === "responses_compact");
+  assert.ok(compact.length > 0, "subscription grants cannot use public API compaction");
+  assert.ok(compact.every(offer => offer.permittedServiceTiers === undefined && offer.hostedToolAdmission === undefined), "ordinary Responses facts never become compaction evidence");
+  assert.equal(model.nativeCapabilities.endpoints.responses_compact, undefined, "undeclared compact native facts remain unknown");
+  assert.deepEqual(snapshot.providers.find(provider => provider.id === "openai").models.find(model => model.id === sol).nativeCapabilities.endpoints.chat_completions.input, ["text", "image"], "request projection never mutates the shared compiled source");
+});
+
+
+test("catalog support does not grant a disallowed tier or model at the public dispatch boundary", async t => {
+  const f = await fixture(t), view = await catalog(f, "limited");
+  assert.deepEqual(view.models[0].nativeCapabilities.endpoints.responses.supportedServiceTiers, ["default", "priority", "flex", "ultrafast"]);
+  const deniedTier = await f.post("limited", "/v1/responses", { model: sol, input: "synthetic fixture", service_tier: "priority" });
+  assert.equal(deniedTier.status, 400);
+  assert.equal((await deniedTier.json()).error.code, "service_tier_not_allowed");
+  const deniedModel = await f.post("limited", "/v1/responses", { model: "openai/gpt-6-astra", input: "synthetic fixture" });
+  assert.equal(deniedModel.status, 403);
+  assert.equal((await deniedModel.json()).error.code, "model_not_allowed");
+  assert.equal(f.upstream.mock.callCount(), 0, "unsupported request fails before provider I/O");
+  const sent = [];
+  f.upstream.mock.mockImplementation(async (url, init) => {
+    sent.push({ url: String(url), authorization: init.headers.get("authorization"), body: JSON.parse(init.body) });
+    return Response.json({ output: [{ type: "message", content: [{ type: "output_text", text: "synthetic output" }] }], usage: { input_tokens: 1, output_tokens: 1 } });
+  });
+  const accepted = await f.post("limited", "/v1/responses", { model: sol, input: "synthetic fixture", service_tier: "default", reasoning: { effort: "high" } });
+  assert.equal(accepted.status, 200, await accepted.clone().text());
+  assert.equal((await accepted.json()).output[0].content[0].text, "synthetic output");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, "https://api.openai.com/v1/responses");
+  assert.equal(sent[0].authorization, "Bearer synthetic-upstream-only", "client proxy key never becomes an upstream credential");
+  assert.equal(sent[0].body.model, "gpt-6.1-sol");
+  assert.equal(sent[0].body.service_tier, "default");
+  assert.equal(sent[0].body.reasoning.effort, "high");
+});
+
+test("Terra is published only to allowed keys and dispatches its exact Responses model", async t => {
+  const f = await fixture(t), provider = await catalog(f), terra = "openai/gpt-6.1-terra";
+  const model = provider.models.find(model => model.id === terra);
+  assert.ok(model, "an allowed key must discover Terra in the actual HTTP catalog");
+  assert.deepEqual(model.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
+  assert.equal(model.requestParameters.responses.toolCalling, "supported");
+  assert.equal(model.requestParameters.chat_completions.toolCalling, "unsupported");
+  const offers = provider.offers.filter(offer => offer.modelId === terra && offer.endpoint === "responses");
+  assert.ok(offers.length > 0);
+  for (const offer of offers) {
+    assert.equal(offer.eligible, true);
+    assert.deepEqual(offer.permittedServiceTiers, ["default", "priority", "flex"]);
+  }
+  const limited = await catalog(f, "limited");
+  assert.ok(limited.models.every(model => model.id !== terra), "adding a model never expands a key's allowlist");
+  const denied = await f.post("limited", "/v1/responses", { model: terra, input: "synthetic fixture" });
+  assert.equal(denied.status, 403);
+  assert.equal((await denied.json()).error.code, "model_not_allowed");
+  assert.equal(f.upstream.mock.callCount(), 0, "denial and catalog discovery make no provider request");
+  const sent = [];
+  f.upstream.mock.mockImplementation(async (url, init) => {
+    sent.push({ url: String(url), body: JSON.parse(init.body) });
+    return Response.json({ output: [], usage: { input_tokens: 1, output_tokens: 1 } });
+  });
+  const accepted = await f.post("full", "/v1/responses", { model: terra, input: "synthetic fixture", reasoning: { effort: "none" }, service_tier: "fast", tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }] });
+  assert.equal(accepted.status, 200, await accepted.clone().text());
+  await accepted.arrayBuffer();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, "https://api.openai.com/v1/responses");
+  assert.equal(sent[0].body.model, "gpt-6.1-terra");
+  assert.equal(sent[0].body.reasoning.effort, "none");
+  assert.equal(sent[0].body.service_tier, "fast");
+  assert.equal(sent[0].body.tools[0].name, "lookup");
+});

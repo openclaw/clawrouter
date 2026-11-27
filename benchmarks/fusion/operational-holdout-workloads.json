@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "operational-credential-aliases",
+      "split": "development",
+      "base": "4458c6b0ef3962ab1d60ae3043ce2c0a2950e7d6",
+      "oracle": "4cbafc25c9e35b9a56994b366cb0da1b1fb838ce",
+      "editPaths": [
+        "worker/provider-auth.ts",
+        "worker/providers.ts"
+      ],
+      "visibleTests": [
+        "worker/test/fal-credential-runtime.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/hosted-provider-contracts.test.mjs"
+      ],
+      "instruction": "Recognize ABLIT_KEY and ABLITERATION_API_KEY as alternatives for the qualified Abliteration bearer credential. Canonical ABLIT_KEY takes precedence regardless of config-key order; readiness must agree with dispatch. Preserve grant authority, reject malformed selected credentials without fallback or secret echo, and keep other providers and auth schemes unchanged.",
+      "reproducer": "import './worker/test/typescript-setup.mjs';\nimport assert from 'node:assert/strict';\nconst {snapshot,configuredUpstream,providerReadinessForState}=await import('./worker/providers.ts');\nconst provider=structuredClone(snapshot.providers.find(p=>p.id==='abliteration'));\nprovider.config_keys=['ABLITERATION_API_KEY','ABLIT_KEY']; provider.optional_config_keys=[];\nconst env={ABLIT_KEY:'synthetic-canonical',ABLITERATION_API_KEY:'synthetic-legacy'};\nlet upstream; assert.doesNotThrow(()=>{upstream=configuredUpstream(provider,null,env)});\nassert.equal(upstream.headers.get('authorization'),'Bearer synthetic-canonical');\nassert.equal(providerReadinessForState(provider,{ABLIT_KEY:'synthetic-canonical'},[],{providerId:'abliteration',enabled:true}).configPresent,true);\n"
+    },
+    {
+      "id": "operational-catalog-health",
+      "split": "development",
+      "base": "6f6ec27fba56ffadcf294dfa41e81995960a02d9",
+      "oracle": "cc9d8e6032fe69321804d13daef53bd2ef7803a6",
+      "editPaths": [
+        "worker/discovery.ts",
+        "worker/providers.ts"
+      ],
+      "visibleTests": [
+        "worker/test/provider-connections.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/discovery.test.mjs"
+      ],
+      "instruction": "Eliminate serial catalog health KV reads. Read only known bundled provider health keys, in bulk chunks of at most 100, with no KV listing. Missing keys stay absent. After authentication, overlap independent request-local inventory, saved connections, health and Fusion configuration work while preserving fresh authorization, revocation, policy/grant order, budgets, scoped no-store results and the existing public response.",
+      "reproducer": "import './worker/test/typescript-setup.mjs';\nimport assert from 'node:assert/strict';\nconst {listHealth,snapshot}=await import('./worker/providers.ts');\nconst id=snapshot.providers[0].id, calls=[];\nconst result=await listHealth({POLICY_KV:{async list(){return {keys:[],list_complete:true}},async get(keys){calls.push(keys);return new Map(keys.map(k=>[k,k===`health/providers/${id}`?{providerId:id,status:'verified'}:null]))}}});\nassert.equal(result.get(id)?.status,'verified');\nassert.ok(calls.every(keys=>Array.isArray(keys)&&keys.length<=100));\nassert.equal(calls.flat().length,snapshot.providers.length);\n"
+    },
+    {
+      "id": "operational-cache-publication",
+      "split": "development",
+      "base": "7814bd1207a6576170a37b15ce491eebb9f9178b",
+      "oracle": "e5cf48b49f87cd545173409522ea9a24342b5e10",
+      "editPaths": [
+        "worker/hot-cache.ts",
+        "worker/admission-cache.ts",
+        "worker/credential-cache.ts"
+      ],
+      "visibleTests": [
+        "worker/test/hot-path-cache.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/hot-path-cache.test.mjs"
+      ],
+      "instruction": "Fence invalidated in-flight cache publications. Work begun before clear, key/prefix/value invalidation, or explicit replacement must not overwrite current cache state or retire a newer publication. Keep live publication bookkeeping bounded, permit unrelated progress, fence pending credential versions and cross-colo adoption timestamps, and preserve coalescing and current-owner publication. Preserve the existing HotCache API. Export fenceSharedHotCache(), sharedHotCacheFence(), and resetSharedHotCacheFence() for the per-isolate shared-cache adoption fence and its test reset. Existing callers must still coalesce requests and retain pending accounting/selection writes.",
+      "reproducer": "import './worker/test/typescript-setup.mjs';\nimport assert from 'node:assert/strict';\nconst {HotCache,hotCacheConfig}=await import('./worker/hot-cache.ts');\nconst cache=new HotCache(4),config=hotCacheConfig({}),held=Promise.withResolvers();\nconst old=cache.load('key',config,async()=>{await held.promise;return {value:'old',cacheable:true}});\ncache.clear(); cache.set('key','new',config);\nheld.resolve(); await old;\nassert.equal(cache.peek('key',config)?.value,'new');\n"
+    }
+  ]
+}

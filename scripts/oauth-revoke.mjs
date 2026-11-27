@@ -10,5 +10,5 @@ for (const name of ["kind", "provider", "label"]) {
   if (typeof args[name] !== "string" || !args[name].trim()) throw new Error(`--${name} requires a value`);
   metadata[name] = args[name].trim();
 }
-await adminRequest(`${target.path}/revoke`, { method: "POST", body: metadata, env: target.env });
+await adminRequest(`${target.path}/revoke`, { method: "POST", body: metadata, env: target.env, responseMode: "ack" });
 console.log(`revoked authoritative upstream grant ${target.key}; tombstone contains no secrets`);

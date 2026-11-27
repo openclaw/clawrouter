@@ -9,6 +9,7 @@ const env = localAdminEnvironment(args);
 const kid = required(args.kid, "--kid");
 await adminRequest(`/v1/admin/keys/${encodeURIComponent(kid)}/revoke`, {
   method: "POST",
+  responseMode: "ack",
   env,
 });
 console.log(`revoked authoritative proxy credential ${kid}`);

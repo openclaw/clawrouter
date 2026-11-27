@@ -1,3 +1,61 @@
+import type { GrantAccount, GrantExtraUsage } from "./provider-observations.ts";
+export type { GrantAccount, GrantExtraUsage } from "./provider-observations.ts";
+import type { ProviderModelDefinition } from "./provider-model.ts";
+import type { ModelAvailability } from "./model-availability";
+export type { ModelAvailability } from "./model-availability";
+import type { ProviderOfferReference, ProviderProductSummary } from "./provider-products.ts";
+
+// Preserve the client import surface while model facts have their own owner.
+export type { TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPriceModifiers,
+  TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing } from "./provider-model.ts";
+export interface ClientCatalogModel extends ProviderModelDefinition {}
+export interface CatalogOffer {
+  // Compatible declarations under this offer's policy. No selected account or entitlement promise.
+  productOffers?: ProviderOfferReference[];
+  // Configured server origin, not publication permission or automatic selection.
+  publishedInputOrigin?: { version: "clawrouter.published-input.v1"; origin: string };
+  // Encoding declaration only; runtime eligibility and authority remain separate.
+  inputProfile?: "clawrouter.pixverse-image-input.v1";
+  endpoint: string;
+  modelId: string | null;
+  transport: "http" | "websocket";
+  routeKind: "unified" | "native" | "manifest" | "playground";
+  route: string;
+  policyId: string;
+  policyGeneration: string;
+  eligible: boolean;
+  affordability: "exact-covered" | "exact-blocked" | "request-dependent";
+  reasonCode?: string;
+  // Declared support intersected with this selected identity’s tier allowlist.
+  // Not a tier-specific affordability promise or authorization for dispatch.
+  permittedServiceTiers?: string[];
+  requestPricing?: import("./request-pricing").RequestPricing;
+  // Fresh-request completeness under this key; advisory, not a grant or a
+  // reservation. Dispatch revalidates the actual request and current authority.
+  hostedToolAdmission?: { version: "clawrouter.hosted-tool-admission.v1"; web_search: "admitted" | "pricing_required" };
+}
+export interface ClientCatalogProvider {
+  id: string;
+  displayName: string;
+  allowed: boolean;
+  executable: boolean;
+  openaiCompatible: boolean;
+  nativeBaseUrl: string | null;
+  policies: string[];
+  readiness: ProviderReadiness;
+  connectionTypes: string[];
+  products?: ProviderProductSummary[];
+  routes: Array<{ inputProfile?: "clawrouter.pixverse-image-input.v1"; endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string; streaming: string | null; websocket?: "openai.responses" | "openai.realtime"; requestPricing?: import("./request-pricing").RequestPricing }>;
+  models: ClientCatalogModel[];
+  offers: CatalogOffer[];
+}
+export interface ClientCatalog {
+  version: "clawrouter.client-catalog.v1";
+  observedAt: string;
+  scope: { authType: "proxy_key" | "access"; credentialId: string | null; principalId: string | null };
+  providers: ClientCatalogProvider[];
+}
+
 export interface ProviderRow {
   id: string;
   display_name: string;
@@ -15,19 +73,28 @@ export interface ProviderRow {
 export interface ProviderResponse { providers: ProviderRow[] }
 
 export interface RouteCatalog {
-  openaiCompatible: Array<{ provider: string; models: Array<{ id: string; capabilities: string[]; endpoints: string[] }>; modelPrefixes?: string[]; endpoints: string[] }>;
-  manifestProxy: Array<{ provider: string; endpoint: string; route: string; methods: string[]; pathParams?: string[]; requestFormat?: string; responseFormat?: string; sampleModel?: string | null; models?: Array<{ id: string; capabilities: string[] }>; streaming?: boolean | null }>;
+  openaiCompatible: Array<{ provider: string; models: Array<{ id: string; availability?: ModelAvailability; capabilities: string[]; endpoints: string[] }>; modelPrefixes?: string[]; endpoints: string[] }>;
+  manifestProxy: Array<{ inputProfile?: "clawrouter.pixverse-image-input.v1"; provider: string; endpoint: string; route: string; methods: string[]; pathParams?: string[]; requestFormat?: string | null; responseFormat?: string | null; sampleModel?: string | null; models?: Array<{ id: string; availability?: ModelAvailability; capabilities: string[] }>; streaming?: boolean | null }>;
 }
 
 export interface AccessPolicy {
   policyId: string;
   enabled: boolean;
   providers: string[];
+  models?: string[] | null;
+  poolStatus?: "hidden" | "visible";
   tenantId?: string | null;
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;
+  dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null;
+  limitHint?: string | null;
+  serviceTiers?: import("./service-tiers").PolicyServiceTiers | null;
   requestCostMicros?: number | null;
+  requestCostsMicros?: Record<string, number> | null;
   budgetScope?: "policy" | "principal";
+  budgetMode?: "reserve" | "soft";
+  upstreamRetention?: import("./upstream-retention").UpstreamRetentionPolicy | null;
+  inputPublication?: import("./input-publication").InputPublicationPolicy | null;
   retainRequestContent: boolean;
   grantRouting: GrantRoutingPolicy;
 }
@@ -38,15 +105,20 @@ export interface GrantRoutingPolicy {
   strategy: GrantSelectionStrategy;
   stickiness: GrantStickiness;
   failover: boolean;
+  environmentFallback?: boolean;
+  includedQuotaReservePercent?: number;
   staleState: "allow" | "deny";
   staleAfterSeconds: number;
   switchAtUsedPercent: number;
   hysteresisPercent: number;
   eligibleGrants: Record<string, string[]>;
+  // Administrator-authorized subscription owners; keys retain their original scope.
+  sharedGrants?: Record<string, string[]>;
 }
 
 export interface ProxyCredential {
   credentialId: string;
+  name?: string | null;
   policyId: string;
   enabled: boolean;
   policyEnabled?: boolean;
@@ -54,6 +126,9 @@ export interface ProxyCredential {
   active?: boolean;
   principalId?: string | null;
   principalEnabled?: boolean;
+  expiresAt?: string | null;
+  serviceTiers?: string[] | null;
+  expired?: boolean;
 }
 
 export interface ProviderConnection {
@@ -67,6 +142,7 @@ export interface ProviderConnection {
 
 export interface FusionConfig {
   version: 1;
+  strategy?: "single" | "ensemble";
   enabled: boolean;
   modelId: "clawrouter/fusion";
   adviserModels: string[];
@@ -89,7 +165,7 @@ export interface FusionReadinessCall {
   status: string;
   reasons: string[];
   estimatedReservationMicros: number;
-  estimateBasis: "policy_fixed" | "manifest_pricing" | "flat_fallback";
+  estimateBasis: "policy_fixed" | "manifest_pricing" | "flat_fallback" | "unpriced_request";
 }
 
 export interface FusionReadiness {
@@ -110,7 +186,30 @@ export interface FusionReadiness {
   calls: FusionReadinessCall[];
 }
 
+// Owner-issued facts only. Provider descriptions and arbitrary error strings are never retained.
+export interface GrantRefreshDiagnosis {
+  lastSuccessfulRefreshAt: string | null;
+  failure: {
+    oauthError: string;
+    httpStatus: number | null;
+    failureClass: "permanent" | "retry_after" | "transient" | "ambiguous" | "provider_ok_persist_failed";
+    firstFailureAt: string;
+    lastFailureAt: string;
+    attemptCount: number;
+    nextRetryAt: string | null;
+    settlement?: {
+      stage: "result_store" | "ownership_claim" | "credential_read" | "credential_write" | "settlement_resume";
+      code: string;
+      correlationId: string;
+    };
+  } | null;
+}
+
 export interface UpstreamGrant {
+  minimaxSearchBinding?: import("./minimax-search-binding").MiniMaxSearchBinding | null;
+  minimaxVideoBinding?: import("./minimax-video-binding").MiniMaxVideoBinding | null;
+  minimaxImageBinding?: import("./minimax-image-binding").MiniMaxImageBinding | null;
+  nativeMediaBinding?: import("./native-media-binding").NativeMediaBinding | null;
   key: string;
   scope: "policies" | "tenants";
   scopeId: string;
@@ -124,6 +223,9 @@ export interface UpstreamGrant {
   label?: string | null;
   tokenType: string;
   expiresAt?: string | null;
+  refreshTokenExpiresAt?: string | null;
+  lastManualAuthorizationAt?: string | null;
+  refreshExpiryWarning?: import("./refresh-expiry").RefreshExpiryWarning;
   scopes: string[];
   accountId?: string | null;
   subscription?: { plan?: string | null; subject?: string | null } | null;
@@ -136,6 +238,8 @@ export interface UpstreamGrant {
   hasAccessToken: boolean;
   hasRefreshToken: boolean;
   credentialStatus?: "active" | "reauth_required";
+  refreshDiagnosis?: GrantRefreshDiagnosis | null;
+  credentialProvenance?: "clawrouter_oauth" | "imported" | null;
   refreshConfigured: boolean;
   usable: boolean;
   selectedCount: number;
@@ -145,7 +249,11 @@ export interface UpstreamGrant {
   cooldownUntil?: string | null;
   quotaSource?: "provider_response" | "provider_probe" | null;
   lastProviderSignal?: "quota" | "rate_limited" | "authentication" | null;
+  account?: GrantAccount | null;
+  extraUsage?: GrantExtraUsage | null;
   quotaWindows: Array<{
+    observedAt?: string;
+    models?: string[] | null;
     id: string;
     kind: "requests" | "tokens" | "input_tokens" | "output_tokens" | "credits" | "subscription" | "generic";
     unit: string | null;
@@ -182,7 +290,7 @@ export interface SessionResponse {
   subject?: string | null;
   tenantId?: string | null;
   groups?: string[];
-  entitlements?: { providers: ProviderAccess[] } | null;
+  entitlements?: { providers: ProviderAccess[]; catalog: ClientCatalog; policies?: SessionPolicyLimits[] } | null;
   entitlementsError?: string | null;
   contentRetention?: ContentRetention;
 }
@@ -213,8 +321,10 @@ export interface ProviderReadiness {
 }
 
 export interface ProviderAccess { provider: string; displayName: string; serviceKind: string; allowed: boolean; policies: string[]; readiness: ProviderReadiness }
-export interface EntitlementsResponse { session: SessionResponse; providers: ProviderAccess[]; contentRetention: ContentRetention }
-export interface AccessUser { email: string; role: AccessRole; tenantId: string; enabled: boolean; groups: string[]; contentRetentionDisabled: boolean }
+export interface SessionPolicyLimits { policyId: string; models?: string[] | null; serviceTiers?: import("./service-tiers").PolicyServiceTiers | null; limitHint?: string | null; dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; budget: BudgetStatus }
+export interface EntitlementsResponse { policies?: SessionPolicyLimits[]; session: SessionResponse; providers: ProviderAccess[]; catalog: ClientCatalog; contentRetention: ContentRetention }
+export interface BudgetOverride { dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; monthlyBudgetMicros?: number | null; updatedBy: string; updatedAt: string }
+export interface AccessUser { budgetOverrides?: Record<string, BudgetOverride>; email: string; role: AccessRole; tenantId: string; enabled: boolean; groups: string[]; contentRetentionDisabled: boolean }
 export interface PolicyBinding { policyId: string; principalType: "user" | "group"; principalId: string; enabled: boolean; priority: number }
 
 export interface AdminOverview {
@@ -243,12 +353,17 @@ export interface AdminTenantSummary {
 }
 
 export interface BudgetPrincipalStatus extends BudgetStatus { principal: string }
-export interface BudgetStatus { configured: boolean; ledger: string; windowKey?: string | null; limitMicros?: number | null; spentMicros?: number | null; remainingMicros?: number | null; breakdown?: BudgetPrincipalStatus[] }
-export interface AdminUsageRow { policyId?: string; kid: string; tenantId: string; enabled: boolean; providers: string[]; tokenRole?: string | null; monthlyBudgetMicros?: number | null; requestCostMicros?: number | null; budgetScope?: "policy" | "principal"; budget: BudgetStatus }
+export interface BudgetStatus { override?: boolean; resetsAt?: string; weekly?: BudgetStatus & { resetsAt: string }; daily?: BudgetStatus & { resetsAt: string }; configured: boolean; ledger: string; windowKey?: string | null; limitMicros?: number | null; spentMicros?: number | null; remainingMicros?: number | null; breakdown?: BudgetPrincipalStatus[] }
+export interface AdminUsageRow { dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; serviceTiers?: import("./service-tiers").PolicyServiceTiers | null; limitHint?: string | null; policyId?: string; kid: string; tenantId: string; enabled: boolean; providers: string[]; tokenRole?: string | null; monthlyBudgetMicros?: number | null; requestCostMicros?: number | null; requestCostsMicros?: Record<string, number> | null; budgetScope?: "policy" | "principal"; budget: BudgetStatus }
 export interface UsageSummary { requestCount: number; successCount: number; errorCount: number; inputTokens: number; outputTokens: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
 export interface ProviderUsageSummary { provider: string; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
 export interface UsageDailySummary { dayStartMs: number; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
 export interface UsageAuditEvent {
+  realtime_usage?: { unit_id: string; response_id: string | null; output_cap: number; text_input_tokens?: number; audio_input_tokens?: number; cached_text_input_tokens?: number; cached_audio_input_tokens?: number; text_output_tokens?: number; audio_output_tokens?: number };
+  hosted_tool_calls?: { web_search: number };
+  hosted_tool_calls_complete?: boolean;
+  hosted_tool_cost_micros?: number | null;
+  hosted_tool_pricing_ref?: string | null;
   id: string;
   type: string;
   occurred_at_ms: number;
@@ -275,6 +390,7 @@ export interface UsageAuditEvent {
   input_tokens?: number | null;
   output_tokens?: number | null;
   total_tokens?: number | null;
+  image_usage?: { text_input_tokens: number; image_input_tokens: number; image_output_tokens: number };
   cached_input_tokens?: number | null;
   cache_write_input_tokens?: number | null;
   reserved_cost_micros: number;
@@ -292,7 +408,12 @@ export interface UsageAuditEvent {
   content_retained?: boolean;
   content_ref?: string | null;
 }
-export interface UsageSnapshot { ledger: string; summary: UsageSummary; providers: ProviderUsageSummary[]; daily?: UsageDailySummary[]; events: UsageAuditEvent[] }
+/** Request, token, and spend totals overall, per provider, and per UTC day. */
+export interface UsageTotals { summary: UsageSummary; providers: ProviderUsageSummary[]; daily?: UsageDailySummary[] }
+/** Totals for one principal, or for one credential's events without a principal. */
+export interface PrincipalUsage { principalId: string | null; credentialId: string | null; summary: UsageSummary }
+/** Shared policy totals plus caller-owned `personal` totals (personal reads) or a `principals` breakdown (admin reads). */
+export interface UsageSnapshot extends UsageTotals { ledger: string; events: UsageAuditEvent[]; personal?: UsageTotals; principals?: PrincipalUsage[] }
 export interface RetainedRequestContent { requestId: string; occurredAtMs: number; expiresAtMs: number; principalId?: string | null; provider: string; capability: string; model?: string | null; body: unknown }
 
 export interface AdminBootstrapResponse {
@@ -307,4 +428,14 @@ export interface AdminBootstrapResponse {
   fusion: FusionConfig;
   overview: AdminOverview;
   tenants: AdminTenantSummary[];
+}
+
+export type GrantLane = "subscription" | "api_key" | "environment";
+export interface GrantUsageTotals { requests: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costMicros: number }
+export interface GrantUsageRow extends GrantUsageTotals { day: string; provider: string; grantKey: string | null; grantLane: GrantLane | null; model: string | null }
+export interface GrantUsageSnapshot {
+  days: number; since: number; until: number; retentionDays: number;
+  grants: Array<GrantUsageTotals & { provider: string; grantKey: string | null; grantLane: GrantLane | null }>;
+  lanes: Array<GrantUsageTotals & { provider: string; grantLane: GrantLane | null }>;
+  daily: GrantUsageRow[];
 }

@@ -1,0 +1,63 @@
+{
+  "qualification": {
+    "live": false,
+    "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+    "origin": "https://api.kie.ai",
+    "authorizationScheme": "Bearer",
+    "upstreamCostMicros": null
+  },
+  "text": {
+    "model": "wan/2-6-text-to-video",
+    "input": {
+      "prompt": "A paper fox sailing across a quiet pond",
+      "duration": "5",
+      "resolution": "1080p"
+    }
+  },
+  "image": {
+    "model": "wan/2-6-image-to-video",
+    "input": {
+      "prompt": "Animate the sail",
+      "duration": "15",
+      "resolution": "720p",
+      "image_urls": [
+        "https://assets.example/paper-sail.webp"
+      ]
+    }
+  },
+  "imageActivation": {
+    "enabled": false,
+    "requires": "original-caller/model/credential asset binding and image validation",
+    "uploadOrigin": "https://kieai.redpandaai.co",
+    "uploadPath": "/api/file-base64-upload"
+  },
+  "taskId": "synthetic_kie_wan_job",
+  "submission": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_wan_job"
+    }
+  },
+  "partial": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_wan_job",
+      "state": "generating",
+      "resultJson": "{\"resultUrls\":[\"https://assets.example/partial.mp4\"]}"
+    }
+  },
+  "completed": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_wan_job",
+      "model": "wan/2-6-text-to-video",
+      "state": "success",
+      "creditsConsumed": 1,
+      "resultJson": "{\"resultUrls\":[\"https://assets.example/sail.mp4\"]}"
+    }
+  },
+  "expiredObservation": {
+    "code": 404,
+    "msg": "Synthetic unavailable job"
+  }
+}

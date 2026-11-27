@@ -1,11 +1,19 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import { GrantCredentialObject } from "../grant-credentials.ts";
+import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 
-export function attachGrantCredentialNamespace(env) {
+export function attachGrantCredentialNamespace(env, { useExistingAuthority = false, kvValues } = {}) {
   const objects = new Map();
-  env.ACCESS_CONTROL ??= { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
-    if (new URL(url).pathname === "/grant-pools/sync") return new Response("updated");
-    throw new Error("unexpected authority call");
-  } }) };
+  if (!useExistingAuthority) {
+    const fallback = env.ACCESS_CONTROL;
+    env.grantAuthority = createGrantAuthority();
+    env.ACCESS_CONTROL = { idFromName: (name) => name, get: (id) => ({ fetch: (url, init) => {
+      const path = new URL(url).pathname;
+      return !fallback || ["attachment", "admit", "publish", "cancel-pending", "pending"].some((name) => path === `/grant-pools/${name}`)
+        ? env.grantAuthority.fetch(url, init) : fallback.get(id).fetch(url, init);
+    } }) };
+  }
+  env.POLICY_KV.list ??= async ({ prefix = "" } = {}) => ({ keys: [...(kvValues ?? objects).keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })), list_complete: true });
   env.GRANT_CREDENTIALS = {
     objects,
     idFromName(name) { return name; },
@@ -25,7 +33,11 @@ export function attachGrantCredentialNamespace(env) {
         };
         objects.set(id, { values, state, object: new GrantCredentialObject(state, env), alarm: () => alarm });
       }
-      return { fetch: (url, init) => objects.get(id).object.fetch(new Request(url, init)) };
+      return { fetch: async (url, init) => {
+        if (!new Headers(init?.headers).has("x-clawrouter-identity-admission")) return objects.get(id).object.fetch(new Request(url, init));
+        const response = await objects.get(id).object.fetch(new Request(url, { ...init, body: accessBytesResponse(init.body, "").body, duplex: "half" }));
+        return accessBytesResponse(await response.text(), "", { status: response.status, headers: response.headers });
+      } };
     },
   };
   return env;

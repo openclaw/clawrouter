@@ -1,8 +1,8 @@
 # Service Providers
 
 ClawRouter providers are single-file manifests. A maintainer should be able to add
-most API platforms by adding `providers/<id>.provider.yaml`, fixtures when useful,
-and no Worker code.
+most API platforms by adding `providers/<id>.provider.yaml` and no Worker code.
+Put request/response fixtures in executable tests; manifests do not declare them.
 
 Use a focused TypeScript adapter only when the platform cannot be represented as:
 
@@ -67,6 +67,21 @@ billing:
   `clawrouter-openai-*` to a provider without users setting `base_url`.
 - `routing.modelPrefixes` maps model names like `openai/gpt-4.1-mini` to the
   provider snapshot.
+- `models.entries[].displayName` is an optional, non-blank human-readable label,
+  such as `Claude Opus 5.5`. Declare it beside the model ID; the compiler carries
+  it into the snapshot and client catalog without changing routing, upstream IDs,
+  or pricing. Leave it absent for opaque or configured model placeholders. Clients
+  retain their existing fallback for unnamed models.
+- A model's `capabilities` map it to endpoints through the provider's capability
+  declarations. Native route catalogs include only models for that endpoint;
+  known models are rejected on incompatible endpoints before dispatch.
+- `endpoints.*.modelPassthrough: {}` permits caller-supplied model identifiers
+  for that operation. It does not advertise those models or attest upstream
+  availability. Opaque models inherit no reasoning, client metadata, or prices.
+  An optional `pricingRef` must name exactly one priced, endpoint-compatible
+  model in this provider. Use it only when that price applies to every opaque
+  model, as with the local provider's zero API charge. Requests without a model
+  do not acquire metadata or prices from the first catalog entry.
 - `auth.schemes` declares how ClawRouter injects the upstream credential.
 - Bearer credentials are required by default. Set `required: false` when an
   upstream offers keyless access and an API key only raises limits; ClawRouter
@@ -97,23 +112,115 @@ billing:
   per million tokens. Change `pricingRef` whenever rates or effective dates
   change. Declare `longContext` when a model changes rates above an input-token
   threshold; omit `pricing` when a model cannot be priced safely.
+- `pricing.settlementBasis: published_upper_bound` marks a card whose rates
+  bound the published price without identifying the upstream invoice rate.
+  Admission keeps `manifest_pricing`; complete measured token settlement uses
+  `manifest_rate_upper_bound` (shown as "Token-based estimate (rate upper bound)").
+  Missing usage retains `manifest_reservation`; fixed tariffs, known no-charge
+  outcomes, and incomplete-price handling keep their existing precedence.
+  DeepSeek uses published peak rates: Flash input/cache-hit/output prices are
+  $0.30/$0.006/$1.20 per million tokens; Pro prices are $1.32/$0.044/$3.96.
+  [Off-peak prices are half](https://api-docs.deepseek.com/quick_start/pricing/).
+  ClawRouter does not infer billing periods from request time, response `created`,
+  or returned model names, and does not calculate holidays. These are budget
+  estimates, not invoice reconciliation. Higher reservations can return HTTP 402
+  under unchanged limits; a valid native `max_tokens` can reduce the bound.
+  The [maintained model contract](https://api-docs.deepseek.com/updates/) retains
+  `deepseek-v4-pro` and serves `deepseek-flash`, `deepseek-v4-flash`, and
+  `deepseek-v4-flash-vision-exp` at Flash prices. Each spelling forwards unchanged.
+  These cards use `effectiveAt: 2026-09-23` and `peak-upper-bound-2026-09-23`
+  pricing references as the observed snapshot date, not an asserted upstream
+  price-change date.
+  Unknown model IDs inherit no manifest price: existing unmetered passthrough
+  keeps its one-micro-dollar fallback; either measured budget requires a price
+  or an explicit fixed tariff. No new API route is implied by these model entries.
+- `pricing.unpricedCosts: [request_fee]` retains known token rates while marking
+  additional mandatory request fees that ClawRouter does not yet meter. Such a
+  model requires a fixed policy tariff when either monthly budget is enforced.
+  With both budgets disabled, requests forward and report an unavailable price.
+  Request-specific hosted tools are assessed from the selected endpoint's wire
+  format; do not mark every model merely because it supports optional tools.
+- `pricing.unit: character` is a separate closed card for `audio.speech` with
+  `openai.audio_speech` JSON requests and `audio.binary` responses. It requires dated source
+  provenance, `inputMicrosPerMillionCharacters`, and `maxInputCharacters: 4096`;
+  token rates, token limits, and token defaults do not apply. The initial model
+  is `openai/tts-1`, at $15 per million input characters. Its binary endpoint
+  has no opaque model passthrough, SSE, or WebSocket contract. Existing OpenAI
+  subscription transports remain restricted to Responses.
 - `pricing.serviceTiers` declares complete rate cards with unique wire `id`s,
   optional `aliases`, optional `longContext`, and an optional `maxInputTokens`
   price-applicability limit. Include a `default` card identical to the root
-  pricing; the compiler rejects drift. Omitted/auto requests reserve all known
+  pricing; the compiler rejects drift. OpenAI omitted/auto requests reserve all known
   possible rates, while settlement requires the served tier. Unpublished tiers
   or contexts never silently use Standard rates.
-  Models without this contract retain their provider's existing pricing behavior;
+  Native Gemini uses `standard` as an alias of the default card, defaults omitted
+  requests to Standard, reserves Flex without a Standard upgrade, and allows
+  Priority to downgrade to Standard. Undeclared native tiers are unpriced;
+  a root-only Gemini card prices Standard only.
+  Other models without this contract retain their provider's existing pricing behavior;
   the Worker does not reinterpret another provider's tier parameter as OpenAI's.
 - `models.entries[].supportedReasoningEfforts` advertises the model's exact
   provider-native OpenAI-compatible wire efforts. Values are unique and limited
   to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+- `models.entries[].requestParameters.<endpoint>` records dated, source-linked
+  constructor facts for an exact OpenAI Chat or Responses endpoint: `temperature`,
+  `topP`, `logprobs`, and `toolCalling` can be `supported`, `unsupported`, or
+  `requires_reasoning_none`. Omitted facts are unknown. `defaultReasoningEffort`
+  must belong to the declared effort domain; it informs assessment without adding
+  a field to requests. Model-name prefixes and opaque models inherit no facts.
+  Fusion uses these facts before fan-out and to qualify its adviser preference.
+  They do not certify full requests, individual tool types, pricing, account
+  access, or Codex metadata, and do not restrict native protocol passthrough.
+  Sampling/logprob field-presence restrictions also apply to explicit false/null;
+  empty tools or `tool_choice: none` do not mean enabled tool calling and remain
+  unqualified when their wire acceptance is undocumented. Recommendations and
+  ignored parameters must not be published as prohibitions.
+  Groq GPT-OSS 120B declares its Chat effort values and rejects logprob field
+  presence. Fireworks GPT-OSS 120B and GLM 5.2 declare their Chat effort values
+  and defaults; accepted effort aliases stay unchanged for upstream handling.
+  These entries add no sampling, tool, or pricing assumptions. Non-string efforts
+  remain unqualified, and other providers' models inherit none of these facts.
 - `models.entries[].codexModel` names an explicitly sourced native Codex model
   descriptor for a documented upstream alias. The export helper preserves that
   descriptor's prompts and context contract; it does not generate metadata.
 - `endpoints.*.websocket: openai.responses` explicitly qualifies a native
   POST Responses/SSE endpoint for the Worker WebSocket bridge. Other endpoints
   and alternate grant transports do not gain WebSocket support implicitly.
+- `endpoints.*.outputTokenLimit` qualifies budget estimates with a declared
+  `field` (`max_tokens`, `max_completion_tokens`, or `max_output_tokens`) and
+  positive integer `minimum`/`maximum`. Only an in-range integer in that field
+  lowers the output reservation; omitted, invalid, and alias-only limits reserve
+  the maximum. This neither rejects nor rewrites the forwarded request.
+  DeepSeek uses `max_tokens: 1..393216` and a 1,048,576-token input envelope,
+  following its [Chat contract](https://api-docs.deepseek.com/api/create-chat-completion/)
+  and [published context limit](https://api-docs.deepseek.com/quick_start/agent_integrations/crush/).
+  Existing measured DeepSeek requests can now return HTTP 402 under unchanged
+  policy or provider budgets: zero, invalid, and alias-only limits no longer
+  reduce reservations, and the larger default bound can exceed a near-limit
+  balance. This is an intentional hard-budget correction. Existing spend and
+  outstanding reservations remain charged. Set a valid native `max_tokens`
+  within `1..393216` to lower the reservation; the request still needs enough
+  remaining balance in both configured budgets. Input and output share the
+  context, so the input envelope does not guarantee upstream acceptance.
+
+## Upgrading custom manifests
+
+Known model entries keep their declared endpoints and prices. Opaque model
+requests now require an explicit declaration on each intended endpoint. Add
+`modelPassthrough: {}` to the existing endpoint mapping, then regenerate the
+provider snapshot:
+
+```yaml
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    # Keep the endpoint's existing path and protocol fields.
+```
+
+Without this declaration, a native request for an unknown model returns
+`model_capability_unsupported`. The declaration restores opaque routing without
+copying another model's price or metadata. Budgeted opaque requests still need
+a fixed policy tariff or an applicable endpoint `pricingRef`.
 
 ## Edge Support Rules
 
@@ -202,10 +309,43 @@ Run this after adding or changing providers:
 pnpm provider:smoke-plan
 ```
 
-The smoke planner compiles `providers/*.provider.yaml`, derives one executable
-smoke target per provider, and fails if any provider lacks a route plan. It does
-not call upstream APIs; deployed live calls are opt-in through
-`CLAWROUTER_SMOKE_LIVE_PROVIDERS`.
+The smoke planner compiles `providers/*.provider.yaml`, derives one route
+candidate per provider, and fails if any provider lacks a route plan. Request
+templates and preferred operations follow the endpoint's request format and
+capabilities, so renamed provider and endpoint IDs keep the same request shape.
+Anthropic token counting omits the output limit required by Messages generation.
+Templates also cover OpenAI Responses and embeddings, Cohere embeddings, and
+Tavily Extract when those operations are selected. Model requests use an
+endpoint-compatible catalog model or the operator's explicit model override.
+For known defaults and overrides, router envelopes carry the catalog model ID;
+the Worker resolves the provider-native name for the upstream body and path.
+This preserves the 22 bundled route choices and native upstream identities,
+while intentionally changing model spelling in Anthropic, Cohere, Google, and
+Bedrock envelopes. Unknown explicit overrides keep their existing semantics.
+Request contracts: [OpenAI Responses](https://developers.openai.com/api/reference/resources/responses/methods/create),
+[OpenAI embeddings](https://developers.openai.com/api/reference/resources/embeddings/methods/create),
+[Cohere Embed](https://docs.cohere.com/reference/embed), and
+[Tavily Extract](https://docs.tavily.com/documentation/api-reference/endpoint/extract).
+GET/HEAD targets without resource parameters keep an empty envelope body; the
+Worker sends no upstream body. The existing GraphQL POST query is preserved.
+
+A planned target is not upstream verification. Unknown formats and resource-bound
+requests without a fixture remain visible with `target.unresolved`; live smoke
+execution fails before dispatch and does not update provider health. Replicate
+prediction lookup still needs support for an operator-selected existing prediction
+ID. This remains a separate fixture follow-up, not a verified smoke target.
+Other named follow-ups are prediction creation/lifecycle fixtures, bounded
+Tavily Crawl requests, schema-specific GraphQL queries and response validation,
+and required query-parameter fixtures (including GraphQL GET). The generic
+GraphQL POST query assumes a `viewer.id` field and is not valid for every schema.
+Synthetic Worker tests prove request routing and authentication, not live
+provider availability or semantic success. For example, Tavily Extract can
+return HTTP 200 with per-URL failures in `failed_results`.
+
+Planning does not call upstream APIs; deployed live calls are opt-in through
+`CLAWROUTER_SMOKE_LIVE_PROVIDERS`. The bundled AWS body override and Cloudflare
+inline credential/model overrides apply only to their named bundled providers;
+renamed manifests do not inherit those values.
 
 ## Lanseq
 

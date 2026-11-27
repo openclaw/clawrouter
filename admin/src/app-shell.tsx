@@ -1,25 +1,37 @@
+import { MyUsageScreen, PersonalUsageSummary } from "./screens/my-usage";
+import { ConsoleRetryButton } from "./console-retry-button";
+import { GrantExpiryPools } from "./grant-expiry";
+import { SubscriptionsScreen } from "./screens/subscriptions";
 import React from "react";
 import { Route } from "lucide-react";
-import { accessFormFromUser, playgroundServicePreset } from "./domain";
-import { ThemeToggle, viewIcon, viewSubtitle, viewTitle } from "./components";
+import { accessFormFromUser } from "./domain";
+import { ThemeToggle, navItems, viewIcon, viewSubtitle, viewTitle } from "./components";
 import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-catalog";
 import { PlaygroundScreen } from "./screens/playground";
 import { PoliciesScreen } from "./screens/access";
-import { UsageScreen, UsersScreen } from "./screens/users-usage";
-import { applyTheme, initialTheme, navItems } from "./ui-config";
+import { UsageScreen } from "./screens/users-usage";
+import { UsersScreen } from "./screens/users";
+import { CompleteUsageScreen } from "./screens/complete-usage";
+import { applyTheme, readTheme } from "./theme";
 import { formatTimestamp } from "./ui-helpers";
 import { useConsole } from "./console-controller-context";
+import { consoleStatusPresentation } from "./status-display";
+import type { AccessPolicy } from "./ui-types";
 
 export function AppShell() {
-  const [theme, setTheme] = React.useState(initialTheme);
+  const [theme, setTheme] = React.useState(readTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { session: shell, catalog, access, usage, selfServiceKeys, playground: playgroundDomain } = useConsole();
-  const { view, value: session, status, lastUpdatedAt, demoMode, statusPresentation, busy, statusTone, navigateTo } = shell;
+  const { session: shell, catalog, access, usage, personalUsage, adminUsage, request, subscriptions, selfServiceKeys, credentialOwner, playground: playgroundDomain } = useConsole();
+  const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
+  const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
+  const usageLabel = session.role === "admin" ? "Usage" : "Quota";
+  const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
+  const statusTone = statusPresentation.tone;
   const { providers, providerReadiness, accessByProvider, services, models, serviceRoutes, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
   const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, fusion, users: userState, tab } = access;
   const { items: keys, selected: selectedPolicy, form: policyForm, setForm: setPolicyForm, error: policyError, save: savePolicy, revoke, edit: editPolicy, startNew: startNewPolicy, applyPreset, toggleProvider: togglePolicyProvider, setProviderGroup: setPolicyProviderGroup } = policies;
-  const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issuedKey, issue: issueCredential, revoke: revokeCredential, setSelectedId: setSelectedCredentialId, setIssuedKey } = credentialState;
-  const { items: connections, setEnabled: setProviderConnection, setBudget: setProviderBudget } = connectionState;
+  const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issue: issueCredential, rotate: rotateCredential, revoke: revokeCredential, edit: editCredential, startNew: startNewCredential, setExpiry: setCredentialExpiry } = credentialState;
+  const { items: connections, pendingProviderIds, budgetAttempts, discardBudgetAttempt, setEnabled: setProviderConnection, setBudget: setProviderBudget } = connectionState;
   const { items: bindings, selected: selectedBinding, form: bindingForm, setForm: setBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding } = bindingState;
   const { items: upstreamGrants, selected: selectedUpstreamGrant, form: upstreamGrantForm, setForm: setUpstreamGrantForm, save: saveUpstreamGrant, revoke: revokeUpstreamGrant, refresh: refreshUpstreamGrant, refreshQuota: refreshUpstreamGrantQuota, authorize: authorizeUpstreamGrant, edit: editUpstreamGrant, startNew: startNewUpstreamGrant } = upstream;
   const { items: assignmentRules, selected: selectedAssignmentRule, form: assignmentRuleForm, setForm: setAssignmentRuleForm, save: saveAssignmentRule, reconcile: reconcileAssignments, edit: editAssignmentRule, startNew: startNewAssignmentRule } = assignments;
@@ -29,6 +41,11 @@ export function AppShell() {
   const { adminOverview, tenantSummaries, rows: usageRows, snapshot: usageSnapshot, loaded: usageLoaded } = usage;
   const { form: playground, setForm: setPlayground, turns: playgroundTurns, selectedTurnId: selectedPlaygroundTurnId, setSelectedTurnId: setSelectedPlaygroundTurnId, requestMode, setRequestMode, error: playgroundError, selectedModel, selectedServiceRoute, running: playgroundRunning, run: runPlayground, resetConversation } = playgroundDomain;
   const retentionLabel = session.contentRetention ? session.contentRetention.enabled ? `${session.contentRetention.retentionDays}d` : "off" : "pending";
+  function openPolicy(policy: AccessPolicy) {
+    if (!editPolicy(policy)) return;
+    setAccessTab("policies");
+    navigateTo("policies");
+  }
   return (
     <main className="appShell">
       <aside className="sidebar">
@@ -42,8 +59,8 @@ export function AppShell() {
         <nav className="navTabs" aria-label="console">
           <div className="navGroup">
             <span className="navGroupLabel">Workspace</span>
-            {navItems.filter((item) => item.section === "workspace").map(({ id, label, icon: Icon }) => (
-              <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
+            {navItems.filter((item) => item.section === "workspace" && (item.id !== "my-usage" || session.role !== "admin")).map(({ id, label, icon: Icon }) => (
+              <button key={id} data-console-view={id} aria-current={view === id ? "page" : undefined} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
                 <Icon className="navIcon" aria-hidden="true" />
                 <span>{label}</span>
               </button>
@@ -53,7 +70,7 @@ export function AppShell() {
             <div className="navGroup">
               <span className="navGroupLabel">Administration</span>
               {navItems.filter((item) => item.section === "admin").map(({ id, label, icon: Icon }) => (
-                <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
+                <button key={id} data-console-view={id} aria-current={view === id ? "page" : undefined} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
                   <Icon className="navIcon" aria-hidden="true" />
                   <span>{label}</span>
                 </button>
@@ -80,7 +97,7 @@ export function AppShell() {
             </div>
           </div>
           <div className="topActions">
-            <span className={`connectionMeta connectionMeta-${statusTone}`} title="Automatically refreshes every 30 seconds and when this tab regains focus">
+            <span className={`connectionMeta connectionMeta-${statusTone}`} title="Last successful access-data refresh. Automatically refreshes every 30 seconds and when this tab regains focus.">
               <span className="connectionDot" aria-hidden="true" />
               <strong>{statusPresentation.label}</strong>
               <span className="connectionSeparator" aria-hidden="true">·</span>
@@ -91,12 +108,38 @@ export function AppShell() {
           </div>
         </header>
 
-        {statusPresentation.showBar ? <div className={`statusBar statusBar-${statusTone}`} role="status" aria-live="polite"><strong>{statusPresentation.label}</strong><span>{status}</span>{demoMode ? <em>demo</em> : null}</div> : null}
+        {statusPresentation.showBar ? (
+          <div className={`statusBar statusBar-${statusTone}${refreshError ? " refreshNotice" : ""}`} role="status" aria-live="polite">
+            {refreshError ? <>
+              <div className="refreshNoticeCopy">
+                <strong className="refreshNoticeCaption">Refresh failed</strong>
+                {shell.refreshError ? <p className="refreshNoticeImpact">{lastUpdatedAt === null ? "Some console data is unavailable." : "Displayed data may be out of date."}</p> : null}
+                {usage.error ? <p className="refreshNoticeImpact">{usageLabel} data {usage.loaded ? "may be out of date." : "is unavailable."}</p> : null}
+              </div>
+              <ConsoleRetryButton label="Retry refresh" />
+              <div className="refreshNoticeDetail">
+                {shell.refreshing ? <p>Refreshing console data</p> : status !== "connected" ? <p>{status}</p> : null}
+                <p>{refreshError}</p>
+              </div>
+            </> : <>
+              <strong>{statusPresentation.label}</strong>
+              <span>{shell.refreshing ? "Refreshing console data" : status}</span>
+            </>}
+            {demoMode ? <em>demo</em> : null}
+          </div>
+        ) : null}
 
+        {view === "home" && session.role === "admin" ? <GrantExpiryPools policies={keys} grants={upstreamGrants} ready={upstream.ready} error={shell.refreshError} onOpenGrant={grant => { editUpstreamGrant(grant); setAccessTab("upstream"); navigateTo("policies"); }} /> : null}
         {view === "home" ? (
           <DashboardScreen
+            personalUsageSummary={session.role !== "admin" ? <PersonalUsageSummary data={personalUsage} keys={selfServiceKeys.items} onOpen={() => navigateTo("my-usage")} /> : undefined}
             session={session}
+            grants={upstreamGrants}
+            grantsReady={upstream.ready}
+            grantsError={shell.refreshError}
+            onOpenGrant={(grant) => { editUpstreamGrant(grant); setAccessTab("upstream"); navigateTo("policies"); }}
             services={services}
+            gatewayReadiness={catalog.gatewayReadiness}
             policies={keys}
             credentials={credentials}
             users={users}
@@ -105,13 +148,19 @@ export function AppShell() {
             usageRows={usageRows}
             usage={usageSnapshot}
             usageLoaded={usageLoaded}
+            usageStale={usage.stale}
+            usageError={usage.error}
+            usageUpdatedAt={usage.updatedAt}
             myCredentials={selfServiceKeys.items}
+            myPolicyLimits={catalog.entitlements?.policies}
             myPolicyIds={selfServiceKeys.policyIds}
-            myIssuedKey={selfServiceKeys.issuedKey}
-            myKeyError={selfServiceKeys.error}
-            myKeysBusy={busy || selfServiceKeys.busy}
+            myKeyFeedback={credentialOwner.forSurface("personal")}
+            myKeyScope={credentialOwner.scopeEpoch}
+            myKeysBusy={busy || credentialOwner.busy}
+            onMyKeyDraftChange={credentialOwner.invalidatePresentation}
             onIssueMyKey={selfServiceKeys.issue}
             onRevokeMyKey={selfServiceKeys.revoke}
+            onRenameMyKey={selfServiceKeys.rename}
             onOpenCatalog={() => navigateTo("catalog")}
             onOpenPlayground={() => navigateTo("playground")}
             onOpenUsage={() => navigateTo("usage")}
@@ -119,35 +168,40 @@ export function AppShell() {
           />
         ) : null}
 
+        {view === "my-usage" ? <MyUsageScreen data={personalUsage} keys={selfServiceKeys.items} /> : null}
+
         {view === "catalog" ? (
           <CatalogScreen
             services={filteredServices}
             allServices={services}
             selected={selectedService}
+            models={models}
+            serviceRoutes={serviceRoutes}
             policies={keys}
             connections={connections}
+            pendingProviderIds={pendingProviderIds}
+            budgetAttempts={budgetAttempts}
+            discardBudgetAttempt={discardBudgetAttempt}
             query={query}
             setQuery={setQuery}
             kind={kind}
             setKind={setKind}
             kinds={kinds}
             canAdminister={session.role === "admin"}
+            onOpenPolicy={openPolicy}
             onSelect={(service) => setSelectedServiceId(service.id)}
             onSetConnection={setProviderConnection}
             onSetProviderBudget={setProviderBudget}
-            onPlay={(service) => {
-              const model = models.find((item) => item.provider === service.provider);
-              const proxyRoute = serviceRoutes.find((route) => route.provider === service.provider);
-              setPlayground((current) => model
-                ? { ...current, mode: "model", model: model.id }
-                : proxyRoute ? { ...current, mode: "service", ...playgroundServicePreset(proxyRoute) } : current);
+            onPlay={(preset) => {
+              setPlayground((current) => ({ ...current, ...preset }));
               navigateTo("playground");
             }}
             onAdd={(service) => {
               setPolicyForm((current) => ({
-                ...current,
+                allProviders: current.allProviders,
                 providers: current.allProviders || current.providers.includes(service.provider) ? current.providers : [...current.providers, service.provider].sort(),
               }));
+              setAccessTab("policies");
               navigateTo("policies");
             }}
           />
@@ -187,6 +241,9 @@ export function AppShell() {
             selectedBinding={selectedBinding}
             upstreamGrants={upstreamGrants}
             selectedUpstreamGrant={selectedUpstreamGrant}
+            upstreamBusy={upstream.busy}
+            upstreamReady={upstream.ready}
+            upstreamError={upstream.error}
             assignmentRules={assignmentRules}
             selectedAssignmentRule={selectedAssignmentRule}
             fusionConfig={fusionConfig}
@@ -206,12 +263,21 @@ export function AppShell() {
             setUpstreamGrantForm={setUpstreamGrantForm}
             assignmentRuleForm={assignmentRuleForm}
             setAssignmentRuleForm={setAssignmentRuleForm}
-            issuedKey={issuedKey}
-            error={policyError}
+            credentialFeedback={credentialOwner.forSurface("admin")}
+            error={access.error}
+            policyError={policyError}
+            policyDirty={policies.dirty}
+            policyMissing={policies.missing}
+            policyReady={policies.ready}
+            policyBusy={policies.busy}
+            onDiscardPolicy={policies.discard}
             fusionError={fusionError}
             onSave={savePolicy}
+            onSetCredentialExpiry={setCredentialExpiry}
             onIssueCredential={issueCredential}
             onRevokeCredential={revokeCredential}
+            onRotateCredential={rotateCredential}
+            onNewCredential={startNewCredential}
             onSaveBinding={saveBinding}
             onSaveUpstreamGrant={saveUpstreamGrant}
             onRevokeUpstreamGrant={revokeUpstreamGrant}
@@ -224,11 +290,7 @@ export function AppShell() {
             onCheckFusion={checkFusion}
             onNew={startNewPolicy}
             onEdit={editPolicy}
-            onEditCredential={(credential) => {
-              setSelectedCredentialId(credential.credentialId);
-              setCredentialForm({ credentialId: "", policyId: credential.policyId, principalId: credential.principalId ?? "" });
-              setIssuedKey("");
-            }}
+            onEditCredential={editCredential}
             onEditBinding={editBinding}
             onNewBinding={startNewBinding}
             onEditUpstreamGrant={editUpstreamGrant}
@@ -253,11 +315,7 @@ export function AppShell() {
             form={accessForm}
             setForm={setAccessForm}
             error={userError}
-            onOpenPolicy={(policy) => {
-              editPolicy(policy);
-              setAccessTab("policies");
-              navigateTo("policies");
-            }}
+            onOpenPolicy={openPolicy}
             onSelect={(user) => {
               setSelectedUserEmail(user.email);
               setAccessForm(accessFormFromUser(user, bindings));
@@ -268,7 +326,9 @@ export function AppShell() {
           />
         ) : null}
 
-        {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} /> : null}
+        {view === "subscriptions" && session.role === "admin" ? <SubscriptionsScreen data={subscriptions} policies={keys} grants={upstreamGrants} providers={providers} refreshQuota={refreshUpstreamGrantQuota} busy={upstream.busy} actionError={upstream.error} /> : null}
+
+        {view === "usage" && session.role === "admin" ? <><div className="personalActions"><button type="button" className="buttonSecondary" onClick={() => navigateTo("my-usage")}>My usage</button></div><CompleteUsageScreen data={adminUsage}/><details><summary>Authoritative allowances and legacy diagnostics</summary><UsageScreen request={request} keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} usageStale={usage.stale} usageError={usage.error} usageUpdatedAt={usage.updatedAt} /></details></> : null}
       </section>
     </main>
   );

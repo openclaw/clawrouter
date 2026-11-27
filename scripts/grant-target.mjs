@@ -1,3 +1,5 @@
+import { required } from "./cli-args.mjs";
+
 export function grantTarget(args) {
   const env = localAdminEnvironment(args);
   if (Boolean(args.kid) === Boolean(args.tenant)) throw new Error("exactly one of --kid or --tenant is required");
@@ -26,9 +28,4 @@ export function localAdminEnvironment(args, env = process.env) {
     return { ...env, CLAWROUTER_BASE_URL: baseUrl };
   }
   return env;
-}
-
-function required(value, name) {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required`);
-  return value.trim();
 }

@@ -1,0 +1,189 @@
+{
+  "schema": "fusion-redaction-feedback-study-v1",
+  "date": "2026-11-27",
+  "caseCount": 3,
+  "repetitions": 3,
+  "calls": 18,
+  "developmentOnly": true,
+  "productionQualified": false,
+  "protocolSha256": "f8a69bd5e7c36bf2e1681df1629dae81459ac01754d8f997a91b98ddd50c1ac3",
+  "resultSha256": "2104dd26a5ba4b4ec2b187d59bdbbb21dd5dde74d5750ad2867ae5e34a2c0525",
+  "summary": {
+    "feedback": {
+      "passed": 3,
+      "validArtifacts": 8,
+      "costMicros": 21603,
+      "meanApiMs": 6534.209921222219
+    },
+    "fresh": {
+      "passed": 0,
+      "validArtifacts": 9,
+      "costMicros": 21612,
+      "meanApiMs": 7321.49442133333
+    }
+  },
+  "records": [
+    {
+      "caseIndex": 0,
+      "repeat": 0,
+      "arm": "fresh",
+      "costMicros": 2548,
+      "apiMs": 8390.151333999998,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 0,
+      "arm": "feedback",
+      "costMicros": 2274,
+      "apiMs": 3435.027083000001,
+      "passed": true,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 1,
+      "arm": "feedback",
+      "costMicros": 2254,
+      "apiMs": 3338.907875000001,
+      "passed": true,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 1,
+      "arm": "fresh",
+      "costMicros": 2605,
+      "apiMs": 8966.775125,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 2,
+      "arm": "fresh",
+      "costMicros": 2483,
+      "apiMs": 7794.012749999998,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 0,
+      "repeat": 2,
+      "arm": "feedback",
+      "costMicros": 2504,
+      "apiMs": 7167.048582999996,
+      "passed": true,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 0,
+      "arm": "feedback",
+      "costMicros": 2519,
+      "apiMs": 7458.971124999996,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 0,
+      "arm": "fresh",
+      "costMicros": 2587,
+      "apiMs": 9724.330499999996,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 1,
+      "arm": "fresh",
+      "costMicros": 2535,
+      "apiMs": 10463.433124999996,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 1,
+      "arm": "feedback",
+      "costMicros": 2641,
+      "apiMs": 8752.881165999992,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 2,
+      "arm": "feedback",
+      "costMicros": 2386,
+      "apiMs": 5895.438125000001,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 1,
+      "repeat": 2,
+      "arm": "fresh",
+      "costMicros": 2376,
+      "apiMs": 6327.913665999993,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 0,
+      "arm": "fresh",
+      "costMicros": 2127,
+      "apiMs": 3972.103541999997,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 0,
+      "arm": "feedback",
+      "costMicros": 2405,
+      "apiMs": 8116.326874999999,
+      "passed": false,
+      "artifactValid": false
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 1,
+      "arm": "feedback",
+      "costMicros": 2308,
+      "apiMs": 6893.308458999993,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 1,
+      "arm": "fresh",
+      "costMicros": 2070,
+      "apiMs": 3395.740042000005,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 2,
+      "arm": "fresh",
+      "costMicros": 2281,
+      "apiMs": 6858.989707999994,
+      "passed": false,
+      "artifactValid": true
+    },
+    {
+      "caseIndex": 2,
+      "repeat": 2,
+      "arm": "feedback",
+      "costMicros": 2312,
+      "apiMs": 7749.979999999996,
+      "passed": false,
+      "artifactValid": true
+    }
+  ]
+}

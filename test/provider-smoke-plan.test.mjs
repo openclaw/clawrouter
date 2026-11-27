@@ -1,14 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 
-import {
-  buildProviderSmokePlan,
-  compileProviderSnapshot,
-  inspectSmokeKeyProviderAccess,
-  runLiveProviderSmokes,
-  selectLiveProviderPlans,
-  SmokeKeyInspectionUnavailableError,
-} from "../scripts/provider-smoke-plan.mjs";
+import { buildProviderSmokePlan, selectLiveProviderPlans } from "../scripts/provider-smoke-planning.mjs";
+import { compileProviderSnapshot, inspectSmokeKeyProviderAccess, runLiveProviderSmokes, SmokeKeyInspectionUnavailableError } from "../scripts/provider-smoke-plan.mjs";
 
 const plan = {
   providers: [
@@ -47,7 +42,7 @@ test("AWS Bedrock smoke uses an executable Nova InvokeModel request", () => {
   assert.equal(provider.target.kind, "manifest_proxy");
   assert.equal(provider.target.endpoint, "invoke_model");
   assert.deepEqual(provider.target.envelope.pathParams, {
-    model: "amazon.nova-lite-v1:0",
+    model: "bedrock/amazon.nova-lite-v1:0",
   });
   assert.deepEqual(provider.target.envelope.body, {
     schemaVersion: "messages-v1",
@@ -110,17 +105,17 @@ test("Anthropic count_tokens smoke omits messages-only max_tokens", () => {
   assert.equal(provider.target.kind, "manifest_proxy");
   assert.equal(provider.target.endpoint, "count_tokens");
   assert.equal(provider.target.envelope.body.max_tokens, undefined);
-  assert.equal(provider.target.envelope.body.model, snapshot.providers.find((entry) => entry.id === "anthropic").models[0].upstream);
+  assert.equal(provider.target.envelope.body.model, snapshot.providers.find((entry) => entry.id === "anthropic").models[0].id);
 });
 
 test("newly budgeted provider defaults compile with dated pricing", () => {
   const snapshot = compileProviderSnapshot();
   const expectations = {
-    deepseek: ["2026-06-22", 435000, 870000],
-    "google-gemini": ["2026-06-22", 1500000, 9000000],
+    deepseek: ["2026-09-23", 1320000, 3960000],
+    "google-gemini": ["2026-09-23", 1500000, 9000000],
     groq: ["2026-06-22", 150000, 600000],
     minimax: ["2026-06-22", 300000, 1200000],
-    together: ["2026-06-22", 1400000, 4400000],
+    together: ["2026-09-23", 1400000, 4400000],
     xai: ["2026-06-21", 1250000, 2500000],
   };
   for (const [providerId, [effectiveAt, input, output]] of Object.entries(expectations)) {
@@ -130,8 +125,8 @@ test("newly budgeted provider defaults compile with dated pricing", () => {
     assert.equal(model.pricing.outputMicrosPerMillion, output);
   }
   const xai = snapshot.providers.find((provider) => provider.id === "xai").models[0];
-  assert.equal(xai.pricing.source, "https://api.x.ai/v1/models/grok-4.3");
-  assert.equal(xai.pricing.longContext.thresholdInputTokens, 200000);
+  assert.equal(xai.pricing.source, "https://docs.x.ai/developers/pricing");
+  assert.equal(xai.pricing.longContext.thresholdInputTokens, 199999);
   assert.equal(xai.pricing.longContext.inputMicrosPerMillion, 2500000);
   assert.equal(xai.pricing.longContext.outputMicrosPerMillion, 5000000);
   const mistralEmbed = snapshot.providers
@@ -387,9 +382,12 @@ test("all selected providers run before smoke failures are reported", async () =
     ],
   };
   let calls = 0;
+  let requestId;
   await withFetch(
-    () => {
+    (url, init) => {
+      if (new URL(url).pathname === "/v1/usage") return Response.json({ usage: { events: [{ id: "usage_second", request_id: requestId, provider: "anthropic", status: "success", status_code: 200, occurred_at_ms: Date.now() }] } });
       calls += 1;
+      requestId = init.headers["x-request-id"];
       if (calls === 1) {
         return new Response(JSON.stringify({ error: { code: "provider_unavailable" } }), {
           status: 502,
@@ -456,12 +454,16 @@ test("provider response stream failures are recorded as provider health", async 
 });
 
 test("successful upstream responses verify and record provider health", async () => {
+  let requestId;
   await withFetch(
-    () =>
-      new Response("ok", {
+    (url, init) => {
+      if (new URL(url).pathname === "/v1/usage") return Response.json({ usage: { events: [{ id: "usage_success", request_id: requestId, provider: "openai", status: "success", status_code: 200, occurred_at_ms: Date.now() }] } });
+      requestId = init.headers["x-request-id"];
+      return new Response("ok", {
         status: 200,
         headers: { "x-clawrouter-upstream-provider": "openai" },
-      }),
+      });
+    },
     async () => {
       const recorded = [];
       const results = await runLiveProviderSmokes({
@@ -474,6 +476,7 @@ test("successful upstream responses verify and record provider health", async ()
       assert.equal(results.length, 1);
       assert.equal(recorded.length, 1);
       assert.equal(results[0].status, "verified");
+      assert.equal(results[0].usageEventId, "usage_success");
     },
   );
 });
@@ -487,3 +490,34 @@ async function withFetch(fetch, run) {
     globalThis.fetch = originalFetch;
   }
 }
+
+
+test("legacy smoke planning exports retain their owner identities", async () => {
+  const legacy = await import("../scripts/provider-smoke-plan.mjs");
+  const planning = await import("../scripts/provider-smoke-planning.mjs");
+  for (const name of Object.keys(planning)) assert.equal(legacy[name], planning[name], name);
+});
+
+test("credential planning does not load provider compilation, execution, or secret upload", () => {
+  const output = execFileSync(process.execPath, ["--input-type=module", "--eval", `
+    import assert from "node:assert/strict";
+    import { registerHooks } from "node:module";
+    registerHooks({ load(url, context, next) {
+      assert.ok(!url.includes("/node_modules/"), url);
+      assert.ok(!url.endsWith("/provider-smoke-plan.mjs"), url);
+      assert.ok(!url.endsWith("/smoke-readiness.mjs"), url);
+      assert.ok(!url.endsWith("/compile-providers.mjs"), url);
+      assert.ok(!url.endsWith("/put-provider-secrets.mjs"), url);
+      assert.ok(!url.endsWith("/deployment-profile.mjs"), url);
+      assert.ok(!url.endsWith("/edge-proof-profile.mjs"), url);
+      return next(url, context);
+    } });
+    const { fakecoProviderCredentialPlan } = await import("./scripts/provider-credential-preflight.mjs");
+    const result = fakecoProviderCredentialPlan({ environment: "fakeco" }, {
+      providers: [{ id: "openai", target: {}, requiredConfig: [] }],
+    }, { CLAWROUTER_PROVIDER_CREDENTIAL_MODE: "existing", CLAWROUTER_SMOKE_LIVE_PROVIDERS: "openai" });
+    assert.deepEqual(result, { mode: "existing", providerIds: ["openai"], secretNames: [] });
+    process.stdout.write("isolated credential planning\\n");
+  `], { cwd: new URL("..", import.meta.url), encoding: "utf8" });
+  assert.equal(output, "isolated credential planning\n");
+});

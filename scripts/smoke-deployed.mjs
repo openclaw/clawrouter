@@ -1,13 +1,8 @@
 import assert from "node:assert/strict";
+import { createVersionFetch } from "./smoke-version.mjs";
 import packageMetadata from "../package.json" with { type: "json" };
-import {
-  buildProviderSmokePlan,
-  inspectSmokeKeyProviderAccess,
-  liveProviderList,
-  runLiveProviderSmokes,
-  selectLiveProviderPlans,
-  summarizePlan,
-} from "./provider-smoke-plan.mjs";
+import { buildProviderSmokePlan, liveProviderList, selectLiveProviderPlans, summarizePlan } from "./provider-smoke-planning.mjs";
+import { inspectSmokeKeyProviderAccess, runLiveProviderSmokes } from "./provider-smoke-plan.mjs";
 import { assertAccessGateResponse, isAccessRedirect } from "./smoke-access-gate.mjs";
 import {
   smokeReadinessTimeoutMs,
@@ -16,12 +11,21 @@ import {
 
 const baseUrl = required(process.env.CLAWROUTER_BASE_URL, "CLAWROUTER_BASE_URL").replace(/\/$/, "");
 const smokeKey = process.env.CLAWROUTER_SMOKE_KEY;
+const versionId = process.env.CLAWROUTER_SMOKE_VERSION_ID?.trim();
+// This standalone CLI also scopes fetch calls made by provider/usage helpers.
+// The Cloudflare KV health-record API is a different origin and is not overridden.
+if (versionId) globalThis.fetch = createVersionFetch({
+  baseUrl, versionId, workerName: process.env.CLAWROUTER_WORKER_NAME || "clawrouter-edge",
+});
 
 await waitForHealth({
   baseUrl,
   expectedEnvironment: process.env.CLAWROUTER_DEPLOY_ENV?.trim(),
   timeoutMs: smokeReadinessTimeoutMs(),
-  probeImpl: (health) => assert.equal(health.version, packageMetadata.version, "serving release version"),
+  probeImpl: (health) => {
+    assert.equal(health.version, packageMetadata.version, "serving release version");
+    if (versionId) assert.equal(health.versionId, versionId, "serving Worker version");
+  },
 });
 console.log(`deployed version verified: ${packageMetadata.version}`);
 await expectRedirect(`${baseUrl}/`, "root redirect", "/dashboard");
@@ -88,6 +92,7 @@ const results = await runLiveProviderSmokes({
   onResult: recordProviderHealth,
 });
 console.log(`live provider smoke passed: ${results.map((result) => result.provider).join(",")}`);
+console.log(`usage visibility verified: ${results.map((result) => `${result.provider} request=${result.requestId} event=${result.usageEventId}`).join(", ")}`);
 
 console.log("deployed smoke passed");
 

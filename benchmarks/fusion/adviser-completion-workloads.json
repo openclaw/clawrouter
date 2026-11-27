@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "fusion-completed-advice",
+      "split": "development",
+      "base": "ee1626510f596f94a1ab7c682569c7ad832bf69a",
+      "oracle": "597020f6aea07ed1c0d68382860f96affd1fa52e",
+      "editPaths": [
+        "worker/fusion.ts"
+      ],
+      "visibleTests": [
+        "worker/test/fusion-strategy.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/fusion.test.mjs"
+      ],
+      "instruction": "Fusion must only synthesize complete OpenAI-compatible adviser answers. Accept the first choice only when its finish_reason is explicitly stop and it contains usable text with no refusal, provider error or tool/function-call request. Missing, null, unknown, truncated and filtered completion states must contribute no advice. Preserve successful text and text-part answers, including null optional metadata and empty tool-call arrays. Fully consume completed HTTP response bodies so rejected draft contents do not erase their actual usage accounting. Preserve concurrent collection, model order, existing byte/time limits, late-response cleanup, and fallback to remaining advisers or aggregator-only execution; never retry a rejected draft."
+    }
+  ]
+}

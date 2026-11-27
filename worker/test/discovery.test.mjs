@@ -1,143 +1,516 @@
-import "./typescript-setup.mjs";
+import { accessCertsResponse } from "./access-byte-fixture.mjs";
+import { perRequestAuthority } from "./typescript-setup.mjs";
+perRequestAuthority();
 import assert from "node:assert/strict";
 import test from "node:test";
-
-import { providerById } from "../providers.ts";
-
-const { catalogModels } = await import("../discovery.ts");
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
-
-const fireworks = providerById("fireworks");
-assert.ok(fireworks);
-const endpoints = fireworks.endpoints.map((endpoint) => endpoint.id);
-const openai = providerById("openai");
-assert.ok(openai);
-const openaiEndpoints = openai.endpoints.map((endpoint) => endpoint.id);
-
-test("catalog models preserve declared reasoning efforts without adding sibling metadata", () => {
-  const models = catalogModels(openai, openaiEndpoints, null);
-  const gpt56 = models.find((model) => model.id === "openai/gpt-5.6");
-  const gpt55 = models.find((model) => model.id === "openai/gpt-5.5");
-
-  assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
-  assert.equal("supportedReasoningEfforts" in gpt55, false);
-});
-
-test("budgeted proxy-key catalogs omit unpriced models without fixed request pricing", () => {
-  const models = catalogModels(fireworks, endpoints, {
-    enabled: true,
-    generation: "test",
-    providers: ["fireworks"],
-    monthlyBudgetMicros: 1_000_000,
-    requestCostMicros: null,
-  });
-
-  assert.ok(models.some((model) => model.id === "fireworks/glm-5.2"));
-  assert.ok(!models.some((model) => model.id === "fireworks/gpt-oss-120b"));
-});
-
-test("unpriced catalog models remain for unmetered, fixed-price, and Access scopes", () => {
-  const policies = [
-    { enabled: true, generation: "unmetered", providers: ["fireworks"], monthlyBudgetMicros: null, requestCostMicros: null },
-    { enabled: true, generation: "fixed", providers: ["fireworks"], monthlyBudgetMicros: 1_000_000, requestCostMicros: 25 },
-    null,
-  ];
-
-  for (const policy of policies) {
-    const models = catalogModels(fireworks, endpoints, policy);
-    assert.ok(models.some((model) => model.id === "fireworks/gpt-oss-120b"));
-  }
-});
-
-test("provider budgets and the selected endpoint policy govern the same model projection", () => {
-  const unmetered = { monthlyBudgetMicros: null, requestCostMicros: null };
-  assert.ok(!catalogModels(fireworks, endpoints, unmetered, 100).some((model) => model.id === "fireworks/gpt-oss-120b"));
-  assert.ok(catalogModels(fireworks, endpoints, { ...unmetered, requestCostMicros: 1 }, 100).some((model) => model.id === "fireworks/gpt-oss-120b"));
-  const endpointPolicies = new Map([["chat_completions", { monthlyBudgetMicros: 100, requestCostMicros: null }]]);
-  assert.ok(!catalogModels(fireworks, endpoints, unmetered, null, endpointPolicies).some((model) => model.id === "fireworks/gpt-oss-120b"));
-});
-
-test("models and catalog share read-only grant eligibility, transport support, and provider budget filtering", async (t) => {
-  const secret = "fixture-discovery-secret";
-  const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };
-  const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: false };
-  const policies = [{ policyId: "fixture", policy }];
-  const connection = { providerId: "openai", enabled: true, monthlyBudgetMicros: null };
-  const grants = new Map(), states = {};
-  const paths = [];
-  const env = {
-    OPENAI_API_KEY: "fixture-environment-key",
-    POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, grants.get(item) ?? null])) : grants.get(key) ?? null; },
-      async list({ prefix }) { return { keys: [...grants.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })), list_complete: true }; },
-    },
-    ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
-      const path = new URL(url).pathname; paths.push(path);
-      if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
-      if (path === "/policies/resolve") return Response.json({ initialized: true, policies, missingPolicyIds: [] });
-      if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: { enabled: true, role: "user", tenantId: "default", groups: [] } }], missingEmails: [] });
-      if (path === "/resolve") return Response.json({ initialized: true, bindings: policies.map(({ policyId }, priority) => ({ policyId, priority, enabled: true, principalType: "user", principalId: "fixture@example.com" })), missingPrincipals: [] });
-      if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [connection], missingProviderIds: [] });
-      if (path === "/grant-pools/resolve") {
-        const { policyId } = JSON.parse(init.body);
-        return Response.json({ keys: [...grants.keys()].filter((key) => key.startsWith(`oauth/${policyId}/`)), states });
-      }
-      throw new Error(`discovery unexpectedly mutated authority: ${path}`);
-    } }) },
+const { default: worker } = await import("../index.ts");
+const { listHealth } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
+test("Worker catalog reads known health in one bulk request without a KV listing", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  const keys = snapshot.providers.map(({ id }) => `health/providers/${id}`);
+  for (const { id } of snapshot.providers) fixture.records.set(`health/providers/${id}`, { providerId: id, status: "verified", checkedAt: new Date().toISOString(), latencyMs: 42 });
+  const calls = [], get = fixture.env.POLICY_KV.get, list = fixture.env.POLICY_KV.list;
+  const delay = () => new Promise((resolve) => setTimeout(resolve, 5));
+  fixture.env.POLICY_KV.get = async (key, type) => {
+    if ((Array.isArray(key) ? key : [key]).some((item) => item.startsWith("health/providers/"))) {
+      calls.push({ method: "get", key, type });
+      await delay();
+    }
+    return get(key, type);
   };
-  t.mock.method(globalThis, "fetch", () => { throw new Error("discovery must not refresh credentials or probe upstream"); });
-  const request = () => new Request("https://router.example/v1/catalog", { headers: { authorization: `Bearer clawrouter-live-fixture-${secret}` } });
-  async function compare(expectedCapabilities, websocket) {
-    const catalog = await (await catalogResponse(request(), env)).json();
-    const view = catalog.providers.find((provider) => provider.id === "openai");
-    const models = await (await modelsResponse(request(), env)).json();
-    assert.deepEqual(models.data.map(({ id, capabilities }) => ({ id, capabilities })), view.models.map(({ id, capabilities }) => ({ id, capabilities })));
-    assert.deepEqual(view.models.find((model) => model.id === "openai/gpt-6-astra")?.capabilities ?? [], expectedCapabilities);
-    assert.equal(view.routes.some((route) => route.websocket === "openai.responses"), websocket);
-    assert.ok(!paths.includes("/grant-pools/select"));
-    return view;
+  fixture.env.POLICY_KV.list = async (options) => { calls.push({ method: "list" }); await delay(); return list(options); };
+  const start = performance.now();
+  const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+  const catalog = await response.json();
+  t.diagnostic(JSON.stringify({ providers: keys.length, healthRequests: calls.length, syntheticDelayPerRequestMs: 5, elapsedMs: Math.round(performance.now() - start) }));
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(catalog.scope, { authType: "proxy_key", credentialId: "fixture", principalId: null });
+  assert.equal(catalog.providers.find(({ id }) => id === "openai").readiness.verified, true);
+  assert.deepEqual(calls, [{ method: "get", key: keys, type: "json" }]);
+});
+test("Worker catalog uses one admission before independent health and config reads", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  const get = fixture.env.POLICY_KV.get, started = [];
+  fixture.env.POLICY_KV.get = async (key, type) => { started.push(key); return get(key, type); };
+  const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+  assert.equal(response.status, 200);
+  assert.deepEqual(fixture.calls.map(call => call.path), ["/admission/resolve"]);
+  assert.ok(started.includes("config/fusion"));
+  assert.ok(started.some(key => Array.isArray(key) && key.some(item => item.startsWith("health/providers/"))));
+  for (const state of ["revoked", "stale", "disabled-owner"]) {
+    started.length = 0; fixture.calls.length = 0;
+    fixture.credential.enabled = state !== "revoked";
+    fixture.credential.policyGeneration = state === "stale" ? "old" : "g1";
+    fixture.credential.principalId = "fixture@example.com";
+    fixture.userRecord.enabled = state !== "disabled-owner";
+    assert.equal((await worker.fetch(fixture.request("key"), fixture.env, {})).status, 403);
+    assert.deepEqual(fixture.calls.map(call => call.path), ["/admission/resolve"]);
+    assert.equal(started.length, 0, `${state}: no discovery KV reads before authorization`);
   }
-  await compare(["llm.responses", "llm.chat"], true);
-  const key = "oauth/fixture/subscription";
-  grants.set(key, { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
-  await compare(["llm.responses"], false);
-  grants.set("oauth/fixture/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
-  await compare(["llm.responses", "llm.chat"], true);
-  policy.grantRouting = { eligibleGrants: { openai: ["subscription"] } };
-  await compare(["llm.responses"], false);
-  policy.grantRouting.eligibleGrants.openai = [];
-  await compare([], false);
-  policy.grantRouting.eligibleGrants.openai = ["subscription"];
-  states[key] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60000).toISOString(), windows: [] };
-  await compare([], false);
-  delete states[key];
-  policy.grantRouting = { staleState: "deny" };
-  await compare([], false);
-
-  // A session's first policy may own HTTP subscription auth while its second
-  // policy owns the API grant used by the independently selected WS transport.
-  delete policy.grantRouting;
-  grants.delete("oauth/fixture/api");
-  policies.push({ policyId: "api", policy: { ...policy } });
-  grants.set("oauth/api/openai", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
-  const session = "a".repeat(64);
-  grants.set(`local/sessions/${await sha256Hex(session)}`, { email: "fixture@example.com", role: "user", expiresAtMs: Date.now() + 60000 });
-  env.CLAWROUTER_LOCAL_AUTH = "enabled";
-  const catalog = await (await catalogResponse(new Request("https://router.example/v1/catalog", { headers: { cookie: `clawrouter_session=${session}` } }), env)).json();
-  const view = catalog.providers.find(({ id }) => id === "openai");
-  assert.equal(view.routes.find(({ endpoint }) => endpoint === "responses").websocket, "openai.responses");
-  assert.deepEqual(view.models.find(({ id }) => id === "openai/gpt-6-astra").capabilities, ["llm.responses", "llm.chat"]);
-  assert.ok(!paths.includes("/grant-pools/select"));
+});
+test("provider health bulk reads stay within the 100-key KV limit and ignore missing keys", async (t) => {
+  const original = [...snapshot.providers];
+  snapshot.providers.push(...Array.from({ length: 205 - original.length }, (_, index) => ({ id: `fixture-${index}` })));
+  t.after(() => { snapshot.providers.splice(0, snapshot.providers.length, ...original); });
+  const calls = [], record = { providerId: "openai", status: "verified" };
+  const health = await listHealth({ POLICY_KV: {
+    async get(keys, type) {
+      assert.ok(Array.isArray(keys) && keys.length <= 100 && keys.length > 0);
+      assert.equal(type, "json");
+      calls.push(keys);
+      return new Map(keys.map((key) => [key, key === "health/providers/openai" ? record : null]));
+    },
+    async list() { assert.fail("known provider health must not list KV"); },
+  } });
+  assert.deepEqual(calls.map((keys) => keys.length), [100, 100, 5]);
+  assert.deepEqual(calls.flat(), snapshot.providers.map(({ id }) => `health/providers/${id}`));
+  assert.deepEqual([...health], [["openai", record]]);
+});
+test("missing optional Lanseq credentials preserve health and other providers without advertising Lanseq", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.providers.push("lanseq");
+  for (const value of [undefined, ""]) {
+    fixture.env.LANSEQ_API_KEY = value;
+    const health = await worker.fetch(new Request("https://router.example/v1/health"), fixture.env, {});
+    assert.equal(health.status, 200);
+    assert.equal((await health.json()).ok, true);
+    const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+    assert.equal(catalog.providers.some(({ id }) => id === "lanseq"), false);
+    assert.equal(catalog.providers.find(({ id }) => id === "openai").readiness.executable, true);
+    const models = await (await modelsResponse(fixture.request("key"), fixture.env)).json();
+    assert.equal(models.data.some(({ id }) => id.startsWith("lanseq/")), false);
+    const entitlements = await (await entitlementResponse(fixture.request("session"), fixture.env)).json();
+    const lanseq = entitlements.providers.find(({ provider }) => provider === "lanseq");
+    assert.equal(lanseq.readiness.status, "unconfigured");
+    assert.equal(lanseq.readiness.executable, false);
+    assert.deepEqual(lanseq.readiness.missingConfig, ["LANSEQ_API_KEY"]);
+  }
 });
 
-test("zero policy and provider budgets preserve canonical free token counting", () => {
-  const provider = providerById("anthropic");
+for (const mode of ["local", "cloudflare_access"]) test(`empty ${mode} discovery preserves authenticated scope without grants or budget activity`, async (t) => {
+  const bindings = [], fixture = await fusionDiscoveryFixture(t, { bindings });
+  let headers = fixture.request("session").headers, certificateUrl;
+  if (mode === "cloudflare_access") {
+    const domain = "fixture.cloudflareaccess.com", audience = "fixture-audience", kid = "fixture-key";
+    Object.assign(fixture.env, { CLAWROUTER_ACCESS_TEAM_DOMAIN: domain, CLAWROUTER_ACCESS_AUD: audience });
+    fixture.userRecord.assignmentState = { version: 1, revision: "[]", assignments: {}, updatedAt: null };
+    const list = fixture.env.POLICY_KV.list;
+    fixture.env.POLICY_KV.list = (options) => options.prefix === "access/assignment-rules/" ? { keys: [], list_complete: true } : list(options);
+    const keys = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+    const jwk = { ...await crypto.subtle.exportKey("jwk", keys.publicKey), kid };
+    const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const unsigned = `${encode({ alg: "RS256", kid })}.${encode({ aud: audience, iss: `https://${domain}`, email: "Fixture@Example.COM", exp: Math.floor(Date.now() / 1000) + 300 })}`;
+    const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", keys.privateKey, new TextEncoder().encode(unsigned));
+    headers = new Headers({ "cf-access-jwt-assertion": `${unsigned}.${Buffer.from(signature).toString("base64url")}` });
+    certificateUrl = `https://${domain}/cdn-cgi/access/certs`;
+    t.mock.method(globalThis, "fetch", async (url) => {
+      assert.equal(String(url), certificateUrl, "only signature verification may fetch");
+      return accessCertsResponse({ keys: [jwk] }, certificateUrl);
+    });
+  }
+  const upstreamFetch = globalThis.fetch;
+  const budgetGet = t.mock.method(fixture.env.BUDGET_LEDGER, "get", () => { throw new Error("empty discovery must not observe or reserve a budget"); });
+  const binding = { policyId: "fixture", priority: 0, enabled: true, principalType: "user", principalId: "fixture@example.com" };
+  for (const [scenario, entries, enabled] of [
+    ["no bindings", [], true], ["disabled binding", [{ ...binding, enabled: false }], true],
+    ["missing policy", [{ ...binding, policyId: "missing" }], true], ["disabled policy", [binding], false],
+    ["missing and disabled policies", [binding, { ...binding, policyId: "missing" }], false],
+  ]) {
+    bindings.splice(0, bindings.length, ...entries);
+    fixture.policy.enabled = enabled;
+    fixture.calls.length = 0;
+    budgetGet.mock.resetCalls();
+    upstreamFetch.mock.resetCalls();
+    for (const path of ["/v1/catalog", "/v1/session", "/v1/entitlements", "/v1/models"]) {
+      const response = await worker.fetch(new Request(`https://router.example${path}`, { headers }), fixture.env, {});
+      assert.equal(response.status, 200, `${scenario}: ${path}`);
+      const body = await response.json();
+      if (path === "/v1/models") { assert.deepEqual(body.data, []); continue; }
+      const catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+      assert.deepEqual(catalog.scope, { authType: "access", credentialId: null, principalId: "fixture@example.com" }, `${scenario}: ${path}`);
+      assert.deepEqual(catalog.providers, []);
+      if (path !== "/v1/catalog") {
+        const session = body.session ?? body;
+        assert.equal(session.auth, mode);
+        assert.equal(session.email, catalog.scope.principalId);
+        assert.ok((body.entitlements?.providers ?? body.providers).every((row) => !row.allowed));
+      }
+    }
+    assert.equal(fixture.calls.some(({ path }) => path === "/grant-pools/resolve"), false);
+    assert.equal(budgetGet.mock.callCount(), 0, `${scenario}: no budget access`);
+    const fetchUrls = upstreamFetch.mock.calls.map(({ arguments: [url] }) => String(url));
+    if (certificateUrl) {
+      assert.ok(fetchUrls.length > 0, `${scenario}: JWT signature keys were fetched`);
+      assert.ok(fetchUrls.every((url) => url === certificateUrl), `${scenario}: only signature verification may fetch`);
+    } else assert.deepEqual(fetchUrls, [], `${scenario}: no upstream fetch`);
+  }
+});
+
+test("session catalog scope is independent of ordered multi-policy operation selection", async (t) => {
+  const bindings = [
+    { policyId: "fixture", priority: 20, enabled: true, principalType: "user", principalId: "fixture@example.com" },
+    { policyId: "second", priority: 10, enabled: true, principalType: "user", principalId: "fixture@example.com" },
+  ];
+  const fixture = await fusionDiscoveryFixture(t, { bindings });
+  fixture.policies.push({ policyId: "second", policy: { ...fixture.policy, generation: "second-generation", requestCostMicros: 0 } });
+  for (const path of ["/v1/catalog", "/v1/session", "/v1/entitlements"]) {
+    const response = await worker.fetch(new Request(`https://router.example${path}`, fixture.request("session")), fixture.env, {});
+    assert.equal(response.status, 200);
+    const body = await response.json(), catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+    assert.deepEqual(catalog.scope, { authType: "access", credentialId: null, principalId: "fixture@example.com" });
+    const provider = catalog.providers.find(({ id }) => id === "openai");
+    assert.deepEqual(provider.policies, ["second", "fixture"]);
+    assert.ok(provider.offers.length > 0);
+    assert.ok(provider.offers.every((offer) => offer.policyId === "second" && offer.policyGeneration === "second-generation" && offer.transport === "http" && offer.route.startsWith("/v1/playground/")));
+    assert.equal(catalog.providers.find(({ id }) => id === "clawrouter").offers[0].policyId, "second");
+  }
+});
+
+test("key catalog scope and rejection retain precedence over browser cookies", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  const headers = new Headers(fixture.request("key").headers);
+  headers.set("cookie", fixture.request("session").headers.get("cookie"));
+  for (const principalId of [null, "fixture@example.com"]) {
+    fixture.credential.principalId = principalId;
+    const response = await worker.fetch(new Request("https://router.example/v1/catalog", { headers }), fixture.env, {});
+    assert.equal(response.status, 200);
+    const catalog = await response.json(), provider = catalog.providers.find(({ id }) => id === "openai");
+    assert.deepEqual(catalog.scope, { authType: "proxy_key", credentialId: "fixture", principalId });
+    assert.equal(provider.nativeBaseUrl, "/v1/native/openai");
+    assert.ok(provider.offers.some((offer) => offer.transport === "websocket"));
+  }
+  for (const [state, status, code] of [["invalid", 401, "invalid_proxy_key"], ["revoked", 403, "proxy_key_revoked"], ["stale", 403, "credential_policy_stale"]]) {
+    fixture.credential.enabled = state !== "revoked";
+    fixture.credential.policyGeneration = state === "stale" ? "old-generation" : "g1";
+    headers.set("authorization", state === "invalid" ? "Bearer clawrouter-live-fixture-wrong" : fixture.request("key").headers.get("authorization"));
+    for (const path of ["/v1/catalog", "/v1/models"]) {
+      const response = await worker.fetch(new Request(`https://router.example${path}`, { headers }), fixture.env, {});
+      assert.equal(response.status, status);
+      assert.equal((await response.json()).error.code, code);
+    }
+    for (const path of ["/v1/session", "/v1/entitlements"]) {
+      const response = await worker.fetch(new Request(`https://router.example${path}`, { headers }), fixture.env, {});
+      assert.equal(response.status, 200, "browser-only ingress ignores the proxy credential");
+      const body = await response.json();
+      assert.deepEqual((body.entitlements?.catalog ?? body.catalog).scope, { authType: "access", credentialId: null, principalId: "fixture@example.com" });
+      assert.equal((await worker.fetch(new Request(`https://router.example${path}`, fixture.request("key")), fixture.env, {})).status, 401);
+    }
+  }
+});
+
+test("Worker catalog and session expose one exact HTTP Fusion offer and refresh its policy generation", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.requestCostMicros = 0;
+  for (const generation of ["g1", "g2"]) {
+    fixture.policy.generation = generation;
+    fixture.credential.policyGeneration = generation;
+    for (const mode of ["key", "session"]) {
+      for (const path of mode === "key" ? ["/v1/catalog"] : ["/v1/catalog", "/v1/session", "/v1/entitlements"]) {
+        const request = new Request(`https://router.example${path}`, fixture.request(mode));
+        const response = await worker.fetch(request, fixture.env, {});
+        assert.equal(response.status, 200);
+        const body = await response.json(), catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+        const fusion = catalog.providers.find(({ id }) => id === "clawrouter");
+        assert.deepEqual(fusion.policies, ["fixture"]);
+        assert.deepEqual(fusion.offers, [{
+          endpoint: "chat_completions", modelId: "clawrouter/fusion", transport: "http", routeKind: "unified",
+          route: mode === "key" ? "/v1/chat/completions" : "/v1/playground/v1/chat/completions",
+          policyId: "fixture", policyGeneration: generation, eligible: true, affordability: "exact-covered",
+        }]);
+        assert.equal(catalog.scope.authType, mode === "key" ? "proxy_key" : "access");
+      }
+    }
+  }
+  fixture.userRecord.enabled = false;
+  assert.equal((await worker.fetch(fixture.request("session"), fixture.env, {})).status, 401);
+});
+
+test("Fusion cannot borrow Chat eligibility from a sibling Responses or native-only operation", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  const index = snapshot.providers.findIndex(({ id }) => id === "openai"), original = snapshot.providers[index];
+  const provider = structuredClone(original);
+  snapshot.providers[index] = provider;
+  t.after(() => { snapshot.providers[index] = original; });
+  fixture.policy.requestCostMicros = 0;
+  provider.capabilities.push({ id: "llm.chat", endpoint: "responses" });
+  fixture.records.set("oauth/fixture/subscription", { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
+  const view = async () => {
+    const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+    assert.equal(response.status, 200);
+    return (await response.json()).providers;
+  };
+  let providers = await view();
+  assert.ok(providers.find(({ id }) => id === "openai").offers.some(({ endpoint, eligible }) => endpoint === "responses" && eligible));
+  let fusion = providers.find(({ id }) => id === "clawrouter");
+  assert.equal(fusion.executable, false);
+  assert.equal(fusion.offers[0].eligible, false);
+  assert.equal(fusion.offers[0].endpoint, "chat_completions");
+
+  fixture.records.delete("oauth/fixture/subscription");
+  provider.endpoints.find(({ id }) => id === "chat_completions").request_format = "fixture.native_chat";
+  providers = await view();
+  assert.ok(providers.find(({ id }) => id === "openai").offers.some(({ endpoint, eligible }) => endpoint === "chat_completions" && eligible));
+  fusion = providers.find(({ id }) => id === "clawrouter");
+  assert.equal(fusion, undefined, "the existing Fusion config validator rejects native-only Chat");
+});
+
+test("Fusion observes synthesis first without promising all fail-open advisers fit a shared balance", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.requestCostMicros = 7;
+  fixture.config.adviserModels = ["openai/gpt-4.1-mini", "openai/gpt-4.1"];
+  fixture.connection.monthlyBudgetMicros = 100;
+  let policyRemaining = 100, providerRemaining = 100;
+  fixture.env.BUDGET_LEDGER = { idFromName: (name) => name, get: (name) => ({ fetch: async (url) => {
+    assert.equal(new URL(url).pathname, "/status", "catalog must never reserve");
+    return Response.json({ spentMicros: 0, remainingMicros: name.startsWith("provider:") ? providerRemaining : policyRemaining });
+  } }) };
+  for (const [policy, provider, eligible, affordability, ready] of [
+    [21, 21, true, "exact-covered", 2], [14, 21, true, "request-dependent", 2],
+    [21, 14, true, "request-dependent", 2], [7, 7, true, "exact-covered", 0],
+    [6, 100, false, "exact-blocked", 0], [100, 6, false, "exact-blocked", 0],
+  ]) {
+    policyRemaining = policy; providerRemaining = provider;
+    const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+    assert.equal(response.status, 200);
+    const fusion = (await response.json()).providers.find(({ id }) => id === "clawrouter");
+    assert.equal(fusion.offers[0].eligible, eligible);
+    assert.equal(fusion.offers[0].affordability, affordability);
+    assert.equal(fusion.readiness.reasons.some((reason) => reason.startsWith(`${ready}/2 advisers`)), ready !== 2);
+  }
+  fixture.policy.requestCostMicros = 0; policyRemaining = 0; providerRemaining = 0;
+  let catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+  assert.equal(catalog.providers.find(({ id }) => id === "clawrouter").offers[0].affordability, "exact-covered");
+  fixture.policy.requestCostMicros = null; policyRemaining = 100; providerRemaining = 100;
+  catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+  assert.equal(catalog.providers.find(({ id }) => id === "clawrouter").offers[0].affordability, "request-dependent");
+});
+
+test("zero-cost Fusion offers stay exact with unavailable observations but configured zero limits still block", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.adviserModels = ["openai/gpt-4.1-mini"];
+  fixture.connection.monthlyBudgetMicros = 100;
+  let unavailable = "both";
+  fixture.env.BUDGET_LEDGER = { idFromName: (name) => name, get: (name) => ({ fetch: async (url) => {
+    assert.equal(new URL(url).pathname, "/status");
+    const owner = name.startsWith("provider:") ? "provider" : "policy";
+    return unavailable === "both" || unavailable === owner ? new Response(null, { status: 503 }) : Response.json({ spentMicros: 100, remainingMicros: 0 });
+  } }) };
+  for (const kind of ["fixed-zero", "zero-card"]) {
+    fixture.policy.requestCostMicros = kind === "fixed-zero" ? 0 : null;
+    if (kind === "zero-card") {
+      fixture.policy.providers = ["local-openai"];
+      fixture.connection.providerId = "local-openai";
+      fixture.env.LOCAL_OPENAI_BASE_URL = "https://local-model.example";
+      fixture.config.aggregatorModel = "local/final";
+      fixture.config.adviserModels = ["local/adviser"];
+    }
+    for (const failure of ["policy", "provider", "both"]) {
+      unavailable = failure;
+      const catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+      const offer = catalog.providers.find(({ id }) => id === "clawrouter").offers[0];
+      assert.equal(offer.eligible, true, `${kind}/${failure}`);
+      assert.equal(offer.affordability, "exact-covered", `${kind}/${failure}`);
+    }
+    for (const owner of [fixture.policy, fixture.connection]) {
+      owner.monthlyBudgetMicros = 0;
+      const catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+      const offer = catalog.providers.find(({ id }) => id === "clawrouter").offers[0];
+      assert.equal(offer.eligible, false, kind);
+      assert.equal(offer.affordability, "exact-blocked", kind);
+      owner.monthlyBudgetMicros = 100;
+    }
+  }
+});
+
+for (const [providerId, modelId, displayName] of [
+  ["openai", "openai/gpt-6.1-sol", "GPT-6.1 Sol"],
+  ["anthropic", "anthropic/claude-opus-5-5", "Claude Opus 5.5"],
+]) test(`${providerId} display names reach client catalogs and model lists without changing identity or scope`, async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.providers = [providerId];
+  fixture.policy.models = [modelId];
+  fixture.connections.splice(0, fixture.connections.length, { providerId, enabled: true });
+  fixture.records.set("oauth/fixture/named-model", { provider: providerId, kind: "api_key", credential: "fixture-api-key", enabled: true });
+  for (const mode of ["key", "session"]) {
+    for (const handler of [catalogResponse, ...(mode === "session" ? [sessionResponse, entitlementResponse] : [])]) {
+      const response = await handler(fixture.request(mode), fixture.env);
+      assert.equal(response.status, 200);
+      const body = await response.json(), catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+      const provider = catalog.providers.find(({ id }) => id === providerId);
+      assert.deepEqual(provider.models.map(({ id }) => id), [modelId]);
+      const [model] = provider.models;
+      assert.equal(model.displayName, displayName);
+      assert.equal(model.upstream, snapshot.model_index[modelId].upstream);
+      assert.deepEqual(model.pricing, snapshot.model_index[modelId].pricing);
+      assert.ok(provider.offers.some(offer => offer.modelId === modelId));
+      assert.ok(provider.offers.every(offer => offer.modelId === null || offer.modelId === modelId));
+    }
+    for (const anthropic of [false, ...(providerId === "anthropic" ? [true] : [])]) {
+      const request = fixture.request(mode);
+      if (anthropic) request.headers.set("anthropic-version", "2023-06-01");
+      const response = await modelsResponse(request, fixture.env);
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.deepEqual(body.data.map(({ id }) => id), [modelId]);
+      assert.equal(body.data[0].display_name, displayName);
+    }
+  }
+});
+
+test("authorized model metadata preserves declared reasoning efforts without adding sibling metadata", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+  const models = catalog.providers.find(({ id }) => id === "openai").models;
+  assert.deepEqual(models.find(({ id }) => id === "openai/gpt-5.6").supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual(models.find(({ id }) => id === "openai/gpt-5.5").supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh"]);
+  assert.equal("supportedReasoningEfforts" in models.find(({ id }) => id === "openai/gpt-4.1-mini"), false);
+});
+
+test("session catalog scope retains the verified caller after policies are disabled or removed", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  for (const state of ["enabled", "disabled", "empty"]) {
+    fixture.policy.enabled = state !== "disabled";
+    if (state === "empty") fixture.policies.length = 0;
+    for (const [handler, project] of [
+      [catalogResponse, (body) => body],
+      [sessionResponse, (body) => body.entitlements.catalog],
+      [entitlementResponse, (body) => body.catalog],
+    ]) {
+      const response = await handler(fixture.request("session"), fixture.env);
+      assert.equal(response.status, 200, `${handler.name}: ${state}`);
+      const catalog = project(await response.json());
+      assert.deepEqual(catalog.scope, { authType: "access", credentialId: null, principalId: "fixture@example.com" }, `${handler.name}: ${state}`);
+      if (state === "enabled") assert.ok(catalog.providers.some(({ id }) => id === "openai"));
+      else assert.deepEqual(catalog.providers, [], `${handler.name}: ${state}`);
+    }
+  }
+});
+test("catalog and session preserve saved provider health independently of operation eligibility", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.requestCostMicros = 1;
+  fixture.policy.requestCostsMicros = { "search.web": 1 };
+  const fresh = { providerId: "openai", status: "verified", checkedAt: new Date(Date.now() - 1_000).toISOString(), latencyMs: 42 };
+  const stale = { ...fresh, checkedAt: new Date(Date.now() - 86_400_001).toISOString() };
+  const failed = { ...fresh, status: "failed", latencyMs: 75, error: "Fixture probe failed." };
+  for (const [health, verified, probeStatus, failure] of [
+    [fresh, true, "verified", null], [stale, false, "unverified", null],
+    [failed, false, "failed", failed.error], [{ ...failed, error: null }, false, "failed", "Latest provider smoke failed."],
+    [null, false, "unverified", null],
+  ]) {
+    if (health) fixture.records.set("health/providers/openai", health);
+    else fixture.records.delete("health/providers/openai");
+    for (const [enabled, limit, daily, blockedStatus, reasonCode] of [
+      [true, 100, null, null, null], [false, 100, null, "disabled", "provider_disabled"],
+      [true, 0, null, null, null], [true, 0, 0, "unavailable", "daily_budget_exhausted"],
+    ]) {
+      fixture.connection.enabled = enabled;
+      fixture.policy.monthlyBudgetMicros = limit;
+      fixture.policy.dailyBudgetMicros = daily; // Keep monthly-zero count readiness distinct from a daily-zero denial.
+      // A disabled operation owns its blocker even when coarse config is missing.
+      fixture.env.OPENAI_API_KEY = enabled ? "fixture-environment-key" : "";
+      const executable = blockedStatus === null;
+      for (const [handler, mode] of [[catalogResponse, "key"], [catalogResponse, "session"], [sessionResponse, "session"], [entitlementResponse, "session"]]) {
+        fixture.calls.length = 0;
+        const body = await (await handler(fixture.request(mode), fixture.env)).json();
+        const catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+        const view = catalog.providers.find(({ id }) => id === "openai");
+        assert.equal(view.readiness.verified, verified);
+        assert.equal(view.readiness.lastCheckedAt, health?.checkedAt ?? null);
+        assert.equal(view.readiness.latencyMs, health?.latencyMs ?? null);
+        assert.equal(view.readiness.status, blockedStatus ?? probeStatus);
+        assert.deepEqual(view.readiness.reasons, [
+          ...(reasonCode ? [reasonCode, ...(reasonCode === "daily_budget_exhausted" ? ["grant_transport_unavailable"] : [])] : limit === 0 && daily === null ? ["budget_exhausted", "grant_transport_unavailable"] : ["grant_transport_unavailable", ...(mode === "key" ? ["budget_exhausted"] : [])]),
+          ...(executable && !verified ? ["Configured but not recently verified by a live smoke test."] : []),
+          ...(failure ? [failure] : []),
+        ]);
+        assert.equal(view.readiness.executable, executable);
+        assert.equal(view.offers.some(({ eligible }) => eligible), executable);
+        // Environment auth cannot expose scoped metadata; inference fees do not own its blocker.
+        const metadata = view.offers.filter(offer => ["models_list", "models_retrieve"].includes(offer.endpoint)); assert.ok(metadata.length > 0);
+        assert.ok(metadata.every(offer => !offer.eligible && offer.reasonCode === (enabled ? "grant_transport_unavailable" : "provider_disabled")));
+        if (enabled && limit === 0 && daily === null) { const eligible = view.offers.filter(offer => offer.eligible); assert.ok(eligible.length > 0); assert.ok(eligible.every(offer => offer.endpoint === "responses_input_tokens")); }
+        if (reasonCode) {
+          const inference = view.offers.filter(offer => offer.endpoint !== "realtime" && !["models_list", "models_retrieve"].includes(offer.endpoint)); assert.ok(inference.length > 0); assert.ok(inference.every((offer) => !offer.eligible && offer.reasonCode === reasonCode));
+          assert.ok(view.offers.filter(offer => offer.endpoint === "realtime").every(offer => !offer.eligible));
+        }
+        if (body.entitlements) assert.deepEqual(body.entitlements.providers.find(({ provider }) => provider === "openai").readiness, view.readiness);
+        if (body.catalog) assert.deepEqual(body.providers.find(({ provider }) => provider === "openai").readiness, view.readiness);
+        assert.equal(fixture.calls.filter(({ path }) => path === "kv-list").length, 0);
+      }
+    }
+  }
+});
+
+test("mandatory request fees have the same catalog admission for policy and provider budgets", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.providers = ["perplexity"];
+  fixture.env.PERPLEXITY_API_KEY = "fixture-perplexity-key";
+  const connection = { providerId: "perplexity", enabled: true, monthlyBudgetMicros: null };
+  fixture.connections.splice(0, fixture.connections.length, connection);
+  for (const [policyLimit, providerLimit, fixed, visible] of [
+    [100_000_000, null, null, false], [null, 100_000_000, null, false],
+    [null, null, null, true], [100_000_000, 100_000_000, 0, true],
+  ]) {
+    fixture.policy.monthlyBudgetMicros = policyLimit;
+    fixture.policy.requestCostMicros = fixed;
+    connection.monthlyBudgetMicros = providerLimit;
+    for (const mode of ["key", "session"]) {
+      const catalog = await (await catalogResponse(fixture.request(mode), fixture.env)).json();
+      const view = catalog.providers.find(({ id }) => id === "perplexity");
+      const models = await (await modelsResponse(fixture.request(mode), fixture.env)).json();
+      assert.deepEqual(models.data.map(({ id }) => id), view.models.map(({ id }) => id));
+      assert.equal(view.models.some(({ id }) => id === "perplexity/sonar-pro"), visible);
+      const offers = view.offers.filter(({ modelId }) => modelId === "perplexity/sonar-pro");
+      assert.ok(offers.length > 0);
+      assert.ok(offers.every(({ eligible, reasonCode }) => eligible === visible && reasonCode === (visible ? undefined : "pricing_required")));
+    }
+  }
+});
+
+for (const providerId of ["anthropic", "openai"]) test("zero monthly policy and provider budgets preserve canonical free token counting: " + providerId, async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.providers = [providerId]; fixture.env.ANTHROPIC_API_KEY = "fixture-anthropic-key";
+  fixture.config.enabled = false;
+  const connection = { providerId, enabled: true }; fixture.connections.splice(0, fixture.connections.length, connection);
   for (const [policyLimit, providerLimit] of [[0, null], [null, 0]]) {
-    const models = catalogModels(provider, provider.endpoints.map(({ id }) => id), { monthlyBudgetMicros: policyLimit, requestCostMicros: null }, providerLimit);
+    fixture.policy.monthlyBudgetMicros = policyLimit;
+    connection.monthlyBudgetMicros = providerLimit;
+    const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+    const models = catalog.providers.find(({ id }) => id === providerId).models;
     assert.ok(models.length > 0);
     assert.ok(models.every((model) => model.capabilities.length === 1 && model.capabilities[0] === "llm.count_tokens"));
   }
+});
+
+test("model selection forms remain request-dependent when a declared model can be priced", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.providers = ["openai", "openrouter"];
+  fixture.connections[1].providerId = "openrouter";
+  fixture.env.OPENROUTER_API_KEY = "fixture-openrouter-key";
+  const form = async (id) => {
+    const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+    return catalog.providers.find((provider) => provider.id === id).offers.find(({ modelId, endpoint, transport }) => modelId === null && endpoint === "chat_completions" && transport === "http");
+  };
+  const priced = await form("openai");
+  assert.equal(priced.eligible, true);
+  assert.equal(priced.affordability, "request-dependent");
+  assert.equal(priced.reasonCode, undefined);
+  const unpriced = await form("openrouter");
+  assert.equal(unpriced.eligible, false);
+  assert.equal(unpriced.reasonCode, "pricing_required");
+  fixture.policy.monthlyBudgetMicros = 0;
+  assert.equal((await form("openai")).reasonCode, "budget_exhausted");
+  fixture.policy.monthlyBudgetMicros = 100;
+  fixture.policy.requestCostMicros = 7;
+  assert.equal((await form("openrouter")).affordability, "exact-covered");
 });
 
 test("Azure discovery keeps explicit native routes while hiding an unresolved default model", async (t) => {
@@ -149,6 +522,7 @@ test("Azure discovery keeps explicit native routes while hiding an unresolved de
     POLICY_KV: { async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, null])) : null; }, async list() { return { keys: [], list_complete: true }; } },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
       const path = new URL(url).pathname;
+      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture", credential }, policy: { policyId: "fixture", policy }, owner: null, connections: [{ providerId: "azure-openai", enabled: true, monthlyBudgetMicros: null }], pools: { "azure-openai": { keys: [], states: {} } } });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: "azure-openai", enabled: true, monthlyBudgetMicros: null }], missingProviderIds: [] });
@@ -166,6 +540,10 @@ test("Azure discovery keeps explicit native routes while hiding an unresolved de
     assert.deepEqual(view.routes.map(({ endpoint }) => endpoint), ["chat_completions", "embeddings", "responses"]);
     assert.deepEqual(view.models.map(({ id }) => id), configured ? ["azure-openai/deployment"] : []);
     assert.deepEqual(models.data.map(({ id }) => id), view.models.map(({ id }) => id));
+    if (configured) {
+      assert.equal("displayName" in view.models[0], false);
+      assert.equal(models.data[0].display_name, "Azure OpenAI · azure-openai/deployment");
+    }
   }
 });
 
@@ -184,18 +562,30 @@ test("Fusion shares selected-policy model eligibility across key and session dis
         assert.equal(visible, expected, `${mode} ${surface}: ${config.aggregatorModel}`);
         if (fusion) {
           assert.equal(fusion.readiness.reasons.some((reason) => reason.includes("0/1 advisers")), readyAdvisers === 0);
-          if (surface === "catalog") assert.equal(fusion.models.length, expected ? 1 : 0);
+          const catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+          const projection = catalog.providers.find(({ id }) => id === "clawrouter");
+          assert.equal(catalog.scope.authType, mode === "key" ? "proxy_key" : "access");
+          assert.equal(projection.models.length, expected ? 1 : 0);
+          assert.equal(projection.nativeBaseUrl, "/v1");
+          if (mode === "session") assert.equal(projection.offers.some((offer) => offer.transport === "websocket" || offer.routeKind === "native"), false);
         }
         // One connection snapshot and one read-only pool resolution per eligible
         // provider/policy serve both concrete rows and every Fusion participant.
-        assert.equal(calls.filter(({ path }) => path === "/connections/resolve").length, 1);
-        const pools = calls.filter(({ path }) => path === "/grant-pools/resolve").map(({ body }) => `${body.policyId}/${body.providerId}`);
+        // Stateful search separately rechecks actual membership (no default keys).
+        const admissionPools = calls.filter(({ path, body }) => path === "/grant-pools/resolve" && body.defaultKeys?.length !== 0);
+        assert.equal(calls.filter(({ path }) => path === "/connections/resolve").length, mode === "key" ? 0 : 1);
+        if (mode === "key") {
+          assert.equal(calls.filter(({ path }) => path === "/admission/resolve").length, 1);
+          assert.equal(admissionPools.length, 0);
+          continue;
+        }
+        const pools = admissionPools.map(({ body }) => `${body.policyId}/${body.providerId}`);
         assert.deepEqual(pools.sort(), (mode === "key" ? policies.slice(0, 1) : policies).flatMap(({ policyId, policy }) => policy.providers.map((provider) => `${policyId}/${provider}`)).sort());
       }
     }
   }
   await compare(true); // A missing adviser never hides a usable final route.
-  config.adviserModels = ["fireworks/gpt-oss-120b"];
+  config.adviserModels = ["fireworks/fixture-unpriced"];
   env.FIREWORKS_API_KEY = "fixture-fireworks-key";
   await compare(true); // The same measured-pricing guard applies to advisers.
   policy.monthlyBudgetMicros = null;
@@ -216,7 +606,7 @@ test("Fusion shares selected-policy model eligibility across key and session dis
   await compare(false);
   connection.monthlyBudgetMicros = null;
 
-  for (const model of ["openai/fixture-prefix-model", "fireworks/gpt-oss-120b"]) {
+  for (const model of ["openai/fixture-prefix-model", "fireworks/fixture-unpriced"]) {
     config.aggregatorModel = model;
     if (model.startsWith("fireworks/")) env.FIREWORKS_API_KEY = "fixture-fireworks-key";
     for (const [policyLimit, providerLimit, fixed, expected] of [[100, null, null, false], [null, 100, null, false], [null, null, null, true], [100, 100, 7, true]]) {
@@ -253,12 +643,286 @@ test("Fusion shares selected-policy model eligibility across key and session dis
   records.set("oauth/second/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-second-api" });
   await compare(false, ["key"]);
   await compare(true, ["session"]);
+  const catalog = await (await catalogResponse(fixture.request("session"), env)).json();
+  const offer = catalog.providers.find(({ id }) => id === "clawrouter").offers[0];
+  assert.equal(offer.policyId, "second");
+  assert.equal(offer.policyGeneration, policies[1].policy.generation);
+  assert.equal(offer.transport, "http");
 });
 
-async function fusionDiscoveryFixture(t) {
+for (const providerId of ["anthropic", "openai"]) test(`temporary grant cooldown preserves ${providerId} inventory across discovery surfaces and recovery`, async t => {
+  const f = await fusionDiscoveryFixture(t);
+  f.policy.providers = [providerId]; f.policy.monthlyBudgetMicros = null; f.config.enabled = false;
+  f.connections.splice(0, f.connections.length, { providerId, enabled: true });
+  const key = `oauth/fixture/${providerId}`;
+  f.records.set(key, { provider: providerId, kind: "api_key", credential: "fixture-api-key", enabled: true });
+  const baseline = new Map(), baselineOffers = new Map();
+  for (const phase of ["before", "during", "after"]) {
+    if (phase === "during") f.states[key] = { grantRevision: null, status: "cooldown", lastSignal: "rate_limited", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), windows: [] };
+    if (phase === "after") f.states[key].cooldownUntil = new Date(Date.now() - 1).toISOString();
+    for (const mode of ["key", "session"]) {
+      for (const handler of [catalogResponse, ...(mode === "session" ? [sessionResponse, entitlementResponse] : [])]) {
+        const response = await handler(f.request(mode), f.env); assert.equal(response.status, 200);
+        const body = await response.json(), catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+        const view = catalog.providers.find(({ id }) => id === providerId);
+        const inventory = { models: view.models, routes: view.routes, nativeBaseUrl: view.nativeBaseUrl };
+        if (phase === "before") { baseline.set(mode, inventory); baselineOffers.set(mode, view.offers); }
+        assert.ok(view.models.length > 0, `${phase} ${mode}: keep registered models`);
+        if (providerId === "anthropic") {
+          assert.deepEqual(view.models.map(({ id }) => id).sort(),
+            snapshot.providers.find(({ id }) => id === providerId).models.map(({ id }) => id).sort(),
+            "API-key discovery preserves every compiled Anthropic identity exactly once");
+          assert.ok(view.models.some(({ id }) => id === "anthropic/claude-opus-5-5"));
+          assert.ok(view.models.some(({ id }) => id === "anthropic/claude-fable-5-2"));
+          assert.equal(view.routes.length, 4);
+        } else {
+          assert.ok(view.models.some(({ id }) => id === "openai/gpt-6-astra"));
+          assert.equal(view.routes.some(({ websocket }) => websocket === "openai.responses"), mode === "key");
+        }
+        assert.deepEqual(inventory, baseline.get(mode), `${phase} ${mode}: metadata is stable`);
+        assert.equal(view.executable, phase !== "during");
+        assert.equal(view.readiness.executable, phase !== "during");
+        if (phase === "during") {
+          assert.deepEqual(view.readiness.executableEndpoints, []);
+          assert.ok(view.offers.length > 0 && view.offers.every(offer => !offer.eligible));
+          assert.ok(view.offers.filter((_, index) => baselineOffers.get(mode)[index].eligible).every(offer => offer.reasonCode === "upstream_grant_pool_unavailable"));
+        }
+      }
+      for (const anthropic of [false, true]) {
+        const request = f.request(mode); if (anthropic) request.headers.set("anthropic-version", "2023-06-01");
+        const models = await (await modelsResponse(request, f.env)).json();
+        assert.deepEqual(models.data.map(({ id }) => id), baseline.get(mode).models.filter(model => !anthropic || model.capabilities.includes("llm.messages")).map(({ id }) => id));
+      }
+    }
+  }
+  assert.equal(f.calls.some(({ path }) => path === "/grant-pools/select"), false, "discovery stays read-only");
+  f.states[key].cooldownUntil = new Date(Date.now() + 60_000).toISOString();
+  f.policy.models = [];
+  assert.deepEqual((await (await modelsResponse(f.request("key"), f.env)).json()).data, [], "model denial still removes identity during cooldown");
+  f.policy.models = null;
+  f.records.delete(key);
+  if (providerId === "openai") delete f.env.OPENAI_API_KEY;
+  let removed = await (await catalogResponse(f.request("key"), f.env)).json();
+  assert.deepEqual(removed.providers.find(({ id }) => id === providerId).models, [], "configuration removal does not reuse cooling inventory");
+  f.policy.providers = ["unconfigured-fixture-provider"];
+  removed = await (await catalogResponse(f.request("key"), f.env)).json();
+  assert.deepEqual(removed.providers, [], "provider access removal is authoritative");
+  f.credential.enabled = false;
+  for (const handler of [catalogResponse, modelsResponse]) assert.equal((await handler(f.request("key"), f.env)).status, 403);
+});
+
+test("later compatible policy retains cooling inventory without changing unavailable offer ownership", async t => {
+  const f = await fusionDiscoveryFixture(t);
+  f.config.enabled = false; f.policy.providers = ["openai"]; f.policy.monthlyBudgetMicros = null;
+  f.policies.push({ policyId: "api", policy: { ...f.policy } });
+  f.records.set("oauth/fixture/subscription", { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
+  const key = "oauth/api/openai";
+  f.records.set(key, { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
+  const view = async () => (await (await catalogResponse(f.request("session"), f.env)).json()).providers.find(({ id }) => id === "openai");
+  const before = await view();
+  assert.ok(before.models.some(({ id }) => id === "openai/tts-1"));
+  f.states[key] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), lastSignal: "rate_limited", windows: [] };
+  const during = await view();
+  assert.deepEqual(during.models, before.models);
+  assert.deepEqual(during.routes, before.routes);
+  const speech = during.offers.filter(({ endpoint }) => endpoint === "speech");
+  assert.ok(speech.length > 0 && speech.every(offer => !offer.eligible && offer.policyId === "fixture"));
+  assert.ok(during.offers.some(offer => offer.endpoint === "responses" && offer.eligible && offer.policyId === "fixture"));
+  f.policies[1].policy.monthlyBudgetMicros = 0;
+  assert.equal((await view()).models.some(({ id }) => id === "openai/tts-1"), false, "retention still uses the recovering owner's budget");
+  f.policies[1].policy.monthlyBudgetMicros = null;
+  f.states[key].cooldownUntil = new Date(Date.now() - 1).toISOString();
+  assert.deepEqual((await view()).models, before.models);
+  f.records.delete(key);
+  assert.equal((await view()).models.some(({ id }) => id === "openai/tts-1"), false, "removing the later grant removes its identity");
+  f.records.delete("oauth/fixture/subscription"); // First policy now uses configured environment auth.
+  f.records.set(key, { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
+  f.states[key].cooldownUntil = new Date(Date.now() + 60_000).toISOString();
+  f.policies[1].policy.monthlyBudgetMicros = 0;
+  const environment = await view();
+  assert.ok(environment.offers.some(offer => offer.endpoint === "speech" && offer.eligible && offer.policyId === "fixture"));
+  assert.ok(environment.models.some(({ id }) => id === "openai/tts-1"), "a blocked recovering owner cannot hide currently executable environment-backed identity");
+});
+
+test("catalog balances are principal scoped, fresh, and use the dispatch default tenant", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  Object.assign(fixture.policy, { tenantId: null, budgetScope: "principal", requestCostMicros: 20 });
+  fixture.connection.monthlyBudgetMicros = 100;
+  fixture.config.enabled = false;
+  const observations = [];
+  const remaining = new Map([["default:fixture:alpha@example.com", 10], ["default:fixture:beta@example.com", 50], ["provider:openai", 100], ["default:fixture:fixture@example.com", 50]]);
+  fixture.env.BUDGET_LEDGER = { idFromName: (name) => name, get: (name) => ({ fetch: async (url) => {
+    assert.equal(new URL(url).pathname, "/status");
+    observations.push(name);
+    return Response.json({ spentMicros: 0, remainingMicros: remaining.get(name) ?? 100 });
+  } }) };
+  for (const [principalId, eligible] of [["alpha@example.com", false], ["beta@example.com", true], ["alpha@example.com", true]]) {
+    if (observations.length && principalId === "alpha@example.com") remaining.set("default:fixture:alpha@example.com", 25);
+    fixture.credential.principalId = principalId;
+    observations.length = 0;
+    const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+    assert.deepEqual(catalog.scope, { authType: "proxy_key", credentialId: "fixture", principalId });
+    const offer = catalog.providers.find(({ id }) => id === "openai").offers.find(({ modelId, routeKind, transport }) => modelId === "openai/gpt-6-astra" && routeKind === "unified" && transport === "http");
+    assert.equal(offer.eligible, eligible);
+    assert.equal(offer.affordability, eligible ? "exact-covered" : "exact-blocked");
+    assert.equal(observations.filter((name) => name === `default:fixture:${principalId}`).length, 1);
+    assert.equal(observations.filter((name) => name === "provider:openai").length, 1);
+  }
+  fixture.userRecord.tenantId = "organization";
+  delete fixture.env.OPENAI_API_KEY;
+  fixture.records.set("oauth/tenants/default/openai", { provider: "openai", kind: "api_key", credential: "fixture-default-tenant", enabled: true });
+  fixture.calls.length = 0;
+  const session = await (await catalogResponse(fixture.request("session"), fixture.env)).json();
+  assert.ok(session.providers.find(({ id }) => id === "openai").models.length > 0);
+  assert.ok(fixture.calls.filter(({ path }) => path === "/grant-pools/resolve").every(({ body }) => body.tenantId === "default"));
+  assert.ok(observations.includes("default:fixture:fixture@example.com"));
+});
+
+test("ordered policy selection does not shop for a richer budget", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.monthlyBudgetMicros = 0;
+  fixture.policies.push({ policyId: "second", policy: { ...fixture.policy, monthlyBudgetMicros: 100, requestCostMicros: 1 } });
+  for (const policyId of ["fixture", "second"]) fixture.records.set(`oauth/${policyId}/api`, { provider: "openai", kind: "api_key", credential: `fixture-${policyId}`, enabled: true });
+  for (const [cooldown, expectedPolicy, eligible] of [[false, "fixture", false], [true, "second", true]]) {
+    if (cooldown) fixture.states["oauth/fixture/api"] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), windows: [] };
+    const catalog = await (await catalogResponse(fixture.request("session"), fixture.env)).json();
+    const all = catalog.providers.find(({ id }) => id === "openai").offers;
+    const realtime = all.filter(offer => offer.endpoint === "realtime");
+    assert.ok(realtime.length > 0);
+    assert.ok(realtime.every(offer => !offer.eligible && offer.transport === "http" && ["grant_transport_unavailable", "upstream_grant_pool_unavailable"].includes(offer.reasonCode)), "browser session cannot inherit server-only Realtime WebSocket authority");
+    const offers = all.filter(offer => offer.endpoint !== "realtime");
+    assert.ok(offers.length > 0);
+    assert.ok(offers.every((offer) => offer.policyId === expectedPolicy));
+    assert.equal(offers.filter(offer => offer.endpoint !== "responses_input_tokens").some((offer) => offer.eligible), eligible);
+    const counts = offers.filter(offer => offer.endpoint === "responses_input_tokens"); assert.ok(counts.length > 0);
+    assert.ok(counts.every(offer => offer.eligible), "free counts keep the selected owner without shopping for budget");
+  }
+});
+
+test("configured unavailable providers stay inspectable and revoked scopes never reuse prior offers", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.connections.splice(1); // No saved connection or account for Fireworks.
+  let catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+  assert.deepEqual(catalog.providers.map(({ id }) => id), ["openai"]);
+  fixture.connection.enabled = false;
+  catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+  assert.deepEqual(catalog.providers.map(({ id }) => id), ["openai"]);
+  assert.ok(catalog.providers[0].offers.every((offer) => !offer.eligible && offer.reasonCode === "provider_disabled"));
+  fixture.credential.enabled = false;
+  assert.equal((await catalogResponse(fixture.request("key"), fixture.env)).status, 403);
+  fixture.credential.enabled = true;
+  fixture.policy.generation = "g2";
+  assert.equal((await catalogResponse(fixture.request("key"), fixture.env)).status, 403);
+  fixture.policy.enabled = false;
+  const session = await (await sessionResponse(fixture.request("session"), fixture.env)).json();
+  assert.deepEqual(session.entitlements.catalog.providers, []);
+});
+
+test("catalog and HTTP select only configured grants inside the already chosen policy", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.monthlyBudgetMicros = null;
+  fixture.config.enabled = false;
+  const invalidKey = "oauth/fixture/subscription", validKey = "oauth/fixture/api";
+  fixture.records.set(invalidKey, { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", priority: 10 });
+  fixture.records.set(validKey, { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api", priority: 10 });
+  const original = fixture.env.ACCESS_CONTROL.get;
+  fixture.env.ACCESS_CONTROL.get = () => ({ fetch: async (url, init) => {
+    if (new URL(url).pathname === "/grant-pools/select") {
+      const body = JSON.parse(init.body); fixture.calls.push({ path: "/grant-pools/select", body });
+      return Response.json({ selectedKey: body.candidates[0].key });
+    }
+    return original().fetch(url, init);
+  } });
+  fixture.env.GRANT_CREDENTIALS = { idFromName: (name) => name, get: () => ({ fetch: async (_url, init) => {
+    const { grant } = JSON.parse(init.body);
+    return Response.json({ grant: { ...grant, credentialLineage: "fixture-lineage" }, projection: { credentialGeneration: grant.credentialGeneration, credentialLineage: "fixture-lineage" }, changed: false, migrated: false });
+  } }) };
+  fixture.env.USAGE_QUEUE = { send: async () => {} };
+  fixture.env.BUDGET_LEDGER.get = () => { throw new Error("unmetered HTTP must not read budget status"); };
+  const sent = [], pending = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    sent.push({ url: String(url), authorization: init.headers.get("authorization") });
+    return Response.json({ usage: { input_tokens: 1, output_tokens: 1 } });
+  });
+  const { default: worker } = await import("../index.ts");
+  async function compare(expected, status = 503) {
+    const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+    const offer = catalog.providers.find(({ id }) => id === "openai").offers.find(({ modelId, routeKind, transport, endpoint }) => modelId === "openai/gpt-6-astra" && routeKind === "unified" && transport === "http" && endpoint === "responses");
+    assert.equal(offer.eligible, expected);
+    const response = await worker.fetch(new Request("https://router.example/v1/responses", { method: "POST", headers: fixture.request("key").headers, body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture" }) }), fixture.env, { waitUntil: (promise) => pending.push(promise) });
+    const body = await response.json(); await Promise.all(pending.splice(0));
+    assert.equal(response.status, expected ? 200 : status, JSON.stringify(body));
+    if (!expected) assert.equal(body.error.code, "upstream_grant_pool_unavailable");
+    // Only a pool waiting on a known cooldown is a timed rate limit.
+    if (!expected && status !== 429) assert.equal(response.headers.get("retry-after"), null);
+    if (!expected && status === 429) assert.ok(["59", "60"].includes(response.headers.get("retry-after")), response.headers.get("retry-after"));
+  }
+  await compare(true);
+  assert.deepEqual(fixture.calls.find(({ path }) => path === "/grant-pools/select").body.candidates.map(({ key }) => key), [validKey]);
+  assert.equal(sent.at(-1).authorization, "Bearer fixture-api");
+  // Configuration qualification precedes priority, not the selected policy.
+  fixture.records.get(validKey).priority = 100;
+  await compare(true);
+  fixture.states[validKey] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), windows: [] };
+  await compare(false, 429);
+  delete fixture.states[validKey];
+  fixture.records.get(validKey).enabled = false;
+  await compare(false);
+  fixture.records.delete(validKey);
+  await compare(false);
+  assert.equal(sent.length, 2, "the environment key never replaces the unusable selected pool");
+});
+
+test("merged compact, transcription and hosted-search catalog preserve distinct admission and exact Realtime capacity", async t => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.monthlyBudgetMicros = 10000000;
+  let remaining = 4358143;
+  fixture.env.BUDGET_LEDGER.get = () => ({ fetch: async url => {
+    assert.equal(new URL(url).pathname, "/status", "catalog never reserves or dispatches");
+    return Response.json({ spentMicros: 0, remainingMicros: remaining });
+  } });
+  t.mock.method(globalThis, "fetch", () => assert.fail("catalog must not probe upstream"));
+  for (const [mode, balance, realtimeEligible, searchAdmission] of [
+    ["reserve", 4358143, false, "pricing_required"],
+    ["reserve", 4358144, true, "pricing_required"],
+    ["soft", 4358144, true, "admitted"],
+    ["soft", 1, true, "admitted"],
+  ]) {
+    fixture.policy.budgetMode = mode; remaining = balance;
+    const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+    assert.equal(response.status, 200);
+    const catalog = await response.json();
+    assert.equal(catalog.scope.credentialId, "fixture");
+    const provider = catalog.providers.find(row => row.id === "openai");
+    const realtime = provider.offers.find(row => row.modelId === "openai/gpt-realtime-2.1" && row.route === "/v1/native/openai/v1/realtime" && row.transport === "websocket");
+    assert.ok(realtime); assert.equal(realtime.eligible, realtimeEligible);
+    assert.equal(realtime.affordability, realtimeEligible ? "exact-covered" : "exact-blocked");
+    assert.equal(realtime.reasonCode, realtimeEligible ? undefined : "budget_exhausted");
+    assert.equal(realtime.hostedToolAdmission, undefined);
+    const compact = provider.offers.find(row => row.modelId === "openai/gpt-6-astra" && row.route === "/v1/responses/compact" && row.transport === "http");
+    assert.ok(compact, "manifest composition must retain the merged unary compaction endpoint and registered model");
+    assert.equal(compact.hostedToolAdmission, undefined, "ordinary Responses hosted-tool facts are not compact evidence");
+    const transcription = provider.offers.find(row => row.modelId === "openai/gpt-4o-transcribe" && row.route === "/v1/audio/transcriptions" && row.transport === "http");
+    assert.ok(transcription, "manifest composition must retain the merged transcription endpoint and model");
+    assert.equal(transcription.eligible, mode === "soft");
+    assert.equal(transcription.affordability, mode === "soft" ? "request-dependent" : "exact-blocked");
+    assert.equal(transcription.reasonCode, mode === "soft" ? undefined : "pricing_required");
+    assert.equal(transcription.hostedToolAdmission, undefined);
+    const search = provider.offers.find(row => row.modelId === "openai/gpt-6-astra" && row.route === "/v1/responses" && row.transport === "http");
+    assert.ok(search); assert.equal(search.eligible, true);
+    assert.deepEqual(search.hostedToolAdmission, { version: "clawrouter.hosted-tool-admission.v1", web_search: searchAdmission });
+    assert.deepEqual(provider.models.find(model => model.id === "openai/gpt-6-astra").nativeCapabilities.endpoints.responses.hostedTools, ["web_search"]);
+  }
+});
+
+async function fusionDiscoveryFixture(t, { bindings } = {}) {
   const secret = "fixture-fusion-discovery", session = "b".repeat(64);
   const policy = { enabled: true, generation: "g1", providers: ["openai", "fireworks"], tenantId: "default", monthlyBudgetMicros: 100, requestCostMicros: null, retainRequestContent: false };
   const policies = [{ policyId: "fixture", policy }], states = {}, calls = [];
+  const userRecord = { enabled: true, role: "user", tenantId: "default", groups: [] };
   const connections = policy.providers.map((providerId) => ({ providerId, enabled: true, monthlyBudgetMicros: null }));
   const config = { enabled: true, aggregatorModel: "openai/gpt-6-astra", adviserModels: ["local/fixture-unavailable"] };
   const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };
@@ -266,21 +930,108 @@ async function fusionDiscoveryFixture(t) {
   const env = {
     OPENAI_API_KEY: "fixture-environment-key", CLAWROUTER_LOCAL_AUTH: "enabled",
     POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, records.get(item) ?? null])) : records.get(key) ?? null; },
-      async list({ prefix }) { return { keys: [...records.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })), list_complete: true }; },
+      async get(key, type) {
+        if (Array.isArray(key)) return new Map(key.map((item) => [item, records.get(item) ?? null]));
+        const value = records.get(key) ?? null;
+        return value !== null && type === "stream" ? accessCertsResponse(value, "").body : value;
+      },
+      async list({ prefix }) {
+        assert.equal(prefix, "health/providers/", "discovery only lists saved provider health, never grant credentials");
+        calls.push({ path: "kv-list", body: { prefix } });
+        return { keys: [...records.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })), list_complete: true };
+      },
     },
-    BUDGET_LEDGER: { idFromName() { throw new Error("discovery must not inspect remaining budget"); } },
+    BUDGET_LEDGER: { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
+      assert.equal(new URL(url).pathname, "/status", "discovery only observes balances");
+      return Response.json({ spentMicros: 0, remainingMicros: 100 });
+    } }) },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname, body = JSON.parse(init.body); calls.push({ path, body });
+      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture", credential }, policy: policies.find(entry => entry.policyId === credential.policyId), owner: { email: "fixture@example.com", record: userRecord }, connections, pools: Object.fromEntries(body.providers.filter(({ id }) => !policy.providers.length || policy.providers.includes(id)).map(({ id }) => [id, { keys: [...records.keys()].filter(key => key.startsWith(`oauth/${credential.policyId}/`) && records.get(key).provider === id), states }])) });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
-      if (path === "/policies/resolve") return Response.json({ initialized: true, policies: policies.filter(({ policyId }) => body.policyIds.includes(policyId)), missingPolicyIds: [] });
-      if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: { enabled: true, role: "user", tenantId: "default", groups: [] } }], missingEmails: [] });
-      if (path === "/resolve") return Response.json({ initialized: true, bindings: policies.map(({ policyId }, priority) => ({ policyId, priority, enabled: true, principalType: "user", principalId: "fixture@example.com" })), missingPrincipals: [] });
+      if (path === "/policies/resolve") return Response.json({ initialized: true, policies: policies.filter(({ policyId }) => body.policyIds.includes(policyId)), missingPolicyIds: body.policyIds.filter((id) => !policies.some(({ policyId }) => policyId === id)) });
+      if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: userRecord }], missingEmails: [] });
+      if (path === "/resolve") return Response.json({ initialized: true, bindings: bindings ?? policies.map(({ policyId }, priority) => ({ policyId, priority, enabled: true, principalType: "user", principalId: "fixture@example.com" })), missingPrincipals: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections, missingProviderIds: [] });
       if (path === "/grant-pools/resolve") return Response.json({ keys: [...records.keys()].filter((key) => key.startsWith(`oauth/${body.policyId}/`) && records.get(key).provider === body.providerId), states });
+      if (path === "/grant-pools/attachment") return Response.json({ attached: false, pending: false });
       throw new Error(`discovery unexpectedly mutated authority: ${path}`);
     } }) },
   };
   t.mock.method(globalThis, "fetch", () => { throw new Error("discovery must not refresh credentials or probe upstream"); });
-  return { env, policy, policies, connection: connections[0], connections, records, states, config, calls, request: (mode) => new Request("https://router.example/v1/catalog", { headers: mode === "key" ? { authorization: `Bearer clawrouter-live-fixture-${secret}` } : { cookie: `clawrouter_session=${session}` } }) };
+  return { env, credential, userRecord, policy, policies, connection: connections[0], connections, records, states, config, calls, request: (mode) => new Request("https://router.example/v1/catalog", { headers: mode === "key" ? { authorization: `Bearer clawrouter-live-fixture-${secret}` } : { cookie: `clawrouter_session=${session}` } }) };
 }
+
+test("catalog and OpenAI/Anthropic model lists filter model scopes; null preserves inventory", async t => {
+  const f = await fusionDiscoveryFixture(t), id = "openai/gpt-5.6";
+  f.policy.models = [id];
+  for (const anthropic of [false, true]) {
+    const request = f.request("key"); if (anthropic) request.headers.set("anthropic-version", "2023-06-01");
+    const body = await (await modelsResponse(request, f.env)).json();
+    assert.deepEqual(body.data.map(row => row.id), anthropic ? [] : [id]);
+  }
+  let catalog = await (await catalogResponse(f.request("key"), f.env)).json();
+  assert.deepEqual(catalog.providers.flatMap(row => row.models.map(model => model.id)), [id]);
+  assert.ok(catalog.providers.flatMap(row => row.offers).every(offer => !offer.modelId || offer.modelId === id));
+  f.policy.models = [];
+  assert.deepEqual((await (await modelsResponse(f.request("key"), f.env)).json()).data, []);
+  f.policy.models = null;
+  catalog = await (await catalogResponse(f.request("key"), f.env)).json();
+  assert.ok(catalog.providers.find(row => row.id === "openai").models.length > 1);
+});
+
+test("session discovery and admission can select a later policy that allows the model", async t => {
+  const f = await fusionDiscoveryFixture(t);
+  f.policy.models = ["openai/gpt-5.6"];
+  f.policies.push({ policyId: "later", policy: { ...f.policy, models: ["openai/gpt-5.5"] } });
+  const catalog = await (await catalogResponse(f.request("session"), f.env)).json();
+  const ids = catalog.providers.flatMap(row => row.models.map(model => model.id));
+  assert.ok(ids.includes("openai/gpt-5.6")); assert.ok(ids.includes("openai/gpt-5.5"));
+  const { accessSessionIdentity, verifiedAccessSession } = await import("../access.ts");
+  const selected = await accessSessionIdentity(await verifiedAccessSession(f.request("session"), f.env), f.env, "openai", { provider: snapshot.providers.find(p => p.id === "openai"), endpoint: snapshot.providers.find(p => p.id === "openai").endpoints.find(e => e.id === "responses"), mode: "http", model: "gpt-5.5" });
+  assert.equal(selected.policyId, "later");
+});
+
+test("overlapping allowlists cannot advertise a richer later policy for the same model", async t => {
+  const f = await fusionDiscoveryFixture(t), id = "openai/gpt-5.6";
+  f.policy.models = [id]; f.policy.monthlyBudgetMicros = 0;
+  f.policies.push({ policyId: "richer", policy: { ...f.policy, models: null, monthlyBudgetMicros: 100000 } });
+  const catalog = await (await catalogResponse(f.request("session"), f.env)).json();
+  const offers = catalog.providers.find(p => p.id === "openai").offers.filter(offer => offer.modelId === id);
+  assert.ok(offers.length > 0);
+  assert.ok(offers.every(offer => offer.policyId === "fixture")); assert.ok(offers.filter(offer => offer.endpoint !== "responses_input_tokens").every(offer => !offer.eligible));
+  assert.ok(offers.some(offer => offer.endpoint === "responses_input_tokens" && offer.eligible));
+  assert.deepEqual(catalog.providers.flatMap(p => p.models).find(model => model.id === id).capabilities, ["llm.count_tokens"]);
+});
+
+test("restricted policies cannot advertise opaque gateway offers even with fixed pricing", async t => {
+  const f = await fusionDiscoveryFixture(t), id = "cloudflare-ai-gateway";
+  f.policy.providers = [id]; f.policy.models = [`${id}/auto`]; f.policy.requestCostMicros = 1;
+  Object.assign(f.env, { CLOUDFLARE_ACCOUNT_ID: "fixture-account", CLOUDFLARE_AI_GATEWAY_ID: "fixture-gateway", CLOUDFLARE_API_TOKEN: "synthetic-token" });
+  const catalog = await (await catalogResponse(f.request("key"), f.env)).json();
+  const provider = catalog.providers.find(provider => provider.id === id);
+  assert.ok(provider);
+  assert.ok(provider.offers.filter(offer => offer.endpoint === "universal").every(offer => !offer.eligible && offer.reasonCode === "model_not_allowed"));
+  const { prepareSelected } = await import("../proxy.ts");
+  const compiled = snapshot.providers.find(provider => provider.id === id);
+  const endpoint = compiled.endpoints.find(endpoint => endpoint.id === "universal");
+  await assert.rejects(prepareSelected(new Request("https://router.example"), f.env, { provider: compiled, endpoint, model: null, capability: "gateway.universal", body: [], pathParams: {}, method: "POST" }, {}, { policy: f.policy }), { status: 403, code: "model_not_allowed" });
+});
+
+test("mixed Access policies select the unrestricted owner for opaque and unknown models", async t => {
+  const f = await fusionDiscoveryFixture(t), id = "cloudflare-ai-gateway";
+  f.policy.providers = [id, "openai"]; f.policy.models = [`${id}/auto`, "openai/gpt-5.6"]; f.policy.requestCostMicros = 1;
+  f.policies.push({ policyId: "unrestricted", policy: { ...f.policy, models: null } });
+  Object.assign(f.env, { CLOUDFLARE_ACCOUNT_ID: "fixture-account", CLOUDFLARE_AI_GATEWAY_ID: "fixture-gateway", CLOUDFLARE_API_TOKEN: "synthetic-token" });
+  const { accessSessionIdentity, verifiedAccessSession } = await import("../access.ts");
+  const session = await verifiedAccessSession(f.request("session"), f.env);
+  const gateway = snapshot.providers.find(provider => provider.id === id);
+  const opaque = await accessSessionIdentity(session, f.env, id, { provider: gateway, endpoint: gateway.endpoints.find(endpoint => endpoint.id === "universal"), mode: "http" });
+  assert.equal(opaque.policyId, "unrestricted");
+  const openai = snapshot.providers.find(provider => provider.id === "openai");
+  const passthrough = await accessSessionIdentity(session, f.env, "openai", { provider: openai, endpoint: openai.endpoints.find(endpoint => endpoint.id === "responses"), mode: "http", model: "unknown-future-model" });
+  assert.equal(passthrough.policyId, "unrestricted");
+  const catalog = await (await catalogResponse(f.request("session"), f.env)).json();
+  const offers = catalog.providers.find(provider => provider.id === id).offers.filter(offer => offer.endpoint === "universal");
+  assert.ok(offers.length > 0); assert.ok(offers.every(offer => offer.eligible && offer.policyId === "unrestricted"));
+});

@@ -1,7 +1,12 @@
-import { googleField, googleInt32 } from "./google-protocol.ts";
+import { googleField, googleInt32, googleServiceTier } from "./google-protocol.ts";
+import { anthropicModifiers, type AnthropicModifiers } from "./anthropic-pricing.ts";
 
 export interface UsageTokens {
-  serviceTier?: string;
+  reasoning?: number | null; // Subset of output, never an additional billable category.
+  webSearchRequests?: number | null; // Anthropic cumulative usage, not content-block count.
+  image?: { textInput: number; imageInput: number; imageOutput: number };
+  serviceTier?: string | null;
+  anthropic?: AnthropicModifiers;
   input: number | null;
   output: number | null;
   total: number | null;
@@ -10,32 +15,71 @@ export interface UsageTokens {
   cacheWrite5m: number | null;
   cacheWrite1h: number | null;
   billable?: false;
+  billedTokens?: { input: number | null; output: number | null };
 }
 
-export function extractUsageTokens(value: unknown): UsageTokens | null {
+export interface UsageTokenContext { providerId: string; requestFormat: string; responseFormat: string; pricedModel?: string; googleCandidates?: number | null }
+
+export function extractUsageTokens(value: unknown, context?: Readonly<UsageTokenContext>): UsageTokens | null {
   const root = record(value);
   if (root && ("usageMetadata" in root || "usage_metadata" in root)) return googleUsageTokens(googleField(root, "usageMetadata", "usage_metadata"));
-  const usage = usageRecord(root);
+  const usage = root?.type === "message-end" ? record(record(root.delta)?.usage) : usageRecord(root);
+  if (usage && ("tokens" in usage || "billed_units" in usage)) return cohereUsageTokens(usage);
   if (!usage) return null;
   const reportedInput = pickNumber(usage, "input_tokens", "prompt_tokens", "inputTokens");
   const output = pickNumber(usage, "output_tokens", "completion_tokens", "outputTokens");
   const details = record(usage.prompt_tokens_details ?? usage.input_tokens_details);
-  const cached = details ? pickNumber(details, "cached_tokens", "cache_read_input_tokens") : pickNumber(usage, "cache_read_input_tokens");
+  const outputDetails = record(usage.output_tokens_details ?? usage.completion_tokens_details);
+  const reportedReasoning = outputDetails && Object.hasOwn(outputDetails, "reasoning_tokens")
+    ? subsetCounter(outputDetails.reasoning_tokens, output) : undefined;
+  const inclusivePrompt = "prompt_tokens" in usage;
+  const cached = inclusivePrompt ? promptCachedTokens(usage, details, reportedInput, context)
+    : details ? pickNumber(details, "cached_tokens", "cache_read_input_tokens") : pickNumber(usage, "cache_read_input_tokens");
   const cacheCreation = record(usage.cache_creation);
   const cacheWrite5m = cacheCreation ? pickNumber(cacheCreation, "ephemeral_5m_input_tokens") : pickNumber(usage, "cache_creation_ephemeral_5m_input_tokens");
   const cacheWrite1h = cacheCreation ? pickNumber(cacheCreation, "ephemeral_1h_input_tokens") : pickNumber(usage, "cache_creation_ephemeral_1h_input_tokens");
   const cacheWrite = (details ? pickNumber(details, "cache_write_tokens") : null) ?? pickNumber(usage, "cache_creation_input_tokens")
     ?? (cacheWrite5m != null || cacheWrite1h != null ? (cacheWrite5m ?? 0) + (cacheWrite1h ?? 0) : null);
-  // Anthropic's top-level cache buckets exclude ordinary input; OpenAI's details
-  // are already included. Pricing and usage ledgers both consume inclusive input.
-  const input = reportedInput == null ? null : reportedInput + (details ? 0 : (cached ?? 0) + (cacheWrite ?? 0));
+  // Anthropic's top-level buckets exclude ordinary input. Chat prompt totals
+  // already include cache hits, whether reported in details or top-level fields.
+  const input = reportedInput == null ? null : reportedInput + (details || inclusivePrompt ? 0 : (cached ?? 0) + (cacheWrite ?? 0));
   const total = pickNumber(usage, "total_tokens", "totalTokens") ?? (input != null || output != null ? (input ?? 0) + (output ?? 0) : null);
   // Anthropic reports usage for classifier refusals before any output, but does
   // not bill it. Keep observed counts separate from the settlement decision.
   const unbilled = root?.type === "message" && root.stop_reason === "refusal"
     && Array.isArray(root.content) && root.content.length === 0 && output === 0;
-  const serviceTier = extractServiceTier(record(root?.response) ?? root);
-  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(serviceTier ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
+  const modifiers = anthropicModifiers(usage);
+  const serviceTier = modifiers.serviceTier !== undefined ? modifiers.serviceTier : extractServiceTier(record(root?.response) ?? root);
+  const webSearchRequests = searchRequests(record(usage.server_tool_use)?.web_search_requests);
+  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(reportedReasoning !== undefined ? { reasoning: reportedReasoning } : {}), ...(root?.type === "message" && Object.hasOwn(usage, "server_tool_use") ? { webSearchRequests } : {}), ...(Object.keys(modifiers).length ? { anthropic: modifiers } : {}), ...(serviceTier !== undefined ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
+}
+
+// Cohere reports observed context separately from the units it bills. Missing
+// billed counters cannot borrow observed counts or imply a free response.
+function cohereUsageTokens(usage: Record<string, unknown>): UsageTokens {
+  const observed = record(usage.tokens), billed = record(usage.billed_units);
+  const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const input = count(observed?.input_tokens), output = count(observed?.output_tokens);
+  const total = input !== null && output !== null && Number.isSafeInteger(input + output) ? input + output : null;
+  return { input, output, total, cached: null, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null,
+    billedTokens: { input: count(billed?.input_tokens), output: count(billed?.output_tokens) } };
+}
+
+function promptCachedTokens(usage: Record<string, unknown>, details: Record<string, unknown> | null, input: number | null, context?: Readonly<UsageTokenContext>): number | null {
+  // StepFun standard Chat reports a cache-hit subset at usage.cached_tokens.
+  // Neither the response's model field nor another product grants this meaning.
+  const stepfun = (context?.providerId === "stepfun" || context?.providerId === "stepfun-cn")
+    && context.requestFormat === "openai.chat_completions" && context.responseFormat === "openai.chat_completions";
+  const hits = [details?.cached_tokens, details?.cache_read_input_tokens, usage.prompt_cache_hit_tokens,
+    ...(stepfun ? [usage.cached_tokens] : [])].filter(value => value !== undefined);
+  const prompt = usage.prompt_tokens, miss = usage.prompt_cache_miss_tokens;
+  // Conflicting or invalid cache evidence cannot establish a discount. Keep the
+  // observed inclusive input and let pricing charge it at the full input rate.
+  if (input == null || !Number.isSafeInteger(prompt) || prompt !== input || !hits.length) return null;
+  if (hits.some(hit => typeof hit !== "number" || !Number.isSafeInteger(hit) || hit < 0 || hit > input || hit !== hits[0])) return null;
+  const hit = hits[0] as number;
+  if (miss !== undefined && (typeof miss !== "number" || !Number.isSafeInteger(miss) || miss < 0 || miss !== input - hit)) return null;
+  return hit;
 }
 
 function googleUsageTokens(value: unknown): UsageTokens | null {
@@ -47,7 +91,11 @@ function googleUsageTokens(value: unknown): UsageTokens | null {
   const candidates = counter("candidatesTokenCount", "candidates_token_count"), thoughts = counter("thoughtsTokenCount", "thoughts_token_count");
   const total = counter("totalTokenCount", "total_token_count");
   if (input == null || cached == null || candidates == null || thoughts == null || total == null) return null;
-  return { input, output: candidates + thoughts, total, cached, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null };
+  const tier = googleField(value, "serviceTier", "service_tier");
+  // Absent/null ProtoJSON fields are unset; null in normalized usage instead
+  // records an explicit invalid tier so accounting cannot assume Standard.
+  return { input, output: candidates + thoughts, total, cached, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null, reasoning: thoughts,
+    ...(tier == null ? {} : { serviceTier: googleServiceTier(tier) }) };
 }
 
 export type ResponseOutcome = "success" | "provider_error" | null;
@@ -59,47 +107,136 @@ export const usageInspectionLimit = 2 * 1024 * 1024;
 export function responseOutcome(value: unknown): ResponseOutcome {
   const root = record(value);
   if (!root) return null;
-  if (root.error || root.type === "error" || root.type === "response.failed") return "provider_error";
+  if (root.error || root.type === "error" || root.type === "response.failed" || root.type === "response.cancelled") return "provider_error";
+  if (root.type === "message-end") {
+    const reason = record(root.delta)?.finish_reason;
+    return typeof reason === "string" && ["COMPLETE", "STOP_SEQUENCE", "MAX_TOKENS", "TOOL_CALL"].includes(reason) ? "success" : "provider_error";
+  }
   if (root.type === "response.completed" || root.type === "response.incomplete") return "success";
   const response = record(root.response) ?? (root.object === "response" ? root : null);
-  return response?.status === "failed" ? "provider_error" : response?.status === "completed" || response?.status === "incomplete" ? "success" : null;
+  return response?.status === "failed" || response?.status === "cancelled" ? "provider_error" : response?.status === "completed" || response?.status === "incomplete" ? "success" : null;
 }
 
-export function extractSseUsageTokens(text: string): UsageTokens | null {
-  const inspector = createSseUsageInspector();
+export interface ResponsesObservation {
+  id: string;
+  status: "queued" | "in_progress" | "completed" | "incomplete" | "failed" | "cancelled";
+  terminal: boolean;
+  tokens: UsageTokens | null;
+}
+
+// Delivery EOF/error is not a generation status. Only a validated protocol
+// document can supply these facts; the streaming projector calls this at its
+// complete JSON/document or delimited SSE boundary.
+export function responsesObservation(value: unknown): ResponsesObservation | null {
+  const root = record(value);
+  if (!root) return null;
+  const event = typeof root.type === "string" && root.type.startsWith("response.") ? root.type.slice(9) : null;
+  const response = event ? record(root.response) : root.object === "response" ? root : null;
+  const id = response?.id, status = response?.status;
+  const statuses = ["queued", "in_progress", "completed", "incomplete", "failed", "cancelled"];
+  if (!response || typeof id !== "string" || !id || new TextEncoder().encode(id).length > 256 || !statuses.includes(status as string)) return null;
+  if (event && statuses.includes(event) && event !== status) return null;
+  return { id, status: status as ResponsesObservation["status"], terminal: status !== "queued" && status !== "in_progress", tokens: extractUsageTokens(root) };
+}
+
+export function extractSseUsageTokens(text: string, context?: Readonly<UsageTokenContext>): UsageTokens | null {
+  const inspector = createSseUsageInspector(undefined, undefined, context);
   inspector.push(new TextEncoder().encode(text));
   return inspector.result().tokens;
 }
 
-export function createSseUsageInspector() {
+export type SseUsageEvidence = { kind: "data"; value: unknown } | { kind: "done" } | { kind: "error"; value?: unknown } | { kind: "invalid" } | { kind: "unavailable" };
+
+function rejectionOnlyEvidence(evidence: SseUsageEvidence, context?: Readonly<UsageTokenContext>): boolean {
+  const root = evidence.kind === "data" || evidence.kind === "error" ? record(evidence.value) : null;
+  // A failure is not necessarily a rejection before generation. Usage and
+  // nonempty output take precedence over its error/terminal classification.
+  const outputs = [root?.output, record(root?.response)?.output];
+  if (root && (extractUsageTokens(root, context) || outputs.some(output => Array.isArray(output) ? output.length > 0 : output != null))) return false;
+  return evidence.kind === "error" || evidence.kind === "done" || root?.type === "message_stop" || responseOutcome(root) === "provider_error";
+}
+
+export function createSseUsageInspector(revokeRejection?: () => void, acceptJson?: (value: unknown, failed?: boolean) => void, context?: Readonly<UsageTokenContext>, observeFrame?: (frame: SseUsageEvidence) => void) {
+  const accumulator = createSseUsageAccumulator(revokeRejection, context);
+  function evidence(frame: string | null): SseUsageEvidence | null {
+    if (frame === null) return { kind: "unavailable" };
+    const lines = frame.split("\n");
+    const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
+    const error = lines.some(line => /^event:\s*error\s*$/.test(line));
+    if (error) {
+      try { return { kind: "error", value: JSON.parse(data) }; }
+      catch { return { kind: "error" }; }
+    }
+    if (!data) return null;
+    if (data === "[DONE]") return { kind: "done" };
+    try { return { kind: "data", value: JSON.parse(data) }; }
+    catch { return { kind: "invalid" }; }
+  }
+  const frames = createSseFrames(frame => {
+    const next = evidence(frame);
+    if (next) { accumulator.accept(next); observeFrame?.(next); }
+    if (next?.kind === "data") acceptJson?.(next.value);
+    else if (next?.kind === "error" || next?.kind === "invalid" || next?.kind === "unavailable") acceptJson?.(undefined, true);
+  });
+  return {
+    push: frames.push,
+    end() {
+      if (!acceptJson && !observeFrame) return;
+      if (frames.overflowed()) observeFrame?.({ kind: "unavailable" });
+      if (frames.overflowed() || frames.pending()?.split("\n").some(line => line.trim() && !line.startsWith(":"))) acceptJson?.(undefined, true);
+    },
+    result(ended = true): UsageInspection {
+      if (revokeRejection) accumulator.unfinished(evidence(frames.pending()));
+      return accumulator.result(ended, frames.overflowed());
+    },
+  };
+}
+
+// Both bounded frame parsing and the Responses scalar projection feed one
+// accounting state owner; parser limits cannot invent a terminal provider error.
+export function createSseUsageAccumulator(revokeRejection?: () => void, context?: Readonly<UsageTokenContext>) {
+  let provisionalRejection = !!revokeRejection;
+  function continuedWork() {
+    if (!provisionalRejection) return;
+    provisionalRejection = false; revokeRejection?.();
+    // The original operation retains its error status. Resume usage collection
+    // only for this first-event rejection; normal terminal semantics stay fixed.
+    outcome = null; terminalTokens = null;
+  }
   let found: UsageTokens | null = null, terminalTokens: UsageTokens | null = null;
   let message: Record<string, unknown> | null = null, messageUsage: Record<string, unknown> | null = null;
   let messageDeltaSeen = false, uncertain = false;
-  let protocol: "message" | "response" | "chat" | null = null;
+  let protocol: "message" | "response" | "chat" | "cohere" | null = null;
   let outcome: ResponseOutcome = null, chatTier: string | undefined;
-  function inspect(frame: string | null) {
-    if (frame === null) {
+  function accept(evidence: SseUsageEvidence) {
+    const root = evidence.kind === "data" || evidence.kind === "error" ? record(evidence.value) : null;
+    // End markers carry no content or usage; later work still revokes rejection.
+    if (provisionalRejection && !rejectionOnlyEvidence(evidence, context)) continuedWork();
+    if (evidence.kind === "unavailable") {
       // Skipped oversized evidence is not proof of provider failure. A later
       // bounded terminal can restore authoritative outcome and usage.
       uncertain = true; found = null; messageUsage = null;
       return;
     }
-    const lines = frame.split("\n");
-    const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
-    if (lines.some(line => /^event:\s*error\s*$/.test(line))) { outcome = "provider_error"; return; }
-    if (!data || outcome !== null) return;
-    if (data === "[DONE]") {
-      if (protocol === "message" || protocol === "response") { outcome = "provider_error"; return; }
+    if (evidence.kind === "error") {
+      // Preserve the normal event:error precedence. Only the provisional
+      // rejection path can resume accounting from a usage-bearing error event.
+      if (revokeRejection && !provisionalRejection && outcome === null) terminalTokens = extractUsageTokens(root, context);
+      outcome = "provider_error"; return;
+    }
+    if (outcome !== null) return;
+    if (evidence.kind === "done") {
+      if (protocol === "message" || protocol === "response" || protocol === "cohere") { outcome = "provider_error"; return; }
       outcome = "success";
       terminalTokens = found && chatTier ? { ...found, serviceTier: chatTier } : found;
       return;
     }
-    let root: Record<string, unknown> | null;
-    try { root = record(JSON.parse(data)); } catch { if (protocol) outcome = "provider_error"; found = null; return; }
+    if (evidence.kind === "invalid") { if (protocol) outcome = "provider_error"; found = null; return; }
     if (!root) { if (protocol) outcome = "provider_error"; found = null; return; }
     const terminal = responseOutcome(root);
-    if (terminal) { outcome = terminal; terminalTokens = extractUsageTokens(root); return; }
+    if (terminal) { outcome = terminal; terminalTokens = extractUsageTokens(root, context); return; }
     if (typeof root.type === "string" && root.type.startsWith("response.")) protocol = "response";
+    if (typeof root.type === "string" && /^(message|content|tool-call|tool-plan|citation)-/.test(root.type)) protocol = "cohere";
     if (root.object === "chat.completion.chunk") {
       protocol = "chat";
       chatTier = extractServiceTier(root) ?? chatTier;
@@ -119,7 +256,7 @@ export function createSseUsageInspector() {
       if (delta) {
         // Cumulative deltas omit unchanged counters. Merge before normalizing
         // so disjoint cache input is added once, never once per frame.
-        const updates = Object.fromEntries(Object.entries(delta).filter(([, value]) => value != null));
+        const updates = Object.fromEntries(Object.entries(delta).filter(([key, value]) => value != null && !(key === "inference_geo" && value === "not_available")));
         const creation = record(updates.cache_creation);
         if (creation) updates.cache_creation = { ...record(messageUsage.cache_creation), ...creation };
         Object.assign(messageUsage, updates);
@@ -128,26 +265,36 @@ export function createSseUsageInspector() {
       if (message) message.content = undefined;
     } else if (root.type === "message_stop") {
       outcome = "success";
-      terminalTokens = messageUsage && messageDeltaSeen ? extractUsageTokens({ ...message, usage: messageUsage }) : null;
+      terminalTokens = messageUsage && messageDeltaSeen ? extractUsageTokens({ ...message, usage: messageUsage }, context) : null;
     } else {
-      const tokens = extractUsageTokens(root);
+      const tokens = extractUsageTokens(root, context);
       // A malformed final native snapshot invalidates an earlier partial one.
       // Ordinary content-only chunks still retain the latest usage snapshot.
       found = root && ("usageMetadata" in root || "usage_metadata" in root) ? tokens : tokens ?? found;
     }
   }
-  const frames = sseFrames(inspect);
   return {
-    push: frames.push,
-    result(ended = true): UsageInspection {
-      return { tokens: outcome ? terminalTokens : protocol || !ended ? null : found, outcome: outcome ?? (ended && protocol && !uncertain && !frames.overflowed() ? "provider_error" : null) };
+    accept,
+    unfinished(evidence: SseUsageEvidence | null) {
+      // EOF/cancellation cannot certify unfinished nonempty data as error-only.
+      // Never accept its usage or terminal facts without an SSE boundary.
+      if (provisionalRejection && evidence && !rejectionOnlyEvidence(evidence, context)) {
+        continuedWork(); uncertain = true; found = null; messageUsage = null;
+      }
+    },
+    result(ended = true, overflowed = false): UsageInspection {
+      // An oversized trailing frame cannot certify that delivered bytes were
+      // error-only; retain conservative billing when bounded inspection fails.
+      if (overflowed) continuedWork();
+      return { tokens: outcome ? terminalTokens : protocol || !ended ? null : found, outcome: outcome ?? (ended && protocol && !uncertain && !overflowed ? "provider_error" : null) };
     },
   };
 }
 
-function sseFrames(consume: (frame: string | null) => void) {
+export function createSseFrames(consume: (frame: string | null) => void, fatalUtf8 = false) {
   let buffer = new Uint8Array(8192), length = 0, lineLength = 0, overflow = false, skipLf = false;
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: fatalUtf8 });
+  const decode = () => { try { return decoder.decode(buffer.subarray(0, length)); } catch { return null; } };
   function append(bytes: Uint8Array) {
     if (overflow) return;
     if (length + bytes.length > usageInspectionLimit) { overflow = true; length = 0; return; }
@@ -159,6 +306,7 @@ function sseFrames(consume: (frame: string | null) => void) {
   }
   return {
     overflowed: () => overflow,
+    pending: () => overflow ? null : decode(),
     push(bytes: Uint8Array) {
       let start = 0;
       for (let index = 0; index < bytes.length; index++) {
@@ -166,7 +314,7 @@ function sseFrames(consume: (frame: string | null) => void) {
         if (skipLf) { skipLf = false; if (byte === 10) { start = index + 1; continue; } }
         if (byte !== 10 && byte !== 13) continue;
         append(bytes.subarray(start, index)); lineLength += index - start;
-        if (lineLength === 0) { consume(overflow ? null : decoder.decode(buffer.subarray(0, length))); length = 0; overflow = false; }
+        if (lineLength === 0) { consume(overflow ? null : decode()); length = 0; overflow = false; }
         else append(new Uint8Array([10]));
         lineLength = 0; skipLf = byte === 13; start = index + 1;
       }
@@ -179,6 +327,13 @@ function messageCounters(usage: Record<string, unknown> | null): Record<string, 
   if (!usage) return null;
   // Stream history is unbounded; retain only the finite cumulative counter set.
   const counters = Object.fromEntries(["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_ephemeral_5m_input_tokens", "cache_creation_ephemeral_1h_input_tokens"].filter(key => numeric(usage[key]) != null).map(key => [key, usage[key]]));
+  // Explicit malformed snapshots invalidate an older valid count; omitted
+  // unchanged counters retain it. Never retain tool inputs or result content.
+  const serverTools = record(usage.server_tool_use);
+  if (Object.hasOwn(usage, "server_tool_use") && (!serverTools || Object.hasOwn(serverTools, "web_search_requests"))) {
+    counters.server_tool_use = { web_search_requests: searchRequests(serverTools?.web_search_requests) };
+  }
+  for (const key of ["speed", "inference_geo", "service_tier"]) if (Object.hasOwn(usage, key)) counters[key] = usage[key] === null ? null : typeof usage[key] === "string" && usage[key].length <= 64 ? usage[key] : "invalid";
   const creation = record(usage.cache_creation);
   if (creation) counters.cache_creation = Object.fromEntries(["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"].filter(key => numeric(creation[key]) != null).map(key => [key, creation[key]]));
   return counters;
@@ -203,6 +358,14 @@ function pickNumber(value: Record<string, unknown>, ...keys: string[]): number |
     if (number != null) return number;
   }
   return null;
+}
+
+function subsetCounter(value: unknown, inclusive: number | null): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && inclusive !== null && value <= inclusive ? value : null;
+}
+
+function searchRequests(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function numeric(value: unknown): number | null {

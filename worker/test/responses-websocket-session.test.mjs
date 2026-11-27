@@ -1,36 +1,10 @@
+import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ResponsesWebSocketSession } from "../responses-websocket-session.ts";
+import { ResponsesOperationAborted } from "../responses-websocket-session.ts";
+import { createResponsesToolEvidence } from "../responses-tool-evidence.ts";
 
-class Socket extends EventTarget {
-  sent = [];
-  closed = false;
-  send(value) { if (this.closed) throw new Error("closed"); this.sent.push(value); }
-  receive(value) { const event = new Event("message"); event.data = typeof value === "object" && !(value instanceof Uint8Array) ? JSON.stringify(value) : value; this.dispatchEvent(event); }
-  close() { if (this.closed) return; this.closed = true; this.dispatchEvent(new Event("close")); }
-}
-const tick = () => new Promise((resolve) => setImmediate(resolve));
-function fixture(t, options = {}) {
-  const client = new Socket(), upstream = new Socket(), admitted = [], settled = [], pending = [];
-  const session = new ResponsesWebSocketSession(client, {
-    limits: options.limits,
-    waitUntil(promise) { pending.push(promise); },
-    async admit(body, lane, requestId, pin, signal) {
-      const index = admitted.length;
-      admitted.push({ body, lane, requestId, pin, signal });
-      if (options.admit) await options.admit(index, body);
-      return { pin: "fixture-route:grant-1", payload: JSON.stringify({ type: "response.create", ...body, ...(lane ? { stream_id: lane } : {}) }), timeoutMs: 600_000, connect: options.connect ?? (async () => upstream), settle: async (outcome, terminal) => { settled.push({ index, outcome, terminal }); await options.settle?.(); } };
-    },
-  });
-  t.after(async () => { session.close(); await Promise.all(pending); });
-  return { client, upstream, admitted, settled, session, pending };
-}
-const create = (lane, extra = {}) => ({ type: "response.create", model: "fixture-model", input: "hello", ...(lane === undefined ? {} : { stream_id: lane }), ...extra });
-const complete = (lane, id = "response-1", extra = {}) => ({ type: "response.completed", ...(lane === undefined ? {} : { stream_id: lane }), response: { id, service_tier: "priority", usage: { input_tokens: 1, output_tokens: 2 }, ...extra } });
-function respond(f, lane, id = "response-1") {
-  f.upstream.receive({ type: "response.created", ...(lane === undefined ? {} : { stream_id: lane }), response: { id } });
-  f.upstream.receive(complete(lane, id));
-}
+import { tick, fixture, create, complete, respond } from "./responses-websocket-fixture.mjs";
 
 test("one socket multiplexes lanes, preserves FIFO and response IDs, and accounts every prewarm", async (t) => {
   const f = fixture(t);
@@ -74,6 +48,25 @@ test("admission is fresh at dispatch and a denied queued turn never reaches upst
   assert.equal(f.upstream.sent.length, 2);
 });
 
+test("expiry blocks queued WebSocket turns while the dispatched turn finishes", async t => {
+  const { proxyCredentialFailure } = await import("../proxy-auth.ts");
+  const deadline = Date.parse("2026-10-19T00:00:00Z");
+  let now = deadline - 1;
+  t.mock.method(Date, "now", () => now);
+  const key = { enabled: true, policyGeneration: "v1", expiresAt: new Date(deadline).toISOString() };
+  const entry = { policy: { enabled: true, generation: "v1" } };
+  const f = fixture(t, { admit: async () => { const error = proxyCredentialFailure(key, entry); if (error) throw error; } });
+  f.client.receive(create());
+  f.client.receive(create());
+  await tick();
+  now = deadline;
+  respond(f);
+  await tick();
+  assert.equal(f.upstream.sent.length, 1);
+  assert.equal(f.settled.length, 1);
+  assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "proxy_key_expired");
+});
+
 test("active responses, named lanes and aggregate queued bytes are independently bounded", async (t) => {
   const f = fixture(t, { limits: { active: 2, lanes: 3, bufferedBytes: 400, frameBytes: 300 } });
   f.client.receive(create("a")); f.client.receive(create("b")); f.client.receive(create("c"));
@@ -102,6 +95,7 @@ test("upstream errors and metadata remain exact and completed reservations settl
   const failure = { type: "error", status: 400, stream_id: "lane", error: { code: "previous_response_not_found", message: "fixture" }, headers: { "retry-after": "1" } };
   f.upstream.receive(failure);
   f.upstream.receive(failure);
+  await tick();
   f.upstream.close();
   await tick();
   assert.equal(f.client.sent[0], JSON.stringify(metadata));
@@ -119,8 +113,10 @@ test("close during admission releases the late reservation without sending or re
   release();
   await tick();
   assert.equal(f.upstream.sent.length, 0);
-  assert.deepEqual(f.settled.map((item) => item.outcome), ["not_sent"]);
+  assert.deepEqual(f.settled.map(({ outcome, sent }) => ({ outcome, sent })), [{ outcome: "client_disconnect", sent: false }]);
   assert.equal(f.admitted[0].signal.aborted, true);
+  assert.ok(f.admitted[0].signal.reason instanceof ResponsesOperationAborted);
+  assert.equal(f.admitted[0].signal.reason.cause, "client_disconnect");
 });
 
 test("a delayed terminal cannot bind or settle a subsequent same-lane operation", async (t) => {
@@ -139,6 +135,244 @@ test("a delayed terminal cannot bind or settle a subsequent same-lane operation"
   assert.deepEqual(f.settled.map((item) => item.terminal.response.id), ["first", "second"]);
 });
 
+test("next same-lane admission overlaps settlement but send waits for success", async t => {
+  const gate = Promise.withResolvers();
+  t.after(() => gate.resolve());
+  const f = fixture(t, { settle: index => index === 0 ? gate.promise : undefined });
+  f.client.receive(create("lane")); f.client.receive(create("lane")); f.client.receive(create("lane"));
+  await tick();
+  assert.equal(f.admitted.length, 1);
+  respond(f, "lane", "first"); await tick();
+  assert.equal(f.admitted.length, 2); assert.equal(f.upstream.sent.length, 1);
+  assert.deepEqual(f.settled.map(({ index, outcome }) => ({ index, outcome })), [{ index: 0, outcome: "completed" }]);
+  gate.resolve(); await tick();
+  assert.equal(f.upstream.sent.length, 2);
+  respond(f, "lane", "second"); await tick();
+  assert.equal(f.admitted.length, 3); assert.equal(f.upstream.sent.length, 3);
+  respond(f, "lane", "third"); await tick();
+  assert.deepEqual(f.settled.map(item => item.terminal.response.id), ["first", "second", "third"]);
+});
+
+test("a lane waiting for prior settlement does not block another lane's queued admission or send", async t => {
+  const admission = Promise.withResolvers(), settlement = Promise.withResolvers(), checked = [];
+  t.after(() => { admission.resolve(); settlement.resolve(); });
+  const f = fixture(t, {
+    admit: index => index === 1 ? admission.promise : undefined,
+    settle: index => index === 0 ? settlement.promise : undefined,
+    beforeSend: index => checked.push(index),
+  });
+  f.client.receive(create("a")); f.client.receive(create("a")); await tick();
+  respond(f, "a", "first"); await tick();
+  assert.deepEqual(f.admitted.map(item => item.lane), ["a", "a"]);
+  f.client.receive(create("b")); await tick();
+  assert.equal(f.admitted.length, 2, "B queues behind A's held admission");
+  admission.resolve(); await tick();
+  assert.deepEqual(f.admitted.map(item => item.lane), ["a", "a", "b"]);
+  assert.deepEqual(f.upstream.sent.map(value => JSON.parse(value).stream_id), ["a", "b"]);
+  assert.deepEqual(checked, [0, 2], "A's next preflight still waits for settlement");
+  respond(f, "b", "parallel"); await tick();
+  assert.deepEqual(f.settled.map(item => item.index), [0, 2]);
+  settlement.resolve(); await tick();
+  assert.deepEqual(f.upstream.sent.map(value => JSON.parse(value).stream_id), ["a", "b", "a"]);
+  assert.deepEqual(checked, [0, 2, 1]);
+  respond(f, "a", "second"); await tick();
+  assert.deepEqual(f.settled.map(item => item.terminal.response.id), ["first", "parallel", "second"]);
+});
+
+test("a create waiting for same-lane settlement still consumes the buffer limit", async t => {
+  const gate = Promise.withResolvers();
+  t.after(() => gate.resolve());
+  const f = fixture(t, { limits: { buffered: 2 }, settle: index => index === 0 ? gate.promise : undefined });
+  f.client.receive(create("a")); await tick();
+  f.client.receive(create("a")); f.client.receive(create("a"));
+  respond(f, "a", "first"); await tick();
+  assert.equal(f.admitted.length, 2); assert.equal(f.upstream.sent.length, 1);
+  f.client.receive(create("b")); await tick();
+  assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "websocket_queue_full");
+  assert.equal(f.admitted.length, 2);
+  gate.resolve(); await tick();
+  f.client.receive(create("b")); await tick();
+  assert.equal(f.admitted.length, 3); assert.equal(f.upstream.sent.length, 3);
+});
+
+for (const denied of [false, true]) test(`pipelined beforeSend waits for settlement${denied ? " and denies unsent exactly once without closing" : " before sending"}`, async t => {
+  const gate = Promise.withResolvers(), checked = [];
+  let settled = false;
+  t.after(() => gate.resolve());
+  const f = fixture(t, {
+    settle: async index => { if (index === 0) { await gate.promise; settled = true; } },
+    beforeSend: index => {
+      checked.push(index);
+      if (index === 1) {
+        assert.equal(settled, true);
+        if (denied) throw Object.assign(new Error("budget exhausted"), { status: 402, code: "budget_exhausted" });
+      }
+    },
+  });
+  f.client.receive(create("lane")); f.client.receive(create("lane")); await tick();
+  respond(f, "lane", "first"); await tick();
+  assert.equal(f.admitted.length, 2);
+  assert.deepEqual(checked, [0]);
+  assert.equal(f.upstream.sent.length, 1);
+  gate.resolve(); await tick();
+  assert.deepEqual(checked, [0, 1]);
+  assert.equal(f.client.closed, false); assert.equal(f.upstream.closed, false);
+  assert.equal(f.upstream.sent.length, denied ? 1 : 2);
+  if (denied) {
+    assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "budget_exhausted");
+    assert.deepEqual(f.settled.filter(item => item.index === 1).map(({ outcome, sent, executionStarted }) => ({ outcome, sent, executionStarted })), [{ outcome: "error", sent: false, executionStarted: false }]);
+    f.client.receive(create("lane")); await tick();
+    assert.equal(f.upstream.sent.length, 2);
+    respond(f, "lane", "third"); await tick();
+    assert.equal(f.settled.filter(item => item.index === 1).length, 1);
+  } else { respond(f, "lane", "second"); await tick(); }
+});
+
+for (const failed of [false, true]) test(`an unsent denial gates the next same-lane send until settlement ${failed ? "fails and closes" : "succeeds"}`, async t => {
+  const gate = Promise.withResolvers();
+  t.after(() => gate.resolve());
+  const f = fixture(t, {
+    settle: index => index === 1 ? gate.promise : undefined,
+    beforeSend: index => {
+      if (index === 1) throw Object.assign(new Error("budget exhausted"), { status: 402, code: "budget_exhausted" });
+    },
+  });
+  f.client.receive(create("lane")); f.client.receive(create("lane")); f.client.receive(create("lane"));
+  await tick(); respond(f, "lane", "first"); await tick();
+  assert.equal(f.admitted.length, 3);
+  assert.equal(f.upstream.sent.length, 1);
+  assert.deepEqual(f.settled.map(({ index, outcome, sent }) => ({ index, outcome, sent })), [
+    { index: 0, outcome: "completed", sent: true }, { index: 1, outcome: "error", sent: false },
+  ]);
+  if (failed) gate.reject(new Error("fixture accounting failure")); else gate.resolve();
+  await tick();
+  assert.equal(f.upstream.sent.length, failed ? 1 : 2);
+  assert.equal(f.client.closed, failed);
+  if (failed) {
+    assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "accounting_unavailable");
+    assert.equal(f.settled[2].outcome, "router_error");
+    assert.equal(f.settled[2].sent, false);
+  } else { respond(f, "lane", "third"); await tick(); }
+  assert.equal(f.settled.length, 3);
+});
+
+test("failed settlement closes an admitted next turn before send and settles its reservation once", async t => {
+  const gate = Promise.withResolvers();
+  t.after(() => gate.resolve());
+  const f = fixture(t, { settle: index => index === 0 ? gate.promise : undefined });
+  f.client.receive(create()); f.client.receive(create()); await tick();
+  respond(f, undefined, "first"); await tick();
+  assert.equal(f.admitted.length, 2); assert.equal(f.upstream.sent.length, 1);
+  gate.reject(new Error("fixture accounting failure")); await tick();
+  assert.equal(f.client.closed, true); assert.equal(f.upstream.closed, true);
+  assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "accounting_unavailable");
+  assert.equal(f.upstream.sent.length, 1);
+  assert.deepEqual(f.settled.map(({ index, outcome, sent, executionStarted }) => ({ index, outcome, sent, executionStarted })), [
+    { index: 0, outcome: "completed", sent: true, executionStarted: true },
+    { index: 1, outcome: "router_error", sent: false, executionStarted: false },
+  ]);
+  assert.equal(f.settled[1].terminal, null);
+  assert.equal(f.admitted[1].signal.reason.cause, "router_error");
+});
+
+for (const peer of ["client", "upstream"]) for (const phase of ["admission", "settlement"]) test(`${peer} close during pipelined ${phase} preserves each owner exactly once`, async t => {
+  const admission = Promise.withResolvers(), settlement = Promise.withResolvers();
+  t.after(() => { admission.resolve(); settlement.resolve(); });
+  const f = fixture(t, {
+    admit: index => index === 1 && phase === "admission" ? admission.promise : undefined,
+    settle: index => index === 0 ? settlement.promise : undefined,
+  });
+  f.client.receive(create()); f.client.receive(create()); await tick();
+  respond(f, undefined, "first"); await tick();
+  assert.equal(f.admitted.length, 2); assert.equal(f.upstream.sent.length, 1);
+  for (const { signal } of f.admitted) signal.addEventListener("abort", () => { f.client.close(); f.upstream.close(); });
+  f[peer].close(); admission.resolve(); await tick();
+  assert.deepEqual(f.settled.map(({ index, outcome, sent }) => ({ index, outcome, sent })), [
+    { index: 0, outcome: "completed", sent: true },
+    { index: 1, outcome: `${peer}_disconnect`, sent: false },
+  ]);
+  assert.equal(f.admitted[1].signal.reason.cause, `${peer}_disconnect`);
+  settlement.resolve(); await tick();
+  assert.equal(f.settled.length, 2); assert.equal(f.upstream.sent.length, 1);
+});
+
+for (const lane of [undefined, "lane"]) test(`late frames stay with the sent owner while the next ${lane ?? "default"} turn is admitted`, async t => {
+  const gate = Promise.withResolvers(), publications = [];
+  t.after(() => gate.resolve());
+  const f = fixture(t, { settle: index => index === 0 ? gate.promise : undefined, publish: (index, identities) => publications.push({ index, identities }) });
+  f.client.receive(create(lane)); f.client.receive(create(lane)); await tick();
+  respond(f, lane, "first"); await tick();
+  assert.equal(f.admitted.length, 2); assert.equal(f.upstream.sent.length, 1);
+  const frames = f.client.sent.slice(), published = publications.slice();
+  for (const event of [
+    complete(lane, "first"),
+    { type: "response.created", response: { id: "first" } },
+    { type: "response.metadata", response_id: "first", headers: { "x-codex-turn-state": "late-first" } },
+    { type: "response.output_text.delta", response_id: "first", delta: "late" },
+    { type: "error", error: { code: "late" } },
+  ]) f.upstream.receive({ ...event, ...(lane ? { stream_id: lane } : {}) });
+  await tick();
+  assert.equal(f.client.closed, false); assert.deepEqual(f.client.sent, frames);
+  assert.deepEqual(publications, published); assert.equal(f.settled.length, 1);
+  gate.resolve(); await tick();
+  // The terminal-ID guard still applies after the next create has been sent.
+  f.upstream.receive(complete(lane, "first"));
+  respond(f, lane, "second"); await tick();
+  assert.deepEqual(f.settled.map(item => item.terminal.response.id), ["first", "second"]);
+  assert.ok(publications.slice(published.length).every(({ index, identities }) => index === 1 && identities.every(({ value }) => value === "second")));
+});
+
+test("next same-lane admission waits for terminal publication to complete", async t => {
+  const publication = Promise.withResolvers(), settlement = Promise.withResolvers();
+  t.after(() => { publication.resolve(); settlement.resolve(); });
+  const f = fixture(t, {
+    publish: (index, _identities, frame) => index === 0 && frame.type === "response.completed" ? publication.promise : undefined,
+    settle: index => index === 0 ? settlement.promise : undefined,
+  });
+  f.client.receive(create()); f.client.receive(create()); await tick();
+  respond(f, undefined, "first"); await tick();
+  assert.equal(f.admitted.length, 1); assert.equal(f.settled.length, 0);
+  assert.deepEqual(f.client.sent.map(value => JSON.parse(value).type), ["response.created"]);
+  publication.resolve(); await tick();
+  assert.equal(f.admitted.length, 2); assert.equal(f.upstream.sent.length, 1);
+  assert.deepEqual(f.client.sent.map(value => JSON.parse(value).type), ["response.created", "response.completed"]);
+  settlement.resolve(); await tick();
+  assert.equal(f.upstream.sent.length, 2);
+});
+
+test("settling operations still consume the active limit while same-lane admission pipelines", async t => {
+  const gate = Promise.withResolvers();
+  t.after(() => gate.resolve());
+  const f = fixture(t, { limits: { active: 2 }, settle: index => index === 0 ? gate.promise : undefined });
+  f.client.receive(create("a")); f.client.receive(create("a")); await tick();
+  respond(f, "a", "first"); await tick();
+  assert.equal(f.admitted.length, 2); assert.equal(f.upstream.sent.length, 1);
+  f.client.receive(create("b")); await tick();
+  assert.equal(f.admitted.length, 2);
+  gate.resolve(); await tick();
+  assert.equal(f.admitted.length, 3); assert.equal(f.upstream.sent.length, 3);
+  assert.equal(f.admitted[2].lane, "b");
+});
+
+for (const phase of ["admission", "settlement"]) test(`a pipelined deadline during ${phase} retains timeout through late completion`, async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const admission = Promise.withResolvers(), settlement = Promise.withResolvers();
+  t.after(() => { admission.resolve(); settlement.resolve(); });
+  const f = fixture(t, {
+    limits: { responseMs: 10 },
+    admit: index => index === 1 && phase === "admission" ? admission.promise : undefined,
+    settle: index => index === 0 ? settlement.promise : undefined,
+  });
+  f.client.receive(create()); f.client.receive(create()); await tick();
+  respond(f, undefined, "first"); await tick();
+  assert.equal(f.admitted.length, 2); assert.equal(f.upstream.sent.length, 1);
+  t.mock.timers.tick(10);
+  assert.equal(f.admitted[1].signal.reason.cause, "timeout");
+  admission.resolve(); settlement.resolve(); await tick();
+  assert.deepEqual(f.settled.map(({ outcome, sent }) => ({ outcome, sent })), [{ outcome: "completed", sent: true }, { outcome: "timeout", sent: false }]);
+  assert.equal(f.upstream.sent.length, 1);
+});
+
 test("close during a deferred connect closes the late socket without sending or settling twice", async (t) => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
@@ -150,11 +384,11 @@ test("close during a deferred connect closes the late socket without sending or 
   await tick();
   assert.equal(f.upstream.closed, true);
   assert.equal(f.upstream.sent.length, 0);
-  assert.deepEqual(f.settled.map((item) => item.outcome), ["not_sent"]);
+  assert.deepEqual(f.settled.map(({ outcome, sent }) => ({ outcome, sent })), [{ outcome: "client_disconnect", sent: false }]);
 });
 
 for (const phase of ["admission", "terminal"]) {
-  test(`failed ${phase} accounting closes the session before queued work is admitted`, async (t) => {
+  test(`failed ${phase} accounting closes the session before queued work is sent`, async (t) => {
     const failure = () => { throw Object.assign(new Error("accounting failed"), { status: 503, code: "accounting_unavailable" }); };
     const f = fixture(t, phase === "admission" ? { admit: failure } : { settle: failure });
     f.client.receive(create()); f.client.receive(create()); f.client.receive(create("other"));
@@ -162,9 +396,9 @@ for (const phase of ["admission", "terminal"]) {
     if (phase === "terminal") { respond(f); await tick(); }
     assert.equal(f.client.closed, true);
     assert.ok(f.client.sent.some((value) => JSON.parse(value).error?.code === "accounting_unavailable"));
-    assert.equal(f.admitted.length, phase === "admission" ? 1 : 2);
+    assert.equal(f.admitted.length, phase === "admission" ? 1 : 3);
     assert.equal(f.upstream.sent.length, phase === "admission" ? 0 : 2);
-    assert.equal(f.settled.length, phase === "admission" ? 0 : 2);
+    assert.equal(f.settled.length, phase === "admission" ? 0 : 3);
   });
 }
 
@@ -175,14 +409,18 @@ test("coded handshake failure closes the poisoned connection and releases only a
   f.client.receive(create("later"));
   assert.equal(f.client.closed, true);
   assert.equal(f.admitted.length, 1);
-  assert.deepEqual(f.settled.map((item) => item.outcome), ["not_sent"]);
+  assert.deepEqual(f.settled.map(({ outcome, sent }) => ({ outcome, sent })), [{ outcome: "error", sent: false }]);
+  assert.equal(f.settled[0].terminal.status, 403);
   assert.equal(JSON.parse(f.client.sent[0]).error.code, "upgrade_rejected");
 });
 
 test("deadline closes upstream and conservatively settles sent operations once", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const f = fixture(t, { limits: { responseMs: 10 } });
   f.client.receive(create());
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await tick();
+  t.mock.timers.tick(10);
+  await tick();
   assert.equal(f.upstream.closed, true);
   assert.equal(f.client.closed, true);
   assert.deepEqual(f.settled.map((item) => item.outcome), ["timeout"]);
@@ -199,7 +437,7 @@ test("a slow sink cannot accumulate unbounded individually valid output frames",
   assert.equal(f.upstream.closed, true);
   assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "websocket_connection_limit_reached");
   assert.ok(f.client.sent.reduce((sum, value) => sum + Buffer.byteLength(value), 0) < 700);
-  assert.deepEqual(f.settled.map((item) => item.outcome), ["disconnect"]);
+  assert.deepEqual(f.settled.map((item) => item.outcome), ["router_limit"]);
 });
 
 test("malformed, steering, background and binary events have visible outcomes", async (t) => {
@@ -208,4 +446,408 @@ test("malformed, steering, background and binary events have visible outcomes", 
   assert.deepEqual(f.client.sent.map((item) => JSON.parse(item).error.code), ["invalid_json", "invalid_stream_id", "unsupported_event", "unsupported_event", "unsupported_event"]);
   assert.equal(f.admitted.length, 0);
   assert.equal(f.client.closed, true);
+});
+
+for (const first of ["client", "upstream"]) {
+  test(`${first} close owns settlement through synchronous reciprocal close and abort callbacks`, async (t) => {
+    const f = fixture(t);
+    f.client.receive(create("started")); f.client.receive(create("unobserved"));
+    await tick();
+    f.upstream.receive({ type: "response.created", stream_id: "started", response: { id: "started" } });
+    for (const { signal } of f.admitted) signal.addEventListener("abort", () => {
+      f.upstream.close(); f.client.close();
+    });
+    f[first].close();
+    await tick();
+    assert.deepEqual(f.settled.toSorted((a, b) => a.index - b.index).map(({ outcome, sent, executionStarted }) => ({ outcome, sent, executionStarted })), [
+      { outcome: `${first}_disconnect`, sent: true, executionStarted: true },
+      { outcome: `${first}_disconnect`, sent: true, executionStarted: false },
+    ]);
+    assert.ok(f.admitted.every(({ signal }) => signal.reason.cause === `${first}_disconnect`));
+    assert.equal(f.client.closed, true);
+    assert.equal(f.upstream.closed, true);
+  });
+}
+
+for (const phase of ["admission", "connect"]) {
+  test(`client close remains the cause when pending ${phase} rejects late`, async (t) => {
+    const gate = Promise.withResolvers();
+    const f = fixture(t, { [phase === "admission" ? "admit" : "connect"]: () => gate.promise });
+    f.client.receive(create()); f.client.receive(create());
+    await tick();
+    f.client.close();
+    gate.reject(Object.assign(new Error("late provider failure"), { status: 503, code: "provider_unavailable" }));
+    await tick();
+    assert.equal(f.admitted.length, 1);
+    assert.equal(f.admitted[0].signal.reason.cause, "client_disconnect");
+    assert.equal(f.upstream.sent.length, 0);
+    assert.equal(f.client.sent.length, 0);
+    // Admission rejection owns its own receipt; a returned reservation is the
+    // session's responsibility. Neither path may settle the queued create.
+    assert.deepEqual(f.settled.map(({ outcome, sent }) => ({ outcome, sent })), phase === "admission" ? [] : [{ outcome: "client_disconnect", sent: false }]);
+  });
+}
+
+test("close settles sent and late-admitted work separately without admitting queued creates", async (t) => {
+  const gate = Promise.withResolvers();
+  const f = fixture(t, { limits: { active: 2 }, admit: (index) => index === 1 ? gate.promise : undefined });
+  f.client.receive(create("sent")); f.client.receive(create("waiting")); f.client.receive(create("queued"));
+  await tick();
+  assert.equal(f.upstream.sent.length, 1);
+  f.client.close();
+  gate.resolve();
+  await tick();
+  assert.equal(f.admitted.length, 2);
+  assert.deepEqual(f.settled.map(({ index, outcome, sent }) => ({ index, outcome, sent })), [
+    { index: 0, outcome: "client_disconnect", sent: true },
+    { index: 1, outcome: "client_disconnect", sent: false },
+  ]);
+});
+
+test("a terminal already claimed wins even when forwarding closes the client", async (t) => {
+  const gate = Promise.withResolvers();
+  const f = fixture(t, { settle: () => gate.promise });
+  f.client.receive(create()); f.client.receive(create());
+  await tick();
+  f.upstream.receive({ type: "response.created", response: { id: "finished" } });
+  f.client.send = () => { throw new Error("peer closed during terminal delivery"); };
+  f.upstream.receive(complete(undefined, "finished"));
+  await tick();
+  assert.equal(f.client.closed, true);
+  assert.equal(f.upstream.closed, true);
+  assert.equal(f.admitted.length, 1);
+  assert.equal(f.settled.length, 1);
+  assert.equal(f.settled[0].outcome, "completed");
+  assert.equal(f.settled[0].terminal.response.id, "finished");
+  gate.resolve();
+});
+
+test("a close already claimed ignores a subsequent terminal", async (t) => {
+  const f = fixture(t);
+  f.client.receive(create());
+  await tick();
+  f.upstream.receive({ type: "response.created", response: { id: "late" } });
+  f.client.close();
+  f.upstream.receive(complete(undefined, "late"));
+  await tick();
+  assert.deepEqual(f.settled.map(({ outcome, terminal }) => ({ outcome, terminal })), [{ outcome: "client_disconnect", terminal: null }]);
+});
+
+test("a timeout owns only its operation when error delivery also fails", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const f = fixture(t, { limits: { responseMs: 10 } });
+  f.client.receive(create("expired")); f.client.receive(create("collateral")); f.client.receive(create("expired"));
+  await tick();
+  f.client.send = () => { throw new Error("error delivery failed"); };
+  t.mock.timers.tick(10);
+  await tick();
+  assert.equal(f.admitted.length, 2);
+  assert.deepEqual(f.settled.map(({ outcome, sent }) => ({ outcome, sent })), [{ outcome: "timeout", sent: true }, { outcome: "router_error", sent: true }]);
+  assert.deepEqual(f.admitted.map(({ signal }) => signal.reason.cause), ["timeout", "router_error"]);
+  assert.equal(f.client.closed, true);
+  assert.equal(f.upstream.closed, true);
+});
+
+test("a deadline during admission survives a late reservation", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const gate = Promise.withResolvers();
+  const f = fixture(t, { limits: { responseMs: 10 }, admit: () => gate.promise });
+  f.client.receive(create()); f.client.receive(create());
+  await tick();
+  t.mock.timers.tick(10);
+  assert.equal(f.admitted[0].signal.reason.cause, "timeout");
+  gate.resolve();
+  await tick();
+  assert.equal(f.admitted.length, 1);
+  assert.deepEqual(f.settled.map(({ outcome, sent }) => ({ outcome, sent })), [{ outcome: "timeout", sent: false }]);
+});
+
+test("an upstream global error owns collateral lanes before failed error delivery", async (t) => {
+  const f = fixture(t);
+  f.client.receive(create("a")); f.client.receive(create("b"));
+  await tick();
+  f.client.send = () => { throw new Error("error delivery failed"); };
+  f.upstream.receive({ type: "error", status: 503, error: { code: "upstream_unavailable" } });
+  await tick();
+  assert.deepEqual(f.settled.map(({ outcome }) => outcome), ["upstream_disconnect", "upstream_disconnect"]);
+});
+
+test("an upstream global error keeps its cause without bypassing the output cap", async (t) => {
+  const f = fixture(t, { limits: { outputBytes: 256 } });
+  f.client.receive(create("lane"));
+  await tick();
+  f.upstream.receive({ type: "response.created", stream_id: "lane", response: { id: "held" } });
+  f.upstream.receive({ type: "error", status: 503, error: { code: "upstream_unavailable", message: "x".repeat(1_000) } });
+  await tick();
+  assert.ok(f.client.sent.reduce((sum, value) => sum + Buffer.byteLength(value), 0) < 700);
+  assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "websocket_connection_limit_reached");
+  assert.deepEqual(f.settled.map(({ outcome }) => outcome), ["upstream_disconnect"]);
+  assert.equal(f.client.closeCode, 1009);
+  assert.equal(f.upstream.closeCode, 1009);
+});
+
+test("a rejected handshake keeps its error when error delivery closes the client", async (t) => {
+  const f = fixture(t, { connect: async () => { throw Object.assign(new Error("upgrade rejected"), { code: "upgrade_rejected", status: 403 }); } });
+  f.client.send = () => { throw new Error("peer closed"); };
+  f.client.receive(create());
+  await tick();
+  assert.deepEqual(f.settled.map(({ outcome, sent, terminal }) => ({ outcome, sent, status: terminal?.status })), [{ outcome: "error", sent: false, status: 403 }]);
+});
+
+for (const peer of ["client", "upstream"]) {
+  test(`${peer} protocol violation keeps its origin through reciprocal close`, async (t) => {
+    const f = fixture(t);
+    f.client.receive(create());
+    await tick();
+    f[peer].receive(new Uint8Array([1]));
+    await tick();
+    assert.deepEqual(f.settled.map(({ outcome }) => outcome), [`${peer}_protocol_error`]);
+  });
+}
+
+test("metadata and created forward while bindings hold the terminal and next same-lane create", async t => {
+  const gate = Promise.withResolvers(), published = [];
+  const f = fixture(t, { publish: async (index, identities) => { published.push({ index, identities }); if (identities.some(({ kind }) => kind === "turn")) await gate.promise; } });
+  f.client.receive(create()); f.client.receive(create());
+  await tick();
+  const metadata = { type: "response.metadata", response_id: "first", headers: { "X-CoDeX-TuRn-StAtE": ["turn-first"] } };
+  f.upstream.receive(metadata);
+  respond(f, undefined, "first");
+  f.upstream.receive(complete(undefined, "first"));
+  await tick();
+  assert.deepEqual(f.client.sent.map(JSON.parse).map(({ type }) => type), ["response.metadata", "response.created"]); assert.equal(f.settled.length, 0); assert.equal(f.admitted.length, 1);
+  gate.resolve(); await tick();
+  assert.deepEqual(f.client.sent.map(JSON.parse).map(({ type }) => type), ["response.metadata", "response.created", "response.completed"]);
+  assert.equal(f.client.sent[0], JSON.stringify(metadata));
+  assert.deepEqual(published[0], { index: 0, identities: [{ kind: "response", value: "first" }, { kind: "turn", value: "turn-first" }] });
+  assert.ok(published.every(({ index }) => index === 0));
+  assert.equal(f.settled[0].executionStarted, true); assert.equal(f.admitted.length, 2);
+});
+
+test("a claimed rejection freezes metadata identity without inventing execution during blocked publication", async t => {
+  const gate = Promise.withResolvers();
+  const f = fixture(t, { publish: () => gate.promise });
+  f.client.receive(create()); await tick();
+  f.upstream.receive({ type: "response.metadata", response_id: "rejected", headers: { "x-codex-turn-state": "turn-rejected" } });
+  f.upstream.receive({ type: "error", status: 429, error: { code: "busy" } });
+  f.upstream.receive({ type: "response.created", response: { id: "late" } });
+  await tick();
+  gate.resolve(); await tick();
+  assert.deepEqual(f.settled.map(({ outcome, executionStarted }) => ({ outcome, executionStarted })), [{ outcome: "error", executionStarted: false }]);
+  assert.deepEqual(f.client.sent.map(JSON.parse).map(({ type }) => type), ["response.metadata", "error"]);
+  assert.equal(f.client.closed, false);
+});
+
+for (const close of ["client", "upstream", "publication"]) test(`${close} stops pending publication without forwarding late ACKs or admitting another scope`, async t => {
+  const gate = Promise.withResolvers(), calls = [];
+  const f = fixture(t, { publish: async (index, identities) => { calls.push({ index, identities }); await gate.promise; } });
+  f.client.receive(create()); f.client.receive(create()); await tick();
+  f.upstream.receive({ type: "response.metadata", headers: { "x-codex-turn-state": "held" } });
+  f.upstream.receive({ type: "response.created", response: { id: "held" } });
+  await tick();
+  if (close === "publication") gate.reject(new Error("fixture authority failure"));
+  else { f[close].close(); gate.resolve(); }
+  await tick();
+  assert.equal(calls.length, 1); assert.equal(f.admitted.length, 1);
+  assert.deepEqual(f.client.sent.slice(0, 2).map(JSON.parse).map(value => value.type), ["response.metadata", "response.created"]);
+  assert.deepEqual(f.settled.map(({ outcome, executionStarted }) => ({ outcome, executionStarted })), [{ outcome: close === "publication" ? "router_error" : `${close}_disconnect`, executionStarted: true }]);
+});
+
+test("publication FIFO captures each lane owner and gates the next same-lane send on settlement", async t => {
+  const publication = Promise.withResolvers(), settlement = Promise.withResolvers(), calls = [];
+  const f = fixture(t, { publish: async (index, identities) => { calls.push(index); if (index === 0) await publication.promise; }, settle: () => settlement.promise });
+  f.client.receive(create("a")); f.client.receive(create("a")); f.client.receive(create("b")); await tick();
+  respond(f, "a", "first"); respond(f, "b", "parallel");
+  await tick(); assert.deepEqual(calls, [0, 1, 1]);
+  publication.resolve(); await tick();
+  assert.deepEqual(calls, [0, 1, 1, 0]); assert.equal(f.admitted.length, 3); assert.equal(f.upstream.sent.length, 2);
+  settlement.resolve(); await tick(); assert.equal(f.upstream.sent.length, 3);
+});
+
+test("sparse item frames forward immediately but their captured producer gates terminal and settlement", async t => {
+  const gate = Promise.withResolvers(), frames = [];
+  const f = fixture(t, { publish: async (index, identities, frame) => {
+    frames.push({ index, identities, frame });
+    if (frame.type === "response.output_item.done") await gate.promise;
+  } });
+  f.client.receive(create()); f.client.receive(create()); await tick();
+  f.upstream.receive({ type: "response.created", response: { id: "first" } });
+  const item = { type: "response.output_item.done", item: { type: "tool_search_output", execution: "client", status: "completed", tools: [] } };
+  f.upstream.receive(item); f.upstream.receive({ type: "response.completed", response: { id: "first" } });
+  await tick();
+  assert.equal(frames.length, 2); assert.deepEqual(frames[1], { index: 0, identities: [], frame: item });
+  assert.equal(f.client.sent.length, 2); assert.equal(f.settled.length, 0); assert.equal(f.admitted.length, 1);
+  gate.resolve(); await tick();
+  assert.deepEqual(f.client.sent.map(JSON.parse).map(value => value.type), ["response.created", "response.output_item.done", "response.completed"]);
+  assert.ok(frames.every(frame => frame.index === 0)); assert.equal(f.settled.length, 1); assert.equal(f.admitted.length, 2);
+});
+
+test("selector-only WebSocket frames require item completion without changing wire or settlement", async t => {
+  for (const selector of [{ output_index: 0 }, { item_id: "call" }, { output_index: 0, item_id: "call" }]) for (const completed of [false, true]) {
+    const tools = createResponsesToolEvidence("token_only");
+    const f = fixture(t, { publish: async (_index, _identities, frame) => tools.accept(frame, true) });
+    f.client.receive(create()); await tick();
+    const terminal = complete(undefined, "proof");
+    const frames = [
+      { type: "response.created", response: { id: "proof" } },
+      { type: "response.function_call_arguments.delta", ...selector, delta: "{}" },
+      ...(completed ? [{ type: "response.output_item.done", item: { id: "call", type: "function_call" }, ...(selector.output_index === undefined ? {} : { output_index: 0 }) }] : []),
+      terminal,
+    ];
+    for (const frame of frames) f.upstream.receive(frame);
+    await tick();
+    assert.equal(tools.result().knowledge, completed ? "token_only" : "unknown");
+    assert.deepEqual(f.client.sent, frames.map(frame => JSON.stringify(frame)));
+    assert.equal(f.settled.length, 1); assert.equal(f.settled[0].outcome, "completed");
+    assert.deepEqual(f.settled[0].terminal, terminal, "settlement keeps the original usage-bearing terminal");
+  }
+});
+
+test("aggregate and partial tool inventories change only WebSocket qualification", async t => {
+  const cases = [];
+  for (const count of [511, 600]) {
+    const output = Array.from({ length: 2 }, () => ({ type: "tool_search_output", tools: Array.from({ length: count }, () => ({ type: "function", name: "run" })) }));
+    const knowledge = count === 511 ? "token_only" : "unknown";
+    cases.push([[complete(undefined, "proof", { output })], knowledge]);
+    cases.push([[...output.map(item => ({ type: "response.output_item.done", item })), complete(undefined, "proof")], knowledge]);
+  }
+  const item = { id: "inventory", type: "additional_tools", tools: [] };
+  cases.push([[
+    { type: "response.output_item.added", item: { ...item, status: "in_progress", tools: [{ type: "web_search" }, null] } },
+    { type: "response.output_item.done", item }, complete(undefined, "proof"),
+  ], "unknown"]);
+  for (const [events, knowledge] of cases) {
+    const tools = createResponsesToolEvidence("token_only");
+    const f = fixture(t, { publish: async (_index, _identities, frame) => tools.accept(frame, true) });
+    f.client.receive(create()); await tick();
+    const frames = [{ type: "response.created", response: { id: "proof" } }, ...events];
+    for (const frame of frames) f.upstream.receive(frame);
+    await tick();
+    assert.equal(tools.result().knowledge, knowledge);
+    assert.deepEqual(f.client.sent, frames.map(frame => JSON.stringify(frame)));
+    assert.equal(f.settled.length, 1); assert.equal(f.settled[0].outcome, "completed");
+    assert.deepEqual(f.settled[0].terminal, events.at(-1), "settlement retains the authoritative usage-bearing terminal");
+  }
+});
+
+test("pending output count and bytes are bounded even while one identity write is held", async t => {
+  for (const limits of [{ buffered: 3 }, { bufferedBytes: 250 }]) {
+    const gate = Promise.withResolvers();
+    const f = fixture(t, { limits, publish: () => gate.promise });
+    f.client.receive(create()); await tick();
+    f.upstream.receive({ type: "response.metadata", headers: { "x-codex-turn-state": "held" } });
+    await tick();
+    for (let index = 0; index < 8; index++) f.upstream.receive({ type: "response.output_text.delta", delta: "x".repeat(60) });
+    assert.equal(f.client.closed, true); assert.equal(f.upstream.closed, true);
+    gate.resolve(); await tick();
+    assert.deepEqual(f.settled.map(({ outcome }) => outcome), ["router_limit"]);
+    assert.equal(f.client.sent.length, 2);
+    assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "websocket_connection_limit_reached");
+  }
+});
+
+for (const type of ["response.completed", "response.incomplete", "response.failed", "error"]) for (const failure of [false, true]) {
+  test(`${type} waits for all bindings while created and deltas forward${failure ? "; failure closes before terminal" : ""}`, async t => {
+    const gate = Promise.withResolvers(), started = Promise.withResolvers(), calls = [];
+    t.after(() => gate.resolve());
+    const f = fixture(t, { publish: async (_index, _identities, frame) => {
+      calls.push(frame.type);
+      if (frame.type === "response.created") { started.resolve(); await gate.promise; }
+    } });
+    f.client.receive(create()); f.client.receive(create()); await tick();
+    f.upstream.receive({ type: "response.created", response: { id: "held" } });
+    await started.promise;
+    f.upstream.receive({ type: "response.output_text.delta", response_id: "held", delta: "hello" });
+    f.upstream.receive({ ...complete(undefined, "held"), type });
+    await tick();
+    assert.deepEqual(f.client.sent.map(JSON.parse).map(frame => frame.type), ["response.created", "response.output_text.delta"]);
+    assert.equal(f.settled.length, 0); assert.equal(f.upstream.sent.length, 1);
+    if (failure) gate.reject(new Error("fixture binding failure")); else gate.resolve();
+    await tick();
+    assert.equal(f.settled.length, 1);
+    assert.equal(f.settled[0].outcome, type === "error" ? "error" : type.slice("response.".length));
+    if (failure) {
+      assert.equal(f.client.closed, true);
+      assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "continuation_unavailable");
+      assert.equal(JSON.parse(f.client.sent.at(-1)).status, 503);
+      assert.equal(f.upstream.sent.length, 1);
+      assert.deepEqual(calls, ["response.created"]);
+    } else {
+      assert.equal(JSON.parse(f.client.sent.at(-1)).type, type);
+      assert.equal(f.upstream.sent.length, 2);
+      assert.deepEqual(calls, ["response.created", "response.output_text.delta", type]);
+    }
+  });
+}
+
+for (const cause of ["client", "upstream", "timeout"]) test(`${cause} with a held terminal waits for publication and settles once`, async t => {
+  const gate = Promise.withResolvers(); t.after(() => gate.resolve());
+  const f = fixture(t, { publish: () => gate.promise });
+  f.client.receive(create()); await tick();
+  respond(f, undefined, "held"); await tick();
+  if (cause === "timeout") f.session.timeout(f.session.active.get("")); else f[cause].close();
+  await tick(); assert.equal(f.settled.length, 0);
+  gate.resolve(); await tick();
+  assert.equal(f.settled.length, 1); assert.equal(f.settled[0].outcome, "completed");
+  assert.equal(f.client.sent.some(frame => JSON.parse(frame).type === "response.completed"), cause === "timeout", "a stale timer cannot replace the claimed terminal");
+});
+
+test("timeout before a held terminal claims the close and ignores late completion", async t => {
+  const gate = Promise.withResolvers(); t.after(() => gate.resolve());
+  const f = fixture(t, { publish: () => gate.promise });
+  f.client.receive(create()); await tick();
+  f.upstream.receive({ type: "response.created", response: { id: "held" } }); await tick();
+  f.session.timeout(f.session.active.get(""));
+  f.upstream.receive(complete(undefined, "held"));
+  assert.equal(f.settled.length, 0);
+  gate.resolve(); await tick();
+  assert.deepEqual(f.settled.map(({ outcome, terminal }) => ({ outcome, terminal })), [{ outcome: "timeout", terminal: null }]);
+});
+
+test("held terminals consume output bytes and pending frame capacity", async t => {
+  for (const limits of [{ buffered: 2 }, { outputBytes: 500 }]) {
+    const gate = Promise.withResolvers(); t.after(() => gate.resolve());
+    const f = fixture(t, { limits, publish: () => gate.promise });
+    f.client.receive(create("a")); f.client.receive(create("b")); await tick();
+    respond(f, "a", "first"); await tick();
+    f.upstream.receive({ type: "response.created", stream_id: "b", response: { id: "second" }, padding: "x".repeat(300) });
+    assert.equal(f.client.closed, true);
+    assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "websocket_connection_limit_reached");
+    gate.resolve(); await tick(); assert.equal(f.settled.length, 2);
+  }
+});
+
+test("image-heavy creates up to the media envelope lease the isolate budget until settlement", async (t) => {
+  const { bodyBudgetCharged } = await import("../body-budget.ts");
+  const image = (mib) => ({ input: [{ role: "user", content: [{ type: "input_image", image_url: `data:image/png;base64,${"A".repeat(mib * 1024 * 1024)}` }] }] });
+  const before = bodyBudgetCharged();
+  const f = fixture(t), g = fixture(t);
+  f.client.receive(create("a", image(30)));
+  await tick();
+  assert.equal(f.upstream.sent.length, 1, "a 30 MiB create passes the 32 MB frame limit");
+  assert.equal(f.admitted[0].body.input[0].content[0].image_url.length, 30 * 1024 * 1024 + 22, "admitted body is the parsed frame");
+  assert.ok(bodyBudgetCharged() - before >= 60 * 1024 * 1024);
+  g.client.receive(create("b", image(20)));
+  assert.equal(JSON.parse(g.client.sent.at(-1)).error.code, "server_overloaded", "a second large create cannot fit beside the first");
+  assert.equal(JSON.parse(g.client.sent.at(-1)).status, 503);
+  g.client.receive(create("b"));
+  await tick();
+  assert.equal(g.upstream.sent.length, 1, "small creates lease nothing");
+  f.client.receive(create("a", { input: "x".repeat(32_000_001) }));
+  assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "request_too_large");
+  // 9 MB of tiny values must not expand past the isolate before admission.
+  f.client.receive(create("a", { input: "x".repeat(8 * 1024 * 1024), values: Array(70_000).fill(0) }));
+  assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "request_too_large");
+  assert.equal(f.admitted.length, 1);
+  g.client.receive("{" + " ".repeat(20 * 1024 * 1024));
+  assert.equal(JSON.parse(g.client.sent.at(-1)).error.code, "server_overloaded", "refused before parsing while the budget is full");
+  respond(f, "a");
+  await tick();
+  assert.equal(bodyBudgetCharged(), before, "settlement returns the lease");
+  g.client.receive(create("c", image(20)));
+  await tick();
+  assert.equal(g.upstream.sent.length, 2);
+  respond(g, "b"); respond(g, "c", "response-2");
+  await tick();
+  assert.equal(bodyBudgetCharged(), before);
 });

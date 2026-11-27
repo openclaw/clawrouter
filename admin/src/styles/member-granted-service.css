@@ -1,0 +1,13 @@
+.dashboardService.memberGrantedService {
+  align-content: center;
+  row-gap: 3px;
+  padding-block: 12px;
+}
+
+.memberGrantedService .dashboardServiceMark { grid-row: 1 / span 3; align-self: start; }
+.memberGrantedService .status { justify-self: end; }
+.memberServiceName { color: var(--ink); font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.memberServiceHealth,
+.memberServiceGrant { grid-column: 2 / -1; margin: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.memberServiceHealth { color: var(--text); font-size: 12px; }
+.memberServiceGrant { color: var(--muted); font-size: 11px; }

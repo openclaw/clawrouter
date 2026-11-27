@@ -1,26 +1,126 @@
+import "../../scripts/typescript-resolver.mjs";
+import { captureTimeouts } from "../../test/helpers/timeout-capture.mjs";
 import assert from "node:assert/strict";
-import { extname } from "node:path";
-import { registerHooks } from "node:module";
 import test from "node:test";
 
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname)) {
-      return nextResolve(`${specifier}.ts`, context);
-    }
-    return nextResolve(specifier, context);
-  },
+
+const { DashboardRequestError, authenticationRequired, localLogin, playgroundRequest, request } = await import("../src/dashboard-fetch.ts");
+const { consoleStatusPresentation } = await import("../src/status-display.ts");
+
+test("request errors display the envelope message without changing status or exact code", () => {
+  const error = new DashboardRequestError(JSON.stringify({ error: { code: " policy_conflict ", message: "  review the saved policy  ", detail: { revision: 3 } } }), 409);
+  assert.equal(error.message, "Request failed (409): review the saved policy");
+  assert.equal(error.status, 409);
+  assert.equal(error.code, " policy_conflict ");
+  assert.ok(error instanceof Error);
+  assert.equal(new DashboardRequestError('{"error":{"message":"try again","code":7}}', 503).code, null);
 });
 
-const { localLogin, playgroundRequest, request } = await import("../src/dashboard-fetch.ts");
+test("unrecognized error messages retain the original diagnostics", () => {
+  for (const raw of [
+    "upstream unavailable", "{broken JSON", "null", "[]", '"ready"', '{"message":"not an error envelope"}',
+    ...[undefined, null, 0, [], {}, "", "  \n  "].map((message) => JSON.stringify({ error: { code: "unavailable", message } })),
+  ]) {
+    const error = new DashboardRequestError(raw, 503);
+    assert.equal(error.message, `Request failed (503): ${raw}`);
+    assert.equal(error.status, 503);
+    assert.equal(error.code, raw.startsWith('{"error":') ? "unavailable" : null);
+  }
+});
+
+test("success-looking structured and plain HTTP failures remain actionable errors", () => {
+  for (const message of ["ready", "already saved", "connected", "saving profile"]) {
+    for (const raw of [message, JSON.stringify({ error: { code: "conflict", message } })]) {
+      const error = new DashboardRequestError(raw, 409);
+      assert.equal(error.message, `Request failed (409): ${message}`);
+      assert.deepEqual(consoleStatusPresentation(error.message, false), { tone: "error", label: "Needs attention", showBar: true });
+    }
+  }
+});
+
+test("only exact console authentication envelopes invalidate a browser session", async (context) => {
+  for (const [path, status, body, expected] of [
+    ["/v1/admin/bootstrap", 401, { error: { code: "admin_unauthorized" } }, true],
+    ["/v1/admin/credentials/key/rotate", 401, { error: { code: "admin_unauthorized" } }, true],
+    ["/v1/session/credentials", 401, { error: { code: "access_session_required" } }, true],
+    ["/v1/entitlements", 401, { error: { code: "access_session_required" } }, true],
+    ["/v1/admin/bootstrap", 403, { error: { code: "access_admin_required" } }, false],
+    ["/v1/admin/credentials", 403, { error: { code: "access_csrf_required" } }, false],
+    ["/v1/admin/bootstrap", 503, { error: { code: "admin_unauthorized" } }, false],
+    ["/v1/admin/bootstrap", 401, "admin_unauthorized", false],
+    ["/v1/session", 401, { message: "access_session_required" }, false],
+    ["/v1/session", 401, { error: { code: "admin_unauthorized" } }, false],
+    ["/v1/session/login", 401, { error: { code: "login_invalid" } }, false],
+    ["/v1/playground/responses", 401, { error: { code: "access_session_required" } }, false],
+  ]) {
+    const raw = typeof body === "string" ? body : JSON.stringify(body);
+    context.mock.method(globalThis, "fetch", async () => new Response(raw, { status }));
+    await assert.rejects(request("https://console.example", path), (error) => {
+      assert.equal(error.message, `Request failed (${status}): ${raw}`);
+      assert.equal(authenticationRequired(error, path), expected);
+      return true;
+    });
+  }
+});
+
+test("JSON requests distinguish confirmed HTTP rejection from an uncertain transport outcome", async (context) => {
+  context.mock.method(globalThis, "fetch", async () => new Response("credential_exists", { status: 409 }));
+  await assert.rejects(request("https://console.example", "/v1/session/credentials"), (error) => error instanceof DashboardRequestError && error.status === 409 && error.message === "Request failed (409): credential_exists");
+  context.mock.method(globalThis, "fetch", async () => { throw new TypeError("network failed"); });
+  await assert.rejects(request("https://console.example", "/v1/session/credentials"), (error) => !(error instanceof DashboardRequestError));
+});
+
+test("empty HTTP failures keep the request path and status fallback", async (context) => {
+  context.mock.method(globalThis, "fetch", async () => new Response("", { status: 502 }));
+  await assert.rejects(request("https://console.example", "/v1/admin/fusion"), (error) => {
+    assert.ok(error instanceof DashboardRequestError);
+    assert.equal(error.message, "Request failed (502): /v1/admin/fusion failed with 502");
+    assert.equal(error.code, null);
+    return true;
+  });
+});
+
+for (const [label, status, contentType, body] of [
+  ["JSON success", 200, "application/json", '{"items":[{"id":9007199254740992},{"id":9007199254740993}],"score":0.123456789012345678901,"scale":1.00e+32}'],
+  ["structured failure", 400, "application/problem+json", '{"error":{"code":"model_unavailable","message":"Model is not ready","detail":{"id":9007199254740993,"scale":1e400}}}'],
+  ["plain text", 200, "text/plain", "  item 9007199254740993\nnot JSON\n"],
+]) {
+  test(`Playground preserves the received ${label} text and metadata`, async (context) => {
+    context.mock.method(globalThis, "fetch", async () => new Response(body, {
+      status, headers: { "content-type": contentType, "x-clawrouter-content-retention": "off" },
+    }));
+    const response = await playgroundRequest("https://console.example", "/v1/playground/responses");
+    assert.equal(response.raw, body);
+    assert.equal(response.ok, status === 200);
+    assert.equal(response.status, status);
+    assert.equal(response.contentType, contentType);
+    assert.equal(response.retention, "off");
+  });
+}
+
+const binary = new Uint8Array([0, 255, 48]);
+for (const [body, status, statusText, expected] of [
+  [null, 204, "", "HTTP 204 No Content"],
+  [null, 503, "", "HTTP 503"],
+  [null, 503, "Temporarily Unavailable", "HTTP 503 Temporarily Unavailable"],
+  [binary, 200, "OK", "HTTP 200 OK\napplication/octet-stream response (3 bytes)"],
+  [binary, 200, "", "HTTP 200\napplication/octet-stream response (3 bytes)"],
+  [binary, 503, "", "HTTP 503\napplication/octet-stream response (3 bytes)"],
+  [binary, 503, "Try Later", "HTTP 503 Try Later\napplication/octet-stream response (3 bytes)"],
+]) {
+  test(`Playground describes ${body ? "binary" : "empty"} HTTP ${status} with ${statusText || "no reason phrase"}`, async (context) => {
+    const contentType = body ? "application/octet-stream" : "application/json";
+    context.mock.method(globalThis, "fetch", async () => new Response(body, { status, statusText, headers: { "content-type": contentType } }));
+    const response = await playgroundRequest("https://console.example", "/v1/playground/responses");
+    assert.equal(response.raw, expected);
+    assert.equal(response.status, status);
+    assert.equal(response.statusText, statusText);
+    assert.equal(response.ok, status >= 200 && status < 300);
+  });
+}
 
 test("dashboard JSON request leaves headroom for a typed 30s Worker timeout and keeps a caller signal", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   const seen = [];
   context.mock.method(globalThis, "fetch", async (_input, init) => {
     seen.push(init);
@@ -45,12 +145,7 @@ test("dashboard JSON request leaves headroom for a typed 30s Worker timeout and 
 });
 
 test("playground request uses the 600s endpoint budget instead of the bounded dashboard timeout", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   let init;
   context.mock.method(globalThis, "fetch", async (_input, options) => {
     init = options;
@@ -64,12 +159,7 @@ test("playground request uses the 600s endpoint budget instead of the bounded da
 });
 
 test("local console login attaches the dashboard AbortSignal", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   let loginInit;
   context.mock.method(globalThis, "fetch", async (input, init) => {
     assert.equal(String(input), "https://console.example/v1/session/login");
@@ -87,12 +177,7 @@ test("local console login attaches the dashboard AbortSignal", async (context) =
 });
 
 test("playground request honors an explicit endpoint timeout", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   context.mock.method(globalThis, "fetch", async () => new Response("ok", { status: 200, headers: { "content-type": "text/plain" } }));
 
   await playgroundRequest("https://console.example/", "/v1/proxy/openai/chat", {}, 180_000);

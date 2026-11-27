@@ -19,15 +19,20 @@ The optional `/private/v1/{models,catalog,responses}` facade has its own pinned 
 | `GET` | `/v1/health` | Service health, application version, and observability mode |
 | `GET` | `/v1/providers` | Compiled provider snapshot |
 | `GET` | `/v1/routes` | Compiled OpenAI-compatible, manifest, and native route catalog |
-| `GET` | `/v1/models` | OpenAI-style model list scoped to the proxy credential |
-| `GET` | `/v1/catalog` | Executable providers, models, formats, and transports scoped to the proxy credential |
+| `GET` | `/v1/models` | Model list scoped to the authenticated credential or session |
+| `GET` | `/v1/catalog` | Authorized configured providers and operation/model/transport offers |
 | `GET` | `/v1/me` | Proxy-credential identity and policy summary |
 | `GET` | `/v1/usage` | Caller policy or principal budget and usage summary |
+| `GET` | `/v1/pool` | Opt-in policy pool inventory, quota eligibility and seven-day grant/lane totals |
 | `GET` | `/v1/key/inspect` | Proxy-credential verification and readiness status |
 
 Usage summaries, provider totals, and daily totals remain shared across each
-authorized policy. The budget follows the policy's configured policy or principal
-scope. Recent `usage.events` on `/v1/usage` and `/v1/session/usage` contain only
+authorized policy. `usage.personal` on `/v1/usage` and `/v1/session/usage`
+repeats those summary, provider, and daily totals for the caller's own events
+only, using the same ownership rule as recent events below. `usage.principals`
+on `/v1/admin/usage` lists thirty-day summary totals per principal; events
+without a principal are grouped by credential ID (`principalId: null`). The
+budget follows the policy's configured policy or principal scope. Recent `usage.events` on `/v1/usage` and `/v1/session/usage` contain only
 events attributed to the authenticated principal. A service key without a
 principal sees only events with its exact credential ID and no principal.
 Unattributed historical events without that credential ID remain admin-only;
@@ -36,9 +41,85 @@ This tightens earlier releases' policy-wide recent-event visibility. Administrat
 use `/v1/admin/usage` for the complete audit; their personal session endpoint
 still returns only their own events. Retained request content remains admin-only.
 
-`GET /v1/catalog` is the client integration contract. Each provider row reports whether the unified OpenAI-compatible route is executable, its native proxy base URL, and the request and response formats for executable native routes.
+`GET /v1/catalog` is the client integration contract. It reports `scope`
+(auth type, credential, principal) and `observedAt`. Only authorized configured
+providers appear; configured but unavailable rows remain inspectable. Static
+`/v1/providers` and `/v1/routes` describe registration, not caller eligibility.
+Use those endpoints for setup inventory; client catalogs can omit unconfigured
+providers.
 
-`/v1/models` and `/v1/catalog` use the same executable model projection. It applies the selected policy, provider budget, grant eligibility and cooldown, and endpoint requirements without selecting or refreshing credentials. A configured but unavailable grant pool never falls back to an environment credential. Token counting retains its zero-cost exemption; Fusion discovery still uses its separate readiness projection.
+`nativeBaseUrl` preserves the v1 route-location string: `/v1/native/<provider>`,
+or `/v1` for Fusion, including in session catalogs. It is legacy location
+metadata, not authorization or transport eligibility. Consumers should select a
+matching eligible `offer` under the returned `scope`, rather than infer access
+from `nativeBaseUrl`, `routes`, or provider-wide readiness.
+
+Each provider's `offers` identifies an endpoint, model (or an operation form
+without a selected model), route, transport, selected policy and generation,
+`eligible`, and an optional `reasonCode`. `affordability` is `exact-covered`, `exact-blocked`, or
+`request-dependent`: fixed tariffs can be compared with observed balances,
+while token-priced requests depend on their actual input and parameters. Free
+token counting and declared zero-price operations remain available at exhausted
+positive limits. A configured zero limit still blocks ordinary requests.
+Affordability describes the plain operation; request parameters and hosted
+tools are assessed again at dispatch. A form without a selected model remains
+request-dependent when an eligible declared model is available; it does not
+make a model-less or opaque request priced.
+
+When a provider declares products, an eligible offer can also include
+`productOffers: [{ id, productId }]`. These references identify compatible
+declarations for that exact operation and the selected policy's active grant
+candidates. They do not select an account or prove a subscription entitlement.
+The provider's optional `products` array supplies each referenced product's
+`id`, `displayName`, `commercialModel`, and `authenticationMethod`. Missing
+fields mean no product annotation, not that the existing offer is unsupported.
+Blocked offers do not carry these references; dispatch remains authoritative.
+
+The projection observes the actual principal's policy ledger and the provider
+ledger without reserving budget, selecting credentials, refreshing accounts, or
+probing upstream. Observations are advisory; HTTP dispatch and every WebSocket
+create authenticate, check current grants, and reserve budget independently.
+Policy order is chosen by grant/transport eligibility before price or budget;
+an exhausted selected policy never causes a switch to a richer policy. Within
+that policy, deterministic credential/configuration checks precede grant
+priority, so an unusable account cannot displace a configured sibling.
+
+Session offers target HTTP playground routes only. A session catalog cannot
+certify an issued key's native or WebSocket access; fetch the catalog with that
+key. The same session projection appears in `/v1/session`'s
+`entitlements.catalog` and in `/v1/entitlements`'s `catalog`.
+Policies without `tenantId` now use the dispatch/ledger tenant `default`
+consistently during Access selection and discovery, instead of inheriting the
+session tenant only in those two views.
+
+`/v1/models` and `client-catalog.v1` share a scoped model projection. Authorized,
+configured model identity, capabilities, request parameters and supported native
+routes (including supported key-only WebSocket metadata) survive temporary grant
+cooldowns or quota exhaustion with a known recovery time. Retention requires a
+recovering grant that supports the exact operation and still passes credential,
+configuration, scope, stale-state, model and budget checks. A generic
+`upstream_grant_pool_unavailable` reason is not sufficient: authentication
+failures, denied grants, removed configuration and unsupported transports do not
+retain otherwise blocked metadata.
+
+Retained inventory is not execution eligibility. Cooling offers remain
+`eligible: false`, `affordability: "exact-blocked"`, with
+`reasonCode: "upstream_grant_pool_unavailable"`; provider `executable` and
+readiness continue to describe current availability. Inference still returns
+HTTP 429 with `Retry-After` until the earliest eligible grant recovery, or 503
+without `Retry-After` when recovery is unknown. Grant-pool ownership stays
+unchanged: discovery never reopens environment authorization for an unavailable
+configured pool. Fusion's virtual model still requires concrete aggregator
+eligibility.
+
+Fusion emits one HTTP `clawrouter/fusion` offer for the synthesizer's selected
+policy and generation. Its route is `/v1/chat/completions` for a key or
+`/v1/playground/v1/chat/completions` for a session. A sibling native or WebSocket
+operation cannot make that Chat offer eligible. Fixed-price observations account
+for the synthesizer first and shared adviser budgets; if only a subset of
+advisers may fit, the usable offer remains `request-dependent`. Unavailable
+advisers fail open. These observations do not replace request-time admission or
+the separate administrator preview of an unsaved Fusion configuration.
 
 Proxy (including native), admin, and pool-submission route identifiers are
 decoded once. Invalid percent escapes or invalid percent-encoded UTF-8 return
@@ -51,6 +132,9 @@ Semantic identifier and path validation still applies after decoding.
 | --- | --- | --- |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat routing |
 | `POST` | `/v1/responses` | OpenAI Responses routing |
+| `POST` | `/v1/decisions` | OpenAI Decisions: predicates, choices, and rubric scores |
+| `GET` | `/v1/responses/<response-id>` | Retrieve or resume an originally authorized response |
+| `POST` | `/v1/responses/<response-id>/cancel` | Bodyless cancellation on the original response owner |
 | `GET` upgrade | `/v1/responses`, qualified native Responses paths | Authenticated, bounded [Responses WebSocket sessions](#websocket-contract) |
 | `POST` | `/v1/embeddings` | OpenAI-compatible embeddings routing |
 | `POST` | `/v1/messages` | Anthropic Messages routing |
@@ -60,7 +144,27 @@ Semantic identifier and path validation still applies after decoding.
 
 OpenAI-compatible requests select a provider-qualified model in the request body, for example `openai/gpt-4.1-mini`. Native and manifest routes resolve the provider and endpoint from the compiled snapshot instead of accepting arbitrary upstream URLs.
 
-Native routes preserve the selected provider's upstream model namespace. For example, `openai/gpt-6-astra` in an OpenRouter request remains an OpenRouter model identifier. Unknown models remain unpriced: either a policy or provider budget requires a declared model price or an explicit fixed request tariff before dispatch.
+Unified routes require matching OpenAI request and response formats. A provider's
+Chat or embeddings capability alone is insufficient: use its native route when
+the protocol differs, such as Cohere's `/v2/embed` with `texts` input.
+
+The native OpenAI Responses route (`/v1/native/openai/v1/responses`) and unified
+`/v1/responses` with an `openai/` model ID forward a client's Daybreak Blue
+selection to OpenAI. OpenAI checks entitlement on the selected API key's project
+and returns `403 access_program_not_enabled` if the project lacks access. Scope
+the OpenAI API-key grant from a Daybreak-enabled project to the policies that
+need Blue. Unified Responses validates `access_programs` as an object with
+exactly one `cyber` key and a token matching `^[a-z][a-z0-9_]{0,63}$`. It omits
+the field when the caller supplies `null`. Unified Responses and Chat requests
+routed to other providers and Fusion Chat requests also omit `{"cyber":"standard"}`.
+They reject other non-null values with `400 model_parameter_unsupported` before
+dispatch.
+
+Native routes preserve the selected provider's upstream model namespace. For example, `openai/gpt-6-astra` in an OpenRouter request remains an OpenRouter model identifier. Known models must support the selected endpoint. Caller-supplied unknown models require that endpoint's explicit `modelPassthrough` declaration; this preserves opaque model selection on the bundled model-provider routes without claiming model availability or copying another model's capabilities. Such models remain absent from discovery and unpriced unless the endpoint declares an applicable pricing reference. The local Chat endpoint explicitly retains its zero API charge. Either a policy or provider budget requires declared pricing or an explicit fixed request tariff before dispatch.
+
+Opaque native IDs are preserved even when they begin with the provider's routing
+prefix. For example, use `openrouter/free` on the native OpenRouter Chat route;
+the same model on unified Chat is `openrouter/openrouter/free`.
 
 Native Responses JSON and SSE routes include:
 
@@ -82,6 +186,289 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 
 `clawrouter/fusion` is an optional virtual model on `/v1/chat/completions`. It fans a bounded text-only prompt out to configured adviser models and asks one configured synthesizer for the final response. Every subrequest uses normal policy, budget, readiness, retention, and usage-accounting paths. See [Fusion routing](fusion-router.md).
 
+## Media request sizes
+
+Claude Messages and token counting, OpenAI-format Responses (create, compact, input tokens) and Chat Completions accept up to **32 MB (32,000,000 bytes)** through unified, native, and manifest routes (including the manifest envelope). Other JSON routes keep **8 MiB**. Bodies within 8 MiB keep the existing JSON parser; above it the Worker authenticates before expanded parsing and applies structural limits. Bodies of 1 MiB or more lease twice their bytes from a 96 MiB per-isolate body budget through response completion or observed cancellation. Requests past the budget receive a nonbillable HTTP **503** with `Retry-After: 1` before budget reservation or provider dispatch: Claude routes return `{"type":"error","error":{"type":"overloaded_error","message":"…"}}`, other routes `error.code: server_overloaded`. A conversation that resends its screenshots every turn fits roughly 60 text-heavy or 12 photo-heavy 2048 px screenshots; see [what fits, and what does not](media-request-limits.md#what-fits-and-what-does-not) for measured capacity and limitations, and [Media JSON request limits](media-request-limits.md) for byte counting, transport copies, structural safeguards and platform caveats.
+
+## OpenAI Decisions
+
+Use `POST /v1/decisions` with `model: "openai/gpt-6-luna"` and an ordinary
+ClawRouter API key whose policy allows that model. With OpenAI JavaScript SDK
+7.30.0 or later, set `baseURL` to `https://<router-host>/v1` and call
+`client.decisions.create(...)`. Native clients may instead use base URL
+`https://<router-host>/v1/native/openai/v1` with upstream model `gpt-6-luna`.
+The manifest route is `POST /v1/proxy/openai/decisions` with the request in
+the usual `body` envelope.
+
+```json
+{
+  "model": "openai/gpt-6-luna",
+  "input": "The product arrived damaged.",
+  "questions": [{
+    "type": "predicate",
+    "name": "damaged",
+    "instructions": "Is the product described as damaged?"
+  }]
+}
+```
+
+The [upstream Decisions API](https://developers.openai.com/api/docs/guides/decisions)
+is a public beta for text/image input and named `predicate`, `choice`, or `score`
+questions (1–400 per request; choice questions accept 2–255 typed options).
+The full response, including `model`, usage, probabilities, confidence values,
+and per-question refusals, passes through unchanged. Inline PNG/JPEG/WebP and
+remote image URLs use the upstream input format; prompt-cache controls and
+`safety_identifier` also pass through. Upstream owns input validation and its
+error response. Catalog native facts describe the Decisions endpoint separately
+from Luna's conversational limits. It is a non-streaming JSON contract, not a Responses
+alias: no SSE, WebSocket, background lifecycle, or subscription/Codex transport
+is advertised. Only the declared Luna model is accepted.
+
+Decisions uses its own endpoint-specific price card: $0.10 per million input
+tokens, including cached and cache-written input, doubled for the entire request
+above 272,000 input tokens. There is no output charge. Ordinary Luna
+Chat/Responses pricing is unchanged. Reservations include the questions and
+conservatively bound opaque image input; completed JSON settles from upstream usage. Missing,
+oversized, malformed, or interrupted usage retains the reservation. Policy-fixed
+tariffs retain precedence. Existing authentication, revocation, model allowlists,
+budgets, and request-retention policy apply. The bundled route uses OpenAI's
+default global API endpoint; regional processing endpoints/premiums are not
+configured by this feature.
+
+## Anthropic Messages pricing
+
+Native, unified and manifest Anthropic Messages routes apply the published 2×
+fast-mode price on supported Opus models and the 1.1× US inference price across
+input, output, cache reads and cache writes. The multipliers compose.
+
+Omitted or null `inference_geo` can inherit the upstream workspace default, so
+geo-capable models reserve at 1.1×: **10% more than global pricing**, which can
+cause HTTP 402 near a budget boundary. Explicit `global` reserves at 1×.
+Settlement prefers response usage. Null modifier fields and response geography
+`not_available` are unreported: use the request's rate or the conservative
+admission rate (1.1× on geo-capable models, base on older models), not zero.
+SSE deltas cannot erase earlier reported modifiers with unreported values.
+
+Omitted, null or `auto` service tier remains admitted at the standard rate,
+without rewriting the upstream request. Unsupported request modifiers return
+HTTP 400 `pricing_required` under hard budgets before dispatch. Explicit response
+`priority`, `batch` or unknown modifiers without a published tariff instead
+return HTTP 502 `pricing_required`; SSE emits an `error` frame in place of
+`message_stop`, possibly after HTTP 200 headers and partial content. The dispatched
+reservation is retained as `unpriced_usage`, not a provider-invoice claim. Legacy
+Priority accounts should request `standard_only` or use a fixed policy price;
+a failed response cannot undo paid work, and blind retries can pay again.
+
+Hard-budget JSON responses and individual SSE events exceeding the 2 MiB price
+inspection bound also fail with `pricing_required`. Fixed-price contracts and
+soft/unmetered passthrough are unchanged; truly unknown soft/unmetered prices
+report `unpriced_usage` without inventing a charge. See
+[Anthropic price modifiers](anthropic-price-modifiers.md) for model support,
+sources and limitations.
+
+## Responses continuation contract
+
+Responses HTTP/SSE and WebSocket routes preserve upstream `previous_response_id` and
+`x-codex-turn-state` bytes. The router binds returned identities to the caller's
+authorization scope, provider route, and credential owner before publishing them.
+Every continuation still checks current authorization, grant eligibility, and
+budgets. It cannot fail over to another account. Ordinary stateless requests keep
+their configured pool routing and failover behavior.
+
+Owner-controlled token refresh preserves the binding. Replacing credentials or
+account identity, revoking a grant, changing the route, or losing the original
+owner requires a restart. HTTP 409 `continuation_restart_required` means resend
+full input without either continuation field. Unknown or expired identities are
+rejected before upstream dispatch, including environment/API-key routes. This
+also applies after upgrading: state created before this binding contract must be
+restarted with full input. Stateless requests and known environment/API-key
+continuations remain supported.
+
+Bindings expire 30 days after first publication, independently of upstream state
+retention. Each authorization scope admits up to one million hashed identities;
+it never evicts a live binding to admit another. Binding-store failure or capacity
+exhaustion returns `continuation_unavailable` before headers, or terminates an
+already-started stream. The upstream call can still incur charges. Response IDs
+on WebSockets can appear before their binding commits; every binding and pricing
+evidence write finishes before the terminal frame and next same-lane dispatch.
+If binding fails, the socket closes with `continuation_unavailable` without
+delivering the terminal; unbound IDs require a restart with full input. IDs
+are limited to 256 UTF-8 bytes and turn state to 8 KiB. Output/frame size is not
+limited by HTTP identity observation, and raw identities and model output are not
+stored in this index.
+
+HTTP/SSE and WebSocket requests with `previous_response_id` consume the parent's
+durable tool-pricing evidence before budget reservation. Only a final `token_only`
+fact allows ordinary token pricing, subject to the current request. Retained
+hosted fees or server work and unknown ancestry return `pricing_required` under
+either policy or provider monthly budgets unless a fixed policy tariff applies.
+Fixed tariffs and unmetered requests retain their existing behavior.
+
+Deploy the proof producer before the consumer; upgrading does not establish that
+old writers have drained. Legacy, pending, corrupt, future-version, and opaque
+history remain unqualified, and a later proof cannot clear the unknown fact already
+captured by a request. Turn-state aliases establish routing affinity, not tool
+pricing. Full-input conversation and `item_reference` state, encrypted compaction
+witnesses, and complete compaction metering remain separate work; no compact route
+is added. See [spend control](agent-spend-control.md).
+
+Reusing a response identity belonging to another
+producer fails publication with `continuation_unavailable`; resend full input.
+This also applies to older claim-less writers encountering qualified-producer
+rows. Transient proof-finalization failure after a confirmed identity claim can
+preserve delivery and accounting while leaving evidence unqualified.
+
+This contract covers `previous_response_id` and Codex turn state. Responses
+`conversation` selectors remain an unpinned, separate contract gap; do not rely on
+pooled account affinity for them. WebSockets also use the connection contract below.
+
+HTTP endpoint deadlines start after preflight and end after response
+normalization, before continuation-header registration and body delivery. For
+streaming SSE requests, normalization includes bounded first-event inspection; for
+successful JSON responses, it ends at the response headers. These deadlines do
+not impose a total or idle timeout on body delivery. Caller cancellation remains
+active through EOF. Fusion advisers retain their separate consumption deadline.
+Caller cancellation, router deadline, and upstream or publication failure retain
+the first observed cause in usage receipts. The selected HTTP status stays
+separate from that outcome. An accepted HTTP rejection keeps its status when JSON
+or SSE error details cannot be read; later cancellation still ends delivery.
+A parsed terminal usage event retains its measured
+charge if delivery later stops; dispatched work without final usage retains its
+estimate. This does not guarantee that every transport reports an idle client
+disconnect.
+
+### HTTP cancellation diagnostics
+
+Cancellation accounting starts when the runtime reports an ingress abort or
+response-body cancellation. A client-local abort alone does not guarantee a
+prompt server notification or a receipt within ten seconds for an indefinitely
+idle HTTP response.
+
+`pnpm test:scripts` includes the seven affirmative deadline and cancellation
+cases: progressing JSON/SSE delivery, initial-response deadlines, active-delivery
+cancellation, and cancellation observed after independently delayed JSON output.
+Each cancellation case requires upstream shutdown, one receipt, and settlement
+in both real budget ledgers. The strict idle-disconnect reproduction is explicit:
+
+```sh
+pnpm diagnostic:http-idle-disconnect
+```
+
+That command replays the original eight-case sequence, including the final
+whitespace-only response. It retains every strict assertion and exits nonzero
+when the limitation reproduces. Its nested entry point is outside the default
+`test/*.test.mjs` script-test glob; no result is suppressed or treated as a pass.
+
+At commit `750a4093c9685829e9423f124c56022e7a2ce838`, the
+[hosted diagnostic run](https://github.com/openclaw/clawrouter/actions/runs/35856640488/job/107166567427)
+used Node 24.21.0, Miniflare 5.20260918.0-alpha and workerd 1.20260918.1.
+The delayed-output case received HTTP 200/gzip headers and zero decoded body
+bytes before the client aborted at 1.048 seconds. Independent payload output
+started at 2.044 seconds; ingress abort followed at 2.452 seconds, before EOF.
+It recorded one `200`/`client_error` receipt with unknown tokens and a fixed
+charge of 7 micros in both ledgers. The unchanged whitespace-only case recorded no
+ingress abort or receipt, and both reservations remained unsettled during the
+observation window. That limitation remains unresolved.
+
+The pinned [KJ disconnect contract](https://github.com/capnproto/capnproto/blob/0501d343/c++/src/kj/async-io.h#L205-L214)
+allows detection to remain pending without a write; its
+[HTTP implementation discusses the half-close tradeoff](https://github.com/capnproto/capnproto/blob/0501d343/c++/src/kj/compat/http.c++#L8278-L8287).
+Node 24.21.0 [Fetch abort](https://github.com/nodejs/node/blob/v24.21.0/deps/undici/src/lib/web/fetch/index.js#L104-L126)
+reaches [HTTP/1 socket destruction](https://github.com/nodejs/node/blob/v24.21.0/deps/undici/src/lib/dispatcher/client-h1.js#L1198-L1206),
+whose [ordinary-close path is distinct from reset](https://github.com/nodejs/node/blob/v24.21.0/lib/net.js#L1097-L1130).
+The fixture does not establish physical FIN/RST behavior, compression causality,
+or deployed HTTP/2 behavior. No idle or total-delivery timeout is added.
+
+## Background Responses
+
+Declared OpenAI API Responses routes support durable recovery for `background: true`
+JSON or SSE creation when the selected transport supports creation, retrieval and
+cancellation. Retrieve with `GET /v1/responses/<response-id>`; resume SSE with
+`stream=true&starting_after=<last-sequence-number>`. Resumption requires an
+originally streamed background create. Cancel with bodyless
+`POST /v1/responses/<response-id>/cancel`. These controls also use the native
+`/v1/native/openai/v1/responses/...` routes. Manifest controls use
+`responses_retrieve` and `responses_cancel`: provide `pathParams.response_id`
+and an empty `body` in a POST envelope, or `response_id` in the retrieval URL.
+Repeated `include[]` values are preserved; manifest query arrays are supported.
+
+Controls reauthenticate the original policy scope and credential route. They do
+not select another account or reserve new budget. If creation used
+`OpenAI-Organization` or `OpenAI-Project`, public controls must resupply the same
+headers to reconstruct the original route pin. Each is limited to 256 printable
+ASCII bytes. The collector alone temporarily retains these headers. The initial
+declared create path has no caller path parameters; create options belong in
+JSON, and caller-supplied create query parameters are rejected before reservation
+or generation dispatch when durable recovery applies. Foreground and creation-only
+transport query behavior is unchanged.
+
+Creation keeps the ordinary policy and grant selection. A transport that supports
+only creation retains request-bound accounting: observed usage settles that request,
+and missing usage retains its conservative estimate. It receives no recovery
+locator, job or collection polling. Permitted creation failover keeps that accounting
+mode even if an alternate supports the full lifecycle. A full-capable initial
+transport with invalid control configuration fails before reservation; configuration
+failure does not downgrade it to request-bound accounting.
+
+Verified browser sessions use the corresponding `/v1/playground/v1/responses/...`
+or `/v1/playground/proxy/openai/<endpoint>` controls. Existing response ownership
+must match exactly one currently authorized policy scope. Ambiguous, revoked or
+replaced ownership is rejected rather than falling back to another policy.
+After route preparation, controls recheck the original key, policy generation,
+policy tenant and current user bindings before upstream admission. Key rotation
+invalidates an already queued control. Access checks use current stored groups;
+local logout is checked separately against the session store. Cloudflare Access
+retains the verified assertion's expiry, without claiming live IdP revocation.
+A revocation after admission does not cancel an already dispatched control or
+the router's accounting collection for an admitted generation.
+
+```sh
+curl "$CLAWROUTER_BASE_URL/v1/responses" \
+  -H "authorization: Bearer $CLAWROUTER_KEY" \
+  -H "content-type: application/json" \
+  --data '{"model":"openai/gpt-6-astra","input":"Explain durable accounting.","background":true,"store":false}'
+curl "$CLAWROUTER_BASE_URL/v1/responses/$RESPONSE_ID" \
+  -H "authorization: Bearer $CLAWROUTER_KEY"
+curl -X POST "$CLAWROUTER_BASE_URL/v1/responses/$RESPONSE_ID/cancel" \
+  -H "authorization: Bearer $CLAWROUTER_KEY"
+```
+
+Keep `response.id` for controls; for streaming resumption, also keep the last
+observed `sequence_number`. The [upstream background contract](https://developers.openai.com/api/docs/guides/background)
+permits `store: false` with temporary polling retention of roughly ten minutes.
+The router's one-hour collection limit is not an upstream retention guarantee.
+Cancellation is idempotent upstream; accepting a cancellation request is not
+proof of final usage or a refund. Existing creation-only ChatGPT subscription
+transport admission is preserved; this does not prove upstream acceptance or add
+retrieval/cancellation capabilities to that transport. This feature does not establish
+native Codex background adoption; WebSocket behavior remains separate below.
+
+Creation responses carry `x-clawrouter-background-recovery` after a durable
+admission is attempted, including when its acknowledgement is lost. Its value is
+`<64-hex-scope-digest>.bg_<32-hex-job-id>`. It is a locator, not authentication,
+completion proof or a settlement receipt. It is never forwarded upstream. An
+absent record after an admission failure does not prove settlement.
+
+Administrators use `POST /v1/admin/usage/recovery` behind the existing admin and
+same-origin boundary. The JSON envelope is closed:
+
+| Action | Exact fields | Result |
+| --- | --- | --- |
+| Inspect | `action: "inspect"`, `locator` | Sanitized record and independent sink dispositions |
+| List | `action: "list"`, `scope`, optional `after` job ID | At most 16 records from one scope, with `nextAfter` |
+| Replay | `action: "replay"`, `locator` | Retry only an unresolved, frozen financial receipt before its original deadline |
+
+Replay never recreates the upstream generation. The API exposes original
+deadlines, event/request IDs, amount/basis and independent financial/usage
+acknowledgements; it omits credentials, raw response IDs and retained route
+headers. `expired_by_retention` closes only usage delivery after the 30-day
+history window. It does not establish a financial acknowledgement or an
+available history row. HTTP 404 means absent/retired, HTTP 503 means unavailable,
+and neither means paid. After a durable admission, retain a recovery-aware Worker
+and owner while obligations or inventory completeness are unknown. See
+[spend control](agent-spend-control.md) for recovery bounds, the rollback floor
+and conservative accounting.
+
 ## WebSocket contract
 
 Send authenticated upgrades to `/v1/responses` or
@@ -89,19 +476,97 @@ Send authenticated upgrades to `/v1/responses` or
 `response.create`, so an HTTP 101 alone does not prove model access or upstream
 readiness. Every create rechecks credential, policy, provider, grant, retention,
 and budget before dispatch. The connection pins its provider route and grant
-revision; changing either requires a new connection.
+revision; changing either requires a new connection. Create admission and grant
+selection share HTTP's isolate-local snapshot (fresh 10 s, maximum age 60 s by
+default); `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0` restores authoritative checks.
+A pinned grant that is missing, ineligible or changed returns
+`409 upstream_grant_changed`, or the continuation restart error below. Local
+selection never substitutes another grant on an existing socket.
+Credential authentication errors take precedence over per-create model or route
+selection errors, as they do for HTTP requests.
+
+Response IDs and `response.metadata` turn state are bound to each create's fresh
+authorization scope and actual upstream owner before the terminal frame is
+forwarded and before the next same-lane dispatch. Earlier frames, including
+`response.created`, metadata and deltas, may expose IDs before binding commits.
+Codex can then
+reconnect with `client_metadata["x-codex-turn-state"]` or fall back to HTTP with
+the same turn state and account. Conflicting header and metadata tokens are
+rejected; every supplied continuation identity must name the same owner.
+Each socket retains at most 32 recently committed identities with their owner
+and final pricing evidence. A fresh create can use these witnesses only when
+every supplied identity matches its authorization scope, policy generation,
+provider/endpoint and the socket's grant key/revision. Witnesses are recorded
+after successful binding and pricing evidence commits and cleared on close.
+Unknown, pending, failed or evicted identities, reconnects, HTTP requests, and
+changed scope/generation/grant pins use the authoritative continuation lookup.
+Header/metadata conflicts are still rejected before any lookup.
+A continuation naming a different grant from the connection's pin returns
+`409 continuation_restart_required` before dispatch; restart with full input on
+a new connection. The rejected create is not billed and does not close the socket.
+An upgrade header alone
+does not create a synthetic metadata event. Metadata may precede
+`response.created`; it identifies the response without proving execution started.
+Binding and pricing evidence writes run concurrently with non-terminal delivery,
+in per-operation order. The terminal waits for all those writes; pending
+publication preserves wire order and counts toward output limits. Binding failure
+closes with `503 continuation_unavailable` before terminal delivery. After a terminal outcome is claimed
+and its frame is forwarded, the next same-lane create may begin admission while
+settlement finishes; dispatch and the final soft-budget preflight wait for
+successful settlement on that lane, without blocking other lanes' admission or
+dispatch. An accounting
+failure still closes the connection with `accounting_unavailable` before new
+work is sent. Closing the connection suppresses late publication acknowledgments
+and queued output.
+
+`response.interrupt` with `response_id` and `mode: "discard_partial_items"`
+bypasses the create queue on the same upstream socket. Its optional `stream_id`
+must match the response's lane. The ID must belong to a sent active response,
+the lane's most recent terminal response, or a response previously interrupted
+on that connection. No other control fields or modes are accepted. Repeated
+interrupts are forwarded; they do not create usage receipts or new generations.
+Upstream `response.interrupt.accepted` and `response.interrupt.failed` frames
+preserve wire order, including after settlement or a successor's start. They
+never bind continuation ownership or settle the generation. The router does not
+fabricate acknowledgements or require one before processing a normal terminal.
+Early cancellation and acknowledgements depend on the upstream. The router
+forwards the control without promising that it stops generation. Uncorrelated
+upstream `error` events after an interrupt close the connection conservatively,
+retaining estimates for running work rather than treating a control rejection as
+a generation terminal.
+
+Worker deployments retain structured `responses_websocket_control` diagnostics
+for forwarded interrupts and unsupported events (at most 16 per connection).
+Fields are a router-generated connection ID, a fixed event-type category,
+forwarded/rejected outcome, and whether background was explicitly enabled.
+Request/response bodies, response IDs, lane IDs, credentials, and arbitrary event
+names are excluded. Wrangler enables retained logs with invocation logs disabled.
 
 The bridge forwards native response IDs, errors, metadata, tool results,
 `previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
 receive normal admission and accounting. It never replays requests or switches
-grants after dispatch. A terminal response with usable usage settles once;
-disconnects and deadlines without final usage retain the reservation. If budget
-settlement and its durable recovery both fail, or usage publication fails, the
-socket reports `accounting_unavailable` and closes before accepting more work.
+grants after dispatch. A terminal response with usable usage settles once.
+Reserve policies retain the reservation when sent requests disconnect or time
+out without final usage; unsent admitted requests release it. Soft policies use
+local pre-dispatch denials and parallel budget checks, then charge observed usage
+or an explicit fixed tariff, marking unknown prices as `unpriced_usage` without
+inventing a missing-usage charge. Budget exhaustion never aborts an in-flight
+soft turn; it denies the next create in this isolate. Queued requests have no
+receipt. The first terminal outcome or close cause owns settlement, including
+when admission finishes after cancellation. A client disconnect records
+`client_error` with `status_code: null`; only the response whose deadline expired
+records `timeout`/504. Other active lanes closed with that connection do not
+inherit its timeout. If budget
+settlement/charge and its durable recovery both fail, or usage publication fails, the
+socket reports `accounting_unavailable` and closes before sending more work.
 
-Limits per connection are 16 active responses, 32 named lanes plus the default
-lane, 48 buffered creates, 4 MiB per incoming frame, 8 MiB total buffered create
-bytes, and 16 MiB cumulative downstream output. The output limit bounds a slow
+Limits per connection are 16 active responses (including those still settling),
+32 named lanes plus the default lane, 48 buffered creates, 32 MB per incoming
+frame (the HTTP media envelope; Cloudflare delivers at most 32 MiB), 32 MB total
+buffered create bytes, 8 MiB per upstream frame, at most 48 output frames/8 MiB awaiting
+publication, 16 MiB cumulative downstream output, and 128 forwarded interrupts
+(including repeats). Interrupt identities remain bounded by this lifetime cap
+to correlate late acknowledgements. The output limit bounds a slow
 reader because Workers' WebSocket API has no supported drain/queue metric.
 Connections last at most 60 minutes; each response uses its endpoint deadline,
 capped at 600 seconds. Clients must reconnect after a limit or deadline closes
@@ -109,7 +574,7 @@ the connection. Binary frames, steering events, and background execution are
 rejected visibly. This contract runs on the Worker deployment; other hosts must
 qualify native upgrade forwarding before advertising it.
 
-See the upstream [Responses WebSocket contract](https://developers.openai.com/api/docs/guides/websocket-mode). An authenticated catalog route advertises `websocket: "openai.responses"` only when its endpoint and grant transport are eligible.
+See the upstream [Responses WebSocket contract](https://developers.openai.com/api/docs/guides/websocket-mode). An authenticated key catalog route advertises `websocket: "openai.responses"` only for a supported endpoint and configured grant transport, retaining that metadata during a known temporary grant cooldown. Consult eligible offers for current availability; the metadata never authorizes an upgrade.
 
 ## Access session routes
 
@@ -117,12 +582,18 @@ See the upstream [Responses WebSocket contract](https://developers.openai.com/ap
 | --- | --- | --- |
 | `GET` | `/v1/session` | Verified Access identity, entitlements, and readiness |
 | `GET` | `/v1/session/avatar` | Proxied user avatar |
-| `GET` | `/v1/session/usage` | Session quota and usage summary |
+| `GET` | `/v1/session/usage` | Session quota and legacy shared-policy usage summary; `?budgets_only=true` skips usage ledger reads |
+| `GET` | `/v1/session/usage/report` | Bounded personal-only tokens, price coverage, daily trend and model/provider/key groups |
+| `GET` | `/v1/session/usage/events` | Metadata-only personal event pages with a query-bound cursor |
 | `GET` | `/v1/entitlements` | Compatibility entitlement response |
 | `GET` | `/v1/session/credentials` | Credentials owned by the signed-in user |
+| `POST` | `/v1/session/credentials` | Create a caller-owned credential; reject an existing ID |
 | `PUT` | `/v1/session/credentials/<credential-id>` | Create or rotate a caller-owned credential |
+| `POST` | `/v1/session/credentials/<credential-id>/rotate` | Replace only an active credential's secret hash |
+| `POST` | `/v1/session/credentials/<credential-id>/rename` | Change only a caller-owned credential's display name |
 | `POST` | `/v1/session/credentials/<credential-id>/revoke` | Revoke a caller-owned credential |
 | `POST` | `/v1/playground/<route>` | Run a console playground request through an allowed route |
+| `GET` | `/v1/playground/v1/responses/<response-id>` | Retrieve/resume the session's original response |
 | `GET` | `/v1/oauth/callback` | Complete a provider-approved browser OAuth flow |
 
 The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`. A production Cloudflare Access application protects `/dashboard/*`, `/v1/session*`, `/v1/playground/*`, `/v1/admin/*`, and `/v1/oauth/callback` before the request reaches the Worker.
@@ -144,6 +615,7 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `GET` | `/v1/admin/provider-status` | Policy-aware provider readiness |
 | `GET` | `/v1/admin/provider-health` | Persisted provider smoke status |
 | `GET` | `/v1/admin/upstream-grants` | Sanitized policy- and tenant-scoped upstream grants |
+| `GET` | `/v1/admin/upstream-grants/usage?scope=policies&scopeId=<policy-id>&days=<1..31>` | Per-grant/lane totals and daily model usage |
 | `GET` | `/v1/admin/assignment-rules` | Access identity assignment rules |
 | `GET` | `/v1/admin/fusion` | Fusion configuration |
 
@@ -156,9 +628,13 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `PUT` | `/v1/admin/policy-bindings` | Create or update a user or group binding |
 | `PUT` | `/v1/admin/policies/<policy-id>` | Create or update a policy |
 | `POST` | `/v1/admin/policies/<policy-id>/revoke` | Disable a policy and every credential bound to it |
+| `POST` | `/v1/admin/credentials` | Create an issued credential; reject an existing ID |
 | `PUT` | `/v1/admin/credentials/<credential-id>` | Create or update an issued credential |
+| `POST` | `/v1/admin/credentials/<credential-id>/rotate` | Replace only an active credential's secret hash |
+| `POST` | `/v1/admin/credentials/<credential-id>/rename` | Change only an existing credential's display name |
 | `POST` | `/v1/admin/credentials/<credential-id>/revoke` | Revoke one issued credential |
 | `PUT` | `/v1/admin/connections/<provider-id>` | Update a global provider connection |
+| `PATCH` | `/v1/admin/connections/<provider-id>` | Update only supplied connection fields |
 | `PUT` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>` | Create or update a scoped upstream grant |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/revoke` | Revoke a scoped upstream grant and remove its secrets |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/refresh` | Refresh an OAuth grant |
@@ -169,6 +645,7 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `POST` | `/v1/admin/assignment-rules/reconcile` | Reconcile materialized users against assignment rules |
 | `PUT` | `/v1/admin/fusion` | Update Fusion routing configuration |
 | `POST` | `/v1/admin/fusion/preview` | Evaluate Fusion readiness and estimated reservations for a policy |
+| `POST` | `/v1/admin/usage/recovery` | Inspect/list one recovery scope or replay one immutable financial receipt |
 
 The legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and `GET /v1/admin/users` routes remain compatibility aliases. New control-plane clients use policies, credentials, and tenants directly. Legacy top-level console and `/api/*` aliases redirect or normalize to their `/dashboard/*` and `/v1/*` equivalents.
 
@@ -183,6 +660,287 @@ Grant revocation accepts an optional JSON object with `kind`, `provider`, and
 ignore these hints and retain their canonical identity. Revocation stores a
 secretless, disabled tombstone and cancels maintenance; an unknown grant returns
 HTTP 404. Retrying revocation preserves the same tombstone generation.
+
+Explicit replacement and revocation can recover an existing legacy KV grant with
+invalid JSON or metadata larger than the 3 MiB migration limit. Corrupt or oversized
+bytes are discarded, never imported into the credential owner. Supply fresh credentials
+through `cf:oauth:put` or `PUT ...?mode=replace`, or use `cf:oauth:revoke` to remove
+the account. Ordinary edits, OAuth callbacks, contributions, refresh and automatic
+migration remain strict. A failed KV read is unavailable state, not proof of an
+absent account. Recovery preserves retained pool generations; a newer index than
+an existing owner requires operator recovery instead of resetting ownership.
+When both the owner and KV record are missing, either PUT mode creates an account
+only after confirming an empty attachment index. Retained legacy membership or
+generation history returns HTTP 409, including generation-zero legacy rows.
+
+### Policy model access
+
+Policies optionally set `models` to an array of full catalog IDs, for example
+`["anthropic/claude-opus-5-5"]`. Omitted or `null` preserves access to every
+model of the allowed providers; `[]` denies every model. Provider restrictions
+still apply. Writes accept at most 1,024 entries, reject unknown IDs, and
+normalize duplicates. Omitting either `models` or `poolStatus` from an update
+preserves the existing value.
+
+`/v1/catalog`, `/v1/models` (including Anthropic format), session entitlements,
+and Fusion offers honor these scopes. Access sessions can use models allowed by
+any held policy, with the normal ordered policy choice among matching policies.
+Every concrete inference call checks the resolved catalog ID before grant
+selection, budget reservation or upstream contact. A denied model returns HTTP
+403 `model_not_allowed` on native Messages and count_tokens, manifest routes,
+OpenAI chat/embeddings/speech, HTTP Responses, and each WebSocket response.create.
+Fusion checks its synthesizer and each adviser separately; denied advisers fail
+open like other unavailable advisers. Its virtual name does not grant access to
+underlying models. Restricted policies reject opaque universal gateway requests
+because their downstream model selections cannot be verified.
+
+### Policy pool status
+
+`GET /v1/pool` accepts a proxy key or verified Access session. Policy
+`poolStatus: "visible"` opts in; omitted or `"hidden"` returns HTTP 404
+`pool_status_hidden`. Responses use `Cache-Control: private, no-store`.
+A proxy key always selects its own policy, regardless of query parameters.
+An Access session may select one of its held policies with `?policyId=<id>`;
+without it, the first active policy is used. An unheld policy returns HTTP 403.
+
+The response contains `version: "clawrouter.pool.v1"`, ISO `observedAt`,
+`policyId`, `routing` (`strategy`, `includedQuotaReservePercent`,
+`environmentFallback`), allowed catalog `models`, `grants`, and `usage`.
+Each grant includes only its token-reference `key`, label, provider, kind,
+enabled and credential status, plan, account (`email`, `rateLimitTier`,
+`subscriptionStatus`), quota `windows` (`id`, `window`, `models`,
+`remainingPercent`, `resetAt`, `observedAt`), extra usage (`enabled`,
+`usedCredits`, `monthlyLimit`, `currency`, `spendLimitReached`), per-model
+`eligibility`, additive per-model `exclusionReasons`, `lastSelectedAt`, and
+`selectedCount`. Unknown facts are null.
+Account emails are intentionally visible to holders when the administrator opts
+in. No access/refresh tokens, credential fields, raw provider payloads, or full
+storage keys are returned.
+
+Inventory includes the selected policy's grants, shared tenant grants and explicit
+`grantRouting.sharedGrants` subscription owners authorized by an administrator,
+filtered by its provider and eligible-grant restrictions. It is bounded to
+1,024 scanned grant records (HTTP 422 `pool_too_large` beyond that limit), plus at
+most 32 explicitly shared owners. Foreign-scope owners use stable opaque
+`shared-<digest>` keys in both inventory and usage, so equal token references do
+not collide and source policy names remain private.
+`usage` contains `days: 7` and the policy's aggregate `lanes` and `grants` from
+the existing grant usage ledger, with token references or opaque shared IDs replacing storage keys;
+it contains no individual request events. These are policy-wide totals, including
+other credentials on the same policy, and retain historical attribution.
+
+Eligibility shares the dispatch quota rules: scoped windows match upstream
+model family names, reserve applies to subscriptions, active cooldown blocks
+selection, and stale observations block only under `staleState: "deny"`.
+The reserve is a soft floor. When none of the policy's grants is eligible above
+it for a model and the policy has no environment fallback, grants that only the
+reserve excludes are `eligible`, because dispatch drains them. The Subscriptions
+page still marks them by their reserve. Status is `eligible`, `exhausted`, `cooldown`, `stale`, or
+`reauth_required`. Models belonging to another provider use `exhausted` (no
+usable capacity); disabled grants are never eligible, and missing or invalid
+credentials use `reauth_required`. Eligibility reports quota/credential availability, not priority
+selection, transport readiness or a budget reservation. Observations and usage
+are advisory snapshots, not an atomic upstream quota guarantee.
+`exclusionReasons` retains that eligibility enum while distinguishing
+`provider_mismatch`, `policy_disabled`, `grant_disabled`, `reauth_required`,
+`credential_unavailable`, `cooldown`, `shared_quota_exhausted`,
+`model_quota_exhausted`, `shared_quota_reserve`, `model_quota_reserve`,
+`stale_quota`, and `quota_unknown`. Eligible entries have a null reason, except
+reserve-band grants being drained, which keep `shared_quota_reserve` or
+`model_quota_reserve`.
+An eligible unknown/stale observation under `staleState: "allow"` is not
+confirmed headroom. A model-only exhausted window does not exhaust other models.
+
+### Subscription routing and quota
+
+Policy `grantRouting` accepts two opt-in controls in addition to the existing
+strategy, stickiness, failover, priority and stale-state settings:
+
+| Field | Default | Contract |
+| --- | --- | --- |
+| `includedQuotaReservePercent` | `0` | Integer 0–50, a soft floor. A subscription is skipped when any applicable, unexpired window has this percentage or less remaining, while another grant is above the reserve. When none is and there is no environment fallback, the grants with quota left in every applicable window serve, spread within the policy hysteresis. |
+| `environmentFallback` | `false` | If no scoped grant is eligible, allow the provider's configured environment credential with normal transport, pricing and budget enforcement. Missing environment credentials retain the pool-unavailable error. |
+
+Scoped quota windows in `GET /v1/admin/upstream-grants` optionally carry
+`models: ["fable"]` (lowercase family tokens) and per-window `observedAt` timestamps. A scope applies when its token
+occurs in the requested upstream model ID; an absent scope applies to all
+models. Exhausted unscoped windows cool down the whole grant. Scoped exhaustion
+excludes only matching models. `most_remaining` and `threshold` compare only
+applicable live windows. `threshold` keeps the last reading of each open window regardless of `staleAfterSeconds`; a grant with no open-window reading is an unmeasured replacement of last resort. Freshness uses each applicable window's own timestamp, so partial header updates cannot refresh an older model window. Concurrent feedback merges by window observation time and preserves active inference cooldowns. Reset-passed readings are unknown. A reserve protects
+against extra-usage billing but cannot prevent one in-flight request crossing the
+boundary. It does not turn polling into an atomic upstream quota reservation.
+
+Grant responses also expose optional sanitized `account` fields (`email`,
+`displayName`, `rateLimitTier`, `subscriptionStatus`, `extraUsageEnabled`) and
+`extraUsage` fields (`enabled`, `usedCredits`, `monthlyLimit`, `utilization`,
+`currency`, `spendLimitReached`). Credits are minor units, e.g. USD cents.
+Only manifest-declared scalar fields are retained. Tokens and raw provider
+payloads are excluded. A probe HTTP 429 keeps the last reading and honors
+`Retry-After` independently per endpoint; HTTP 401 marks reauthorization required.
+
+When a configured pool has no eligible grant, HTTP requests fail with
+`upstream_grant_pool_unavailable`. If at least one otherwise usable grant has
+a possible recovery from a rate-limit cooldown or published quota reset, the
+status is HTTP 429 with `Retry-After` set to the whole seconds until the earliest
+such recovery. If no candidate has a known recovery (for
+example eligibility restrictions, unsupported transports, exhausted windows
+without a reset, stale observations under `staleState: "deny"`, or grants whose
+credentials failed with HTTP 401/403) it remains HTTP 503 without
+`Retry-After`. The error envelope and code are unchanged. The message names
+the requested upstream model (bounded to 256 characters) only when it matches
+a literal catalog model; resolved operator templates and uncatalogued values
+are omitted. It labels any deadline as the **earliest possible retry**, with eligibility
+rechecked on retry. It is not a confirmed upstream reset.
+For `poolStatus: "visible"`, an already-authorized admission snapshot can also
+supply observed scoped exclusion counts. These count one observed primary
+quota/health exclusion per configured, policy-eligible candidate, not every
+possible failure or total account inventory. Hidden pools and paths without an
+existing snapshot omit counts; no extra inventory read or auth/private response
+fields are introduced. Keys, account IDs and shared-owner identities are absent.
+
+`Retry-After` is ClawRouter's own re-admission time, not a provider promise.
+A provider 429 without timing cools a grant for ClawRouter's 60-second
+default, observed cooldowns are capped at 24 hours, and published quota resets
+are used as reported without a cap. Clients should apply their own maximum
+wait and fail over beyond it. An authentication cooldown never yields a
+`Retry-After`, because waiting does not repair a credential. CORS responses
+expose `Retry-After` to browser clients.
+
+Proxied HTTP responses carry `x-clawrouter-grant-lane`: `subscription` for
+subscription/OAuth grants, `api_key` for scoped API-key grants, and `environment`
+for provider environment credentials. One-shot 401/403/429 failover can use the
+environment lane when explicitly enabled and no alternate grant remains.
+Continuation pins, provider authorization and budget limits remain authoritative.
+An existing environment pin can reuse that environment credential while fallback remains enabled; a scoped pin never switches lanes.
+Usage events carry nullable `grant_key` and `grant_lane` for the final attempt;
+events created before this change retain unknown attribution.
+
+### Upstream grant usage
+
+`GET /v1/admin/upstream-grants/usage?scope=policies&scopeId=<policy-id>&days=7`
+requires the same admin authorization as the grant inventory. `days` is an
+integer 1–31 (default 7). The policy must exist; tenant-only scopes are not
+accepted. The Worker resolves the policy's canonical tenant before addressing
+its usage shard, independent of the administrator's tenant.
+
+The response contains `days`, `since`/`until` epoch milliseconds, `retentionDays`
+(currently 30), `grants`, `lanes`, and `daily`. Each metrics row contains
+`requests`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
+and `costMicros`. `grants` groups by `provider`, nullable `grantKey`, and nullable
+`grantLane`; `lanes` groups by `provider` and nullable `grantLane`. `daily` adds
+UTC `day` (`YYYY-MM-DD`) and nullable `model`, retaining the same grant/lane keys.
+Cost follows existing accounting prices (API-equivalent manifest value, or the
+policy's fixed tariff), not subscription invoice spend. Failed recorded requests
+also count; usage remains a single final-attempt event per request.
+
+Only retained events within the rolling requested range are read. A 31-day
+request cannot restore data beyond 30-day retention. Legacy null attribution
+remains a separate group. The response is bounded to 8,192 daily groups and
+returns HTTP 422 if exceeded; request a shorter range rather than relying on
+partial totals. Invalid scope/range returns HTTP 400; an unknown policy returns
+HTTP 404. The additive SQLite migration preserves every existing event.
+
+### Credential expiry, daily/weekly budgets, and service tiers
+
+New credentials accept `expiresAt` (future ISO-8601 UTC) and `serviceTiers`
+(canonical lowercase list or null to inherit). Expiry defaults to 180 days;
+personal maximum is min(default TTL, max TTL), admin maximum 366 days. Configure
+these using `CLAWROUTER_CREDENTIAL_DEFAULT_TTL_DAYS` and
+`CLAWROUTER_CREDENTIAL_MAX_TTL_DAYS`. An admin PUT omitting expiry preserves it;
+new IDs always receive a finite expiry. Admin PUT may omit `secretSha256` to
+preserve an existing secret while updating expiry. Rotation resets expiry and
+works for expired enabled keys under the other existing preconditions.
+
+Session/admin credential lists return `expiresAt`, `expired`, `serviceTiers`,
+and `active` (false when expired). Key inspect adds the same expiry fields,
+`serviceTiers`, `effectiveServiceTiers` keyed by visible catalog model ID,
+`dailyBudgetMicros`, `weeklyBudgetMicros`, `limitHint`, `budget.daily` and `budget.weekly`. An expired key still gets
+HTTP 401 on inspect, with `expiresAt`, `expired: true`, and `active: false` beside
+the error. Legacy absent/null expiry is accepted.
+
+Policies add nullable `dailyBudgetMicros` and `weeklyBudgetMicros` (nonnegative safe integers),
+`serviceTiers: {allowed: string[], models?: Record<string, string[]>}`, and
+`limitHint` (trimmed plain text, at most 300 characters, no controls). Tier lists
+are deduplicated, bounded to eight IDs, with at most 32 known catalog-model
+overrides. Overrides replace global tiers; credential tiers intersect them.
+Personal tier lists may only narrow the policy. The provisioning script can
+patch the team server and `openclaw_stable` policies to allow Ultrafast only on
+`openai/gpt-6.1-sol`. Without configuration, Default, Flex and
+Fast are allowed; Ultrafast/unknown tiers are denied, even without budgets.
+
+Existing monthly status fields remain unchanged. `/v1/usage`, session policy
+entitlements and admin usage rows add `budget.daily` and `budget.weekly` with `configured`,
+`limitMicros`, `spentMicros`, `remainingMicros`, `windowKey`, and `resetsAt`
+(next midnight UTC for daily; next Monday 00:00 UTC for weekly). Weekly window
+keys end in `/week/YYYY-Www` using the ISO week-year. The monthly status also
+includes `resetsAt`. Principal scopes share daily, weekly and monthly balances across
+that principal's keys. Unavailable status amounts remain null.
+
+| HTTP | Error code | Meaning |
+| --- | --- | --- |
+| 401 | `proxy_key_expired` | Key expired; message names its date and dashboard renewal path. |
+| 402 | `daily_budget_exhausted` | Daily capacity exhausted; message names the limit, next UTC reset and policy hint. |
+| 402 | `weekly_budget_exhausted` | Weekly capacity exhausted; message names the limit, next Monday 00:00 UTC reset and policy hint. |
+| 402 | `budget_exhausted` | Policy monthly capacity exhausted; includes policy hint. |
+| 400 | `service_tier_not_allowed` | Requested OpenAI tier not in the policy/model/key intersection; names tier, model, allowed tiers and hint. |
+| 403 | `model_not_allowed` | Model outside policy scope; includes policy hint. |
+
+OpenAI-format omitted/default/auto map to `default`, fast maps to `priority`,
+and other strings become lowercase for admission. Other request formats retain
+existing behavior. Pricing gaps under a daily-only or weekly-only budget return `pricing_required`
+just as with monthly budgets. Dispatched work completes after key expiry;
+subsequent requests, WebSocket turns, background creations and continuations fail.
+
+### Credential creation, naming, rotation, and revocation
+
+Use `POST /v1/admin/credentials` or `POST /v1/session/credentials` with
+`{ "credentialId": "my_key", "policyId": "my_policy", "secretSha256": "<64 hex characters>" }`
+to create a key. IDs must contain 4–128 letters, digits, or underscores so the key
+can be authenticated. Success returns `201`; an existing ID returns `409 credential_exists`
+without replacing the key or pruning retained records. Admin creation also accepts
+`enabled` (default `true`) and `principalId` (an email or `null`, default `null`).
+Personal creation always enables the key and assigns the signed-in user as owner.
+
+Creation also accepts optional `name` (string or null). Names are trimmed, at
+most 80 characters, and reject control characters. Empty or whitespace-only
+strings and null clear a name; other types are rejected. Session/admin
+credential lists and mutation responses return `name`, null when unnamed,
+without exposing secret hashes.
+
+Use `POST .../credentials/<credential-id>/rename` with exactly
+`{ "name": "Work laptop" }` or `{ "name": null }`. Other fields are rejected.
+Rename requires an existing credential and, for personal keys, the current
+enabled signed-in owner. It remains available for owned revoked or expired keys
+and after policy/group/binding access is removed. It changes only the latest
+stored name: no rotation, secret recovery, reactivation, owner/policy rebinding,
+expiry renewal, generation update, or tier changes. Missing keys return `404`;
+keys owned by another principal return `403`. Ownership and actor state are
+rechecked at the serialized write boundary, including after concurrent writes.
+
+Use `POST .../credentials/<credential-id>/rotate` with only
+`{ "secretSha256": "<64 hex characters>" }` to replace a key's hash and reset its expiry. Rotation preserves
+its name, owner, policy, generation, and enabled state. It requires an enabled key, an
+enabled policy with the same generation, and an owner who is not disabled. An
+inactive key returns `409 credential_inactive`; a missing key returns `404`.
+Rotation cannot reactivate a revoked key or renew a revoked policy generation.
+
+The existing `PUT .../credentials/<credential-id>` remains an upsert: it can replace
+the owner or policy on an admin key, reenable a key, and bind the current policy
+generation. Personal PUT keeps its existing forced-enabled, caller-owned behavior.
+PUT omission preserves an existing name; an explicit null clears it.
+Use create and rotate for operations that must not overwrite an existing key or
+change its authorization. Secret hashes are lowercase SHA-256 hex; responses never
+include a raw secret or hash and describe the record committed by that operation.
+
+Personal create, PUT, and rotate recheck the current enabled user, groups, bindings,
+and policy at the serialized write boundary. Personal revoke requires ownership
+but remains available after group, binding, or policy access is removed. Revoke
+disables the latest record, preserves any intervening hash rotation, and is
+idempotent for an existing key. Local administrator disable or demotion is also
+rechecked before credential writes; Cloudflare administrator status comes from
+the verified Access configuration. Personal keys are limited to 25 enabled
+and 100 retained records; creating another key can prune revoked records in ID
+order at the retention limit. Rotation and rename consume no additional slot.
 
 ## Pool contribution
 
@@ -207,7 +965,11 @@ only routing metadata and credential-presence flags.
 
 Before forwarding a request, the Worker authenticates the credential, resolves its policy, checks the provider connection and scoped grant readiness, and reserves a conservative budget. Policies can select grants by priority, round robin, least used, reported remaining quota, consume-until-threshold, or weighted random choice. Threshold routing owns pool affinity; other modes may use identity or session stickiness.
 
-Provider grants can be scoped to a policy or tenant. When several token references are eligible, ClawRouter applies the policy strategy within the active priority tier. An upstream 401, 403, or 429 records sanitized grant state and can trigger one same-provider alternate when policy allows failover.
+Provider grants can be scoped to a policy or tenant. When several token references are eligible, ClawRouter applies the policy strategy within the active priority tier. An upstream 401, 403, or 429 records sanitized grant state and can trigger same-provider alternates when policy allows failover, within one budget of four distinct eligible grants shared with credential preparation and Fusion reservation. Anthropic's explicit credit-balance HTTP 400 also excludes that grant for five minutes and can trigger the same bounded pre-delivery failover. Healthy grants retain stickiness; unrelated 400s and errors after streaming begins do not trigger credit failover. Exclusions use the full scoped grant key, including explicitly shared owners. If no further attempt is available, the last upstream rejection is returned; subsequent requests with no eligible grant return the pool-unavailable error with the earliest `Retry-After`.
+
+Unified, native, and manifest HTTP proxy routes refuse upstream 3xx redirects on both initial and alternate-grant dispatch. They cancel the redirect body and return a nonbillable `502 provider_unavailable` without `Location`; configure the final API endpoint rather than a redirect-dependent URL.
+
+Once HTTP dispatch begins, the endpoint deadline and observed caller cancellation also bound waiting for alternate-grant preparation. If interrupted there, the Worker cancels the original rejection body, returns `502 provider_unavailable`, and never dispatches a late alternate. An ordinary selection failure still returns the original rejection. Already-issued authority or credential operations may finish; this does not cancel them or extend the deadline to initial admission.
 
 Disable one credential to revoke one key, disable a policy to revoke every credential bound to it, or disable a provider connection to stop that provider globally. Policy and credential generations must match, so incomplete rotations and stale migration records fail closed.
 
@@ -215,10 +977,29 @@ Disable one credential to revoke one key, disable a policy to revoke every crede
 
 Budgeted requests reserve an upper-bound token cost before the upstream call when the selected model has versioned pricing. A policy `requestCostMicros` value is a fixed-cost override; budgeted routes without versioned pricing or an override fail closed.
 
-Successful responses settle to reported usage, including cached input where available. Non-2xx and transport failures refund the reservation. Missing or interrupted usage remains charged at the conservative reservation. Streaming responses are metered without buffering the client stream.
+`requestCostsMicros` maps capabilities to fixed request prices in non-negative integer microUSD (at most 64 entries). A matching entry overrides `requestCostMicros`, including zero; otherwise the policy-wide tariff or manifest pricing applies. Standalone search additionally requires an explicit `search.web` entry for eligibility in both discovery and dispatch; a policy-wide tariff alone returns `400 pricing_required`. Removing that entry disables standalone search, while an explicit zero enables it at zero router charge. For example, `{"requestCostMicros":null,"requestCostsMicros":{"search.web":1000}}` fixes standalone search charges while retaining token-priced inference. Policy updates preserve an omitted map; `null` removes it. Free counting, model discovery and moderation remain free. These prices govern admission, settlement and catalog affordability. The API and `cf:key:put --request-costs-micros` use integer microUSD. The admin policy form displays and accepts both request-price fields in US dollars, converting exactly on load/save; its equivalent capability JSON is `{"search.web":0.001}`. Prices support six decimal places, including explicit zero; blank removes the override.
+
+Successful responses settle to reported usage, including cached input where available, or the explicit fixed policy tariff. Known-unsent work and received non-2xx responses settle at zero with `cost_basis: none`. Transport failures after dispatch, and missing or interrupted usage, retain the qualified estimate or fixed tariff because upstream work may have occurred. Streaming responses are metered without buffering the client stream.
+
+Claude Messages server `web_search` settles **$0.01 per search plus measured token costs** on soft-budget and unmetered keys, using the authoritative `usage.server_tool_use.web_search_requests` counter in JSON or cumulative SSE usage. Content blocks and the caller's `max_uses` are not billed as observed searches. Missing, malformed, or incomplete search usage does not invent a fee: known token costs are still recorded and the receipt reports incomplete/unpriced usage. Known `web_fetch` versions have **token costs only**, with no per-call fee. See Anthropic's [web search pricing](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool#usage-and-pricing) and [web fetch pricing](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool#usage-and-pricing).
+
+Hard-budget policy or provider limits require an explicit fixed policy price (`requestCostMicros` or the `llm.messages` capability tariff) for these Claude server web tools; otherwise dispatch returns `400 pricing_required`, even when `max_uses` is supplied. That field bounds tool calls, not the cumulative token cost of repeated server-side model iterations, for which Anthropic publishes no synchronous iteration ceiling. A fixed policy tariff remains the configured charge rather than measured token-plus-search pricing. OpenAI hosted-search accounting is unchanged.
+
+Declared Responses JSON and SSE bodies are inspected incrementally for usage and terminal status, including fields after large output. The observer retains only bounded metadata; excessive nesting or oversized selected fields leave usage unknown and preserve the applicable estimate or fixed tariff. These inspection limits do not impose a response-size limit or change delivered bytes.
 
 Usage events are delivered through `USAGE_QUEUE` to tenant- and policy-sharded `USAGE_LEDGER` Durable Objects. Settlement and audit delivery retry independently, and exhausted messages move to the configured usage dead-letter queue. Ledgers keep bounded identity, route, timing, outcome, token, cost, request ID, and trace metadata; they do not store prompts or completions.
 
-Policies can retain LLM request bodies in the separate `CONTENT_ARCHIVE` R2 binding. Retention failure is fail-closed before upstream traffic. See [Request content retention](content-retention.md) for the policy and disclosure contract.
+Policies can retain LLM request bodies in the separate `CONTENT_ARCHIVE` R2 binding, including whole documents/PDFs and inline media in large Claude requests (not just extracted text). Retention failure is fail-closed before upstream traffic. See [Request content retention](content-retention.md) for the policy and disclosure contract.
 
 Every Worker-owned response returns the canonical `X-Request-ID`, and CORS exposes it to clients. Valid W3C trace and span IDs are preserved in usage metadata. Agent attribution headers, pricing fields, and reservation semantics are documented in [Agent spend control](agent-spend-control.md).
+
+## Image generation
+
+POST /v1/images/generations supports the OpenAI SDK's images.generate call.
+Use an explicit registered model; there is no legacy DALL-E default. See
+[OpenAI image generation](openai-images.md) for models, bounded JSON options,
+modality-specific accounting and unsupported surfaces.
+
+The same contract is available at POST /v1/native/openai/v1/images/generations
+(native model slugs) and POST /v1/proxy/openai/images_generations (manifest JSON
+envelope). Generated base64 image bytes are forwarded unchanged and never archived.

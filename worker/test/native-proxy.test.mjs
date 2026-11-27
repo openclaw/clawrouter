@@ -2,8 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { providerById, providerReadinessFromState } from "../providers.ts";
-import { correlateIngressRequest } from "../correlation.ts";
+import { providerReadinessFromState } from "../providers.ts"; import { modelRoute, providerById, routeCatalog } from "../provider-catalog.ts";
 
 const { prepareNativeRequest, prepareManifestRequest } = await import("../proxy-selection.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");
@@ -33,7 +32,7 @@ test("Google native path models use manifest pricing under a budgeted policy", (
     {},
   );
   const policy = { monthlyBudgetMicros: 1_000_000, requestCostMicros: null };
-  const cost = estimateCost(prepared.model, prepared.body, policy.requestCostMicros, "llm.stream", streamGenerate.request_format);
+  const cost = estimateCost(prepared.model, prepared.body, policy.requestCostMicros, "llm.stream", streamGenerate);
 
   assert.equal(prepared.model?.id, "google/gemini-3.5-flash");
   assert.equal(prepared.body.model, undefined);
@@ -59,7 +58,7 @@ test("current Anthropic native models retain routing and budget pricing", () => 
     assert.equal(prepared.model?.id, `anthropic/${model}`);
     assert.equal(prepared.body.model, model);
     assert.deepEqual(prepared.pathParams, {});
-    assert.equal(estimateCost(prepared.model, prepared.body, null, "llm.messages").basis, "manifest_pricing");
+    assert.equal(estimateCost(prepared.model, prepared.body, null, "llm.messages", messages).basis, "manifest_pricing");
   }
 });
 
@@ -68,13 +67,15 @@ test("native namespaces preserve upstream identifiers while manifest envelopes r
   const native = prepareNativeRequest(google, streamGenerate, {}, `/v1beta/models/${encodeURIComponent(upstream)}:streamGenerateContent`, {});
   assert.equal(native.pathParams.model, upstream);
   assert.equal(native.model.pricing, null);
+  const ownPrefix = prepareNativeRequest(google, streamGenerate, {}, "/v1beta/models/google%2Ffixture-model:streamGenerateContent", {});
+  assert.equal(ownPrefix.pathParams.model, "google/fixture-model");
   assert.throws(() => prepareManifestRequest(google, streamGenerate, {}, { model: upstream }, {}), (error) => error.code === "model_provider_mismatch");
   const openrouter = providerById("openrouter");
   const responses = openrouter.endpoints.find((endpoint) => endpoint.id === "responses");
   const routed = prepareNativeRequest(openrouter, responses, { model: "openai/gpt-6-astra", input: "fixture" }, responses.path, {});
   assert.equal(routed.body.model, "openai/gpt-6-astra");
   assert.equal(routed.model.pricing, null);
-  assert.equal(estimateCost(routed.model, routed.body, null, "llm.responses").basis, "flat_fallback");
+  assert.equal(estimateCost(routed.model, routed.body, null, "llm.responses", responses).basis, "flat_fallback");
 });
 
 test("native path models reject body and path mismatches", () => {
@@ -88,6 +89,23 @@ test("native path models reject body and path mismatches", () => {
     ),
     (error) => error?.code === "model_path_mismatch",
   );
+});
+
+test("pricing completeness retains known model metadata and assesses opaque requests by endpoint", () => {
+  const sonar = providerById("perplexity"), chat = sonar.endpoints.find(endpoint => endpoint.id === "chat_completions");
+  for (const model of ["sonar-pro", "perplexity/sonar-pro"]) {
+    const prepared = prepareNativeRequest(sonar, chat, { model, messages: [] }, chat.path, {});
+    assert.equal(estimateCost(prepared.model, prepared.body, null, "llm.chat", chat).pricingGap, "model_request_fee");
+  }
+  const opaque = prepareNativeRequest(sonar, chat, { model: "sonar-unlisted", messages: [] }, chat.path, {});
+  assert.equal(opaque.model.pricing, null);
+  assert.equal(estimateCost(opaque.model, opaque.body, null, "llm.chat", chat).basis, "flat_fallback");
+  for (const model of ["gemini-3.5-flash", "google/gemini-3.5-flash", "gemini-unlisted"]) {
+    const prepared = prepareManifestRequest(google, streamGenerate, { tools: [{ url_context: {} }] }, { model }, {});
+    const cost = estimateCost(prepared.model, prepared.body, null, "llm.stream", streamGenerate);
+    assert.equal(cost.pricingGap, "hosted_tool_usage");
+    assert.equal(cost.reserveMicros, 0);
+  }
 });
 
 test("native Azure Responses keeps v1 URL, API-key auth, explicit deployment, and JSON or SSE bodies", async (t) => {
@@ -129,7 +147,17 @@ test("native Azure Responses keeps v1 URL, API-key auth, explicit deployment, an
     assert.equal(request.url.href, `https://fixture.openai.azure.com/openai/deployments/fixture-deployment/${suffix}?api-version=2024-10-21`);
     assert.equal(request.headers.get("api-key"), "fixture-azure-key");
     assert.deepEqual(JSON.parse(request.body), expectedBody);
+    const unified = await fixture.call(`/v1/${suffix}`, { ...body, model: "azure-openai/fixture-deployment" }, true);
+    assert.equal(unified.status, 200);
+    await unified.text(); await fixture.drain();
+    assert.equal(sent.at(-1).url.href, request.url.href);
+    assert.deepEqual(JSON.parse(sent.at(-1).body), body, "AzureOpenAI-style unified requests retain body.model while resolving the deployment path");
   }
+  const unified = await fixture.call("/v1/responses", { model: "azure-openai/fixture-deployment", input: "fixture" }, true);
+  assert.equal(unified.status, 200);
+  await unified.text(); await fixture.drain();
+  assert.equal(sent.at(-1).url.pathname, "/openai/v1/responses");
+  assert.equal(JSON.parse(sent.at(-1).body).model, "fixture-deployment");
   delete fixture.env.AZURE_OPENAI_API_VERSION;
   const before = sent.length;
   const unavailable = await fixture.call("/openai/deployments/fixture-deployment/chat/completions", { messages: [] });
@@ -150,6 +178,28 @@ test("Azure readiness checks endpoint-specific configuration without requiring a
   env.AZURE_OPENAI_API_KEY = "fixture-azure-key";
   delete env.AZURE_OPENAI_ENDPOINT;
   assert.deepEqual(endpoints(), []);
+});
+
+test("provider readiness keeps control-plane configuration and probe precedence", () => {
+  const configured = { OPENAI_API_KEY: "fixture-openai-key" };
+  const fresh = { providerId: "openai", status: "verified", checkedAt: new Date(Date.now() - 1_000).toISOString(), latencyMs: 42 };
+  const stale = { ...fresh, checkedAt: new Date(Date.now() - 86_400_001).toISOString() };
+  const failed = { ...fresh, status: "failed", error: "Fixture probe failed." };
+  const unverified = "Configured but not recently verified by a live smoke test.";
+  for (const [env, enabled, health, status, executable, reasons] of [
+    [configured, true, fresh, "verified", true, []],
+    [configured, true, stale, "unverified", true, [unverified]],
+    [configured, true, failed, "failed", true, [unverified, failed.error]],
+    [{}, true, failed, "missing_config", false, ["Missing OPENAI_API_KEY.", failed.error]],
+    [configured, false, failed, "disabled", false, ["Provider connection is disabled.", failed.error]],
+  ]) {
+    const readiness = providerReadinessFromState(env, [], [{ providerId: "openai", enabled }], new Map([["openai", health]])).find(({ id }) => id === "openai");
+    assert.equal(readiness.status, status);
+    assert.equal(readiness.executable, executable);
+    assert.deepEqual(readiness.reasons, reasons);
+    assert.equal(readiness.lastCheckedAt, health.checkedAt);
+    assert.equal(readiness.latencyMs, health.latencyMs);
+  }
 });
 
 test("native OpenRouter Responses preserves provider namespaces and rejects unpriced budgeted calls", async (t) => {
@@ -177,6 +227,10 @@ test("native OpenRouter Responses preserves provider namespaces and rejects unpr
     assert.equal(request.headers.get("x-title"), "ClawRouter");
     assert.deepEqual(JSON.parse(request.body), body);
   }
+  const unified = await fixture.call("/v1/responses", { ...body, model: "openrouter/openai/gpt-6-astra" }, true);
+  assert.equal(unified.status, 200);
+  await unified.text(); await fixture.drain();
+  assert.deepEqual(JSON.parse(sent.at(-1).body), body);
   for (const owner of [fixture.policy, fixture.connection]) {
     owner.monthlyBudgetMicros = 1000;
     const denied = await fixture.call("/v1/responses", body);
@@ -185,18 +239,131 @@ test("native OpenRouter Responses preserves provider namespaces and rejects unpr
     await fixture.drain();
     owner.monthlyBudgetMicros = null;
   }
-  assert.equal(sent.length, 3);
+  assert.equal(sent.length, 4);
   delete fixture.env.OPENROUTER_API_KEY;
   assert.deepEqual(providerReadinessFromState(fixture.env, [], [], new Map()).find(({ id }) => id === "openrouter").executableEndpoints, []);
   const missingKey = await fixture.call("/v1/responses", body);
   assert.equal(missingKey.status, 503);
   assert.equal((await missingKey.json()).error.code, "provider_not_configured");
   await fixture.drain();
-  assert.equal(sent.length, 3);
+  assert.equal(sent.length, 4);
+});
+
+test("native OpenRouter Chat preserves opaque upstream IDs matching its routing prefix", async (t) => {
+  const fixture = await nativeFixture("openrouter");
+  Object.assign(fixture.env, { OPENROUTER_API_KEY: "fixture-openrouter-key", OPENROUTER_SITE_URL: "https://client.example" });
+  const sent = [];
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    sent.push(JSON.parse(init.body));
+    return Response.json({ usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+  });
+  for (const [model, unified, upstream] of [
+    ["openrouter/free", false, "openrouter/free"],
+    ["openrouter/openrouter/free", true, "openrouter/free"],
+    ["openrouter/auto", false, "openrouter/auto"],
+    ["openrouter/auto", true, "openrouter/auto"],
+  ]) {
+    const response = await fixture.call("/v1/chat/completions", { model, messages: [] }, unified);
+    assert.equal(response.status, 200);
+    await response.text(); await fixture.drain();
+    assert.equal(sent.at(-1).model, upstream);
+  }
+});
+
+test("opaque OpenAI models route through the requested unified and native operation without inherited pricing", async (t) => {
+  const fixture = await nativeFixture("openai");
+  fixture.env.OPENAI_API_KEY = "fixture-openai-key";
+  const sent = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    sent.push({ url: new URL(url), body: JSON.parse(init.body) });
+    return Response.json({ usage: { prompt_tokens: 1, total_tokens: 1 } });
+  });
+  for (const [path, model, input] of [
+    ["/v1/embeddings", "fixture-embedding", { input: "fixture" }],
+    ["/v1/chat/completions", "fixture-chat", { messages: [] }],
+    ["/v1/responses", "fixture-responses", { input: "fixture" }],
+  ]) {
+    for (const unified of [false, true]) {
+      const response = await fixture.call(path, { ...input, model: unified ? `openai/${model}` : model }, unified);
+      assert.equal(response.status, 200, `${path} unified=${unified}`);
+      await response.text(); await fixture.drain();
+      assert.equal(sent.at(-1).url.pathname, path);
+      assert.deepEqual(sent.at(-1).body, { ...input, model, ...(path === "/v1/embeddings" ? {} : { service_tier: "default" }) });
+    }
+  }
+  fixture.policy.monthlyBudgetMicros = 1_000_000;
+  const denied = await fixture.call("/v1/embeddings", { model: "openai/fixture-embedding", input: "fixture" }, true);
+  assert.equal(denied.status, 400);
+  assert.equal((await denied.json()).error.code, "pricing_required");
+  await fixture.drain();
+  assert.equal(sent.length, 6);
+  assert.equal(modelRoute("openai/fixture-chat"), null, "an opaque model needs operation context");
+});
+
+test("native catalog and dispatch use the same known model to endpoint relation", async (t) => {
+  const routes = routeCatalog().manifestProxy.filter((route) => route.provider === "cohere");
+  assert.deepEqual(routes.find((route) => route.endpoint === "chat").models.map((model) => model.id), ["cohere/command-a-plus-05-2026"]);
+  assert.deepEqual(routes.find((route) => route.endpoint === "embed").models.map((model) => model.id), ["cohere/embed-v4.0"]);
+  const fixture = await nativeFixture("cohere");
+  fixture.env.COHERE_API_KEY = "fixture-cohere-key";
+  const sent = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    sent.push({ url: new URL(url), body: JSON.parse(init.body) });
+    return Response.json({ embeddings: { float: [[0.1]] } });
+  });
+  const allowed = await fixture.call("/v2/embed", { model: "cohere/embed-v4.0", texts: ["fixture"], input_type: "search_document" });
+  assert.equal(allowed.status, 200);
+  await allowed.text(); await fixture.drain();
+  assert.equal(sent[0].url.pathname, "/v2/embed");
+  assert.equal(sent[0].body.model, "embed-v4.0");
+  for (const [path, model] of [["/v2/chat", "embed-v4.0"], ["/v2/embed", "cohere/command-a-plus-05-2026"]]) {
+    const denied = await fixture.call(path, { model });
+    assert.equal(denied.status, 400);
+    assert.equal((await denied.json()).error.code, "model_capability_unsupported");
+  }
+  const unknown = await fixture.call("/v2/unknown", { model: "fixture" });
+  assert.equal(unknown.status, 404);
+  for (const model of ["cohere/embed-v4.0", "cohere/fixture-embedding"]) {
+    const wrongFormat = await fixture.call("/v1/embeddings", { model, input: "fixture" }, true);
+    assert.equal(wrongFormat.status, 400);
+    assert.equal((await wrongFormat.json()).error.code, "model_capability_unsupported");
+  }
+  assert.equal(sent.length, 1, "incompatible and unknown operations never reach upstream");
+});
+
+test("local opaque Chat models retain explicitly declared zero pricing on unified and native routes", async (t) => {
+  const fixture = await nativeFixture("local-openai");
+  fixture.env.LOCAL_OPENAI_BASE_URL = "https://local-provider.example";
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.equal(new URL(url).pathname, "/v1/chat/completions");
+    assert.equal(JSON.parse(init.body).model, "fixture-model");
+    return Response.json({ usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+  });
+  for (const unified of [false, true]) {
+    const response = await fixture.call("/v1/chat/completions", { model: unified ? "local/fixture-model" : "fixture-model", messages: [] }, unified);
+    assert.equal(response.status, 200);
+    await response.text(); await fixture.drain();
+  }
+  const route = modelRoute("local/fixture-model", "llm.chat");
+  assert.equal(route.model.pricing_ref, "local-compute-zero-api-charge-v1");
+  assert.equal(estimateCost(route.model, { messages: [] }, null, "llm.chat", route.provider.endpoints.find(endpoint => endpoint.id === "chat_completions")).reserveMicros, 0);
+  assert.equal(modelRoute("local/fixture-model", "llm.embeddings"), null);
+});
+
+test("native resolution neither invents a default model nor copies opaque model metadata", () => {
+  const openai = providerById("openai"), responses = openai.endpoints.find((endpoint) => endpoint.id === "responses");
+  const absent = prepareNativeRequest(openai, responses, { input: "fixture" }, responses.path, {});
+  assert.equal(absent.model, null);
+  assert.deepEqual(absent.body, { input: "fixture" });
+  const opaque = prepareNativeRequest(openai, responses, { model: "fixture-model", input: "fixture" }, responses.path, {});
+  assert.deepEqual(opaque.model, { id: "fixture-model", upstream: "fixture-model", capabilities: ["llm.responses"], pricing_ref: null, pricing: null });
+  assert.throws(() => prepareNativeRequest(openai, { ...responses, modelPassthrough: undefined }, { model: "fixture-model" }, responses.path, {}), (error) => error.code === "model_capability_unsupported");
+  const embeddings = openai.endpoints.find((endpoint) => endpoint.id === "embeddings");
+  assert.throws(() => prepareNativeRequest(openai, embeddings, { model: "openai/gpt-6-astra" }, embeddings.path, {}), (error) => error.code === "model_capability_unsupported");
 });
 
 async function nativeFixture(providerId) {
-  const { proxyNative } = await import("../proxy.ts");
+  const { default: worker } = await import("../index.ts");
   const { sha256Hex } = await import("../utils.ts");
   const secret = "fixture-native-secret", pending = [];
   const policy = { enabled: true, generation: "g1", providers: [providerId], tenantId: "default", monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: false };
@@ -207,6 +374,7 @@ async function nativeFixture(providerId) {
     USAGE_QUEUE: { send: async () => {} },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
       const path = new URL(url).pathname;
+      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture", credential }, policy: { policyId: "fixture", policy }, owner: null, connections: [connection], pools: { [connection.providerId]: { keys: [], states: {} } } });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [connection], missingProviderIds: [] });
@@ -216,10 +384,10 @@ async function nativeFixture(providerId) {
   };
   return {
     env, policy, connection,
-    call(path, body) {
-      const nativePath = `/v1/native/${providerId}${path}`;
-      const request = correlateIngressRequest(new Request(`https://router.example${nativePath}`, { method: "POST", headers: { authorization: `Bearer clawrouter-live-fixture-${secret}`, "content-type": "application/json" }, body: JSON.stringify(body) })).request;
-      return proxyNative(request, env, { waitUntil: (promise) => pending.push(promise) }, nativePath);
+    call(path, body, unified = false) {
+      const nativePath = unified ? path : `/v1/native/${providerId}${path}`;
+      const request = new Request(`https://router.example${nativePath}`, { method: "POST", headers: { authorization: `Bearer clawrouter-live-fixture-${secret}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+      return worker.fetch(request, env, { waitUntil: (promise) => pending.push(promise) });
     },
     async drain() { while (pending.length) await Promise.all(pending.splice(0)); },
   };

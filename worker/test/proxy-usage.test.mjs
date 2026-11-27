@@ -81,6 +81,41 @@ test("Anthropic long-context pricing uses the full input, including the cache", 
 
 const sse = (...events) => events.map((event) => `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`).join("");
 
+test("Chat top-level cache hits are inclusive and agree with nested details in JSON and terminal SSE", () => {
+  for (const details of [undefined, {}, { cached_tokens: 800 }]) {
+    const usage = { prompt_tokens: 1_000, completion_tokens: 20, prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200, prompt_tokens_details: details };
+    const chunk = { object: "chat.completion.chunk", usage };
+    for (const tokens of [extractUsageTokens({ usage }), extractSseUsageTokens(sse(chunk, "[DONE]"))]) {
+      assert.equal(tokens.input, 1_000);
+      assert.equal(tokens.total, 1_020);
+      assert.equal(tokens.cached, 800);
+      assert.equal(actualModelCost(cachePricing, tokens), 380);
+    }
+  }
+  assert.equal(extractUsageTokens({ usage: { prompt_tokens: 1_000, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 1_000 } }).cached, 0);
+  assert.equal(extractUsageTokens({ usage: { prompt_cache_hit_tokens: 800, completion_tokens: 20 } }).input, null);
+});
+
+test("invalid or conflicting cache evidence never discounts Chat input or preserves an earlier SSE discount", () => {
+  const valid = { prompt_tokens: 1_000, completion_tokens: 20, prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200 };
+  for (const invalid of [
+    { prompt_tokens_details: { cached_tokens: 900 } },
+    { prompt_tokens_details: { cached_tokens: null } },
+    { prompt_tokens_details: { cached_tokens: -1 } },
+    { prompt_cache_hit_tokens: 1_001 }, { prompt_cache_hit_tokens: -1 },
+    { prompt_cache_hit_tokens: 800.5 }, { prompt_cache_hit_tokens: "800" },
+    { prompt_cache_hit_tokens: Number.MAX_SAFE_INTEGER + 1 },
+    { prompt_cache_miss_tokens: 201 }, { prompt_cache_miss_tokens: null },
+  ]) {
+    const usage = { ...valid, ...invalid };
+    for (const tokens of [extractUsageTokens({ usage }), extractSseUsageTokens(sse({ object: "chat.completion.chunk", usage: valid }, { object: "chat.completion.chunk", usage }, "[DONE]"))]) {
+      assert.equal(tokens.input, 1_000);
+      assert.equal(tokens.cached, null);
+      assert.equal(actualModelCost(cachePricing, tokens), 1_100);
+    }
+  }
+});
+
 test("served tiers come from terminal Responses and persist across Chat usage-only chunks", () => {
   const usage = { input_tokens: 12, output_tokens: 3 };
   assert.equal(extractUsageTokens({ service_tier: "priority", usage }).serviceTier, "priority");
@@ -150,14 +185,14 @@ test("OpenAI streams keep inclusive cache usage and require their terminal event
 
 test("other SSE usage metadata and multiline data retain their existing totals", () => {
   const stream = ': heartbeat\n\ndata: {"usageMetadata": {\ndata: "promptTokenCount": 100, "candidatesTokenCount": 20, "totalTokenCount": 120}}\n\n';
-  assert.deepEqual(extractSseUsageTokens(stream), { input: 100, output: 20, total: 120, cached: 0, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null });
+  assert.deepEqual(extractSseUsageTokens(stream), { input: 100, output: 20, total: 120, cached: 0, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null, reasoning: 0 });
 });
 
 test("Gemini keeps cache-inclusive input and bills thoughts plus candidates in JSON and cumulative SSE", () => {
   const usageMetadata = { promptTokenCount: 1_000, cachedContentTokenCount: 900, candidatesTokenCount: 100, thoughtsTokenCount: 1_000, totalTokenCount: 2_100 };
   const final = { usageMetadata };
   for (const tokens of [extractUsageTokens(final), extractSseUsageTokens(sse({ usageMetadata: { promptTokenCount: 1_000, candidatesTokenCount: 5, totalTokenCount: 1_005 } }, final, { candidates: [] }))]) {
-    assert.deepEqual(tokens, { input: 1_000, output: 1_100, total: 2_100, cached: 900, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null });
+    assert.deepEqual(tokens, { input: 1_000, output: 1_100, total: 2_100, cached: 900, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null, reasoning: 1_000 });
     assert.equal(actualModelCost({ ...cachePricing, inputMicrosPerMillion: 1_500_000, cachedInputMicrosPerMillion: 150_000, outputMicrosPerMillion: 9_000_000 }, tokens), 10_185);
   }
   const thoughtsOnly = extractUsageTokens({ usageMetadata: { promptTokenCount: 1_000, thoughtsTokenCount: 100, totalTokenCount: 1_100 } });
@@ -167,11 +202,11 @@ test("Gemini keeps cache-inclusive input and bills thoughts plus candidates in J
 });
 
 test("Gemini scalar defaults are distinct from absent or malformed metadata", () => {
-  const zero = { input: 0, output: 0, total: 0, cached: 0, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null };
+  const zero = { input: 0, output: 0, total: 0, cached: 0, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null, reasoning: 0 };
   for (const usageMetadata of [{}, { promptTokenCount: 0, candidatesTokenCount: 0 }, { thoughtsTokenCount: null }]) assert.deepEqual(extractUsageTokens({ usageMetadata }), zero);
   for (const body of [{}, { usageMetadata: null }, { usageMetadata: [] }]) assert.equal(extractUsageTokens(body), null);
   const wire = { usage_metadata: { prompt_token_count: "1e3", candidates_token_count: "16", thoughts_token_count: "2", total_token_count: "1018" } };
-  assert.deepEqual(extractUsageTokens(wire), { ...zero, input: 1_000, output: 18, total: 1_018 });
+  assert.deepEqual(extractUsageTokens(wire), { ...zero, input: 1_000, output: 18, total: 1_018, reasoning: 2 });
   const partial = { usageMetadata: { promptTokenCount: 1_000, candidatesTokenCount: 5, totalTokenCount: 1_005 } };
   for (const field of ["promptTokenCount", "cachedContentTokenCount", "candidatesTokenCount", "thoughtsTokenCount", "totalTokenCount"]) {
     for (const invalid of [-1, 1.5, 2_147_483_648, "bad", "Infinity", true, {}]) {

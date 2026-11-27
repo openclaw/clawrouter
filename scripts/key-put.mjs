@@ -1,3 +1,4 @@
+import { normalizeRequestCosts } from "../shared/request-pricing.ts";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { localAdminEnvironment } from "./grant-target.mjs";
@@ -32,6 +33,8 @@ const monthlyBudgetMicros = args["monthly-budget-micros"]
 const requestCostMicros = args["request-cost-micros"]
   ? parseNonNegativeInteger(args["request-cost-micros"], "--request-cost-micros")
   : undefined;
+const requestCostsMicros = args["request-costs-micros"] === undefined ? undefined
+  : normalizeRequestCosts(JSON.parse(args["request-costs-micros"]));
 const request = {
   enabled,
   providers,
@@ -39,6 +42,7 @@ const request = {
   tenantId,
   secretSha256: createHash("sha256").update(secret).digest("hex"),
 };
+if (requestCostsMicros !== undefined) request.requestCostsMicros = requestCostsMicros;
 if (monthlyBudgetMicros !== undefined) {
   request.monthlyBudgetMicros = monthlyBudgetMicros;
 }
@@ -48,6 +52,7 @@ if (requestCostMicros !== undefined) {
 
 await adminRequest(`/v1/admin/keys/${encodeURIComponent(kid)}`, {
   method: "PUT",
+  responseMode: "ack",
   body: request,
   env,
 });

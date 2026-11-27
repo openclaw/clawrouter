@@ -1,7 +1,0 @@
-{
-  "id": "chatcmpl_test",
-  "object": "chat.completion",
-  "model": "gpt-4.1-mini",
-  "choices": [{ "index": 0, "message": { "role": "assistant", "content": "pong" }, "finish_reason": "stop" }],
-  "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
-}

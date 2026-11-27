@@ -1,0 +1,101 @@
+{
+  "qualification": {
+    "live": false,
+    "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+    "origin": "https://api.kie.ai",
+    "authorizationScheme": "Bearer",
+    "upstreamCostMicros": null
+  },
+  "requests": [
+    {
+      "model": "hailuo/02-text-to-video-standard",
+      "input": {
+        "prompt": "A paper fox crosses a quiet pond",
+        "duration": "6"
+      }
+    },
+    {
+      "model": "hailuo/02-image-to-video-standard",
+      "input": {
+        "prompt": "Animate the paper boat",
+        "duration": "10",
+        "resolution": "512P",
+        "image_url": "https://assets.example/boat.png"
+      }
+    },
+    {
+      "model": "hailuo/02-text-to-video-pro",
+      "input": {
+        "prompt": "A paper fox sails past reeds"
+      }
+    },
+    {
+      "model": "hailuo/02-image-to-video-pro",
+      "input": {
+        "prompt": "Animate the sail",
+        "image_url": "https://assets.example/boat.webp"
+      }
+    },
+    {
+      "model": "hailuo/2-3-image-to-video-standard",
+      "input": {
+        "prompt": "Animate ripples",
+        "duration": "10",
+        "resolution": "768P",
+        "image_url": "https://assets.example/boat.jpg"
+      }
+    },
+    {
+      "model": "hailuo/2-3-image-to-video-pro",
+      "input": {
+        "prompt": "Animate the paper fox",
+        "duration": "6",
+        "resolution": "1080P",
+        "image_url": "https://assets.example/boat.webp"
+      }
+    }
+  ],
+  "imageActivation": {
+    "enabled": false,
+    "requires": "original-caller/model/credential asset binding and image validation",
+    "uploadOrigin": "https://kieai.redpandaai.co",
+    "uploadPath": "/api/file-base64-upload"
+  },
+  "taskId": "synthetic_kie_hailuo_job",
+  "submission": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_hailuo_job"
+    }
+  },
+  "partial": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_hailuo_job",
+      "state": "generating",
+      "resultJson": "{\"resultUrls\":[\"https://assets.example/partial.mp4\"]}"
+    }
+  },
+  "completed": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_hailuo_job",
+      "model": "hailuo/02-text-to-video-standard",
+      "state": "success",
+      "resultJson": "{\"resultUrls\":[\"https://assets.example/boat.mp4\"]}"
+    }
+  },
+  "failed": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_hailuo_job",
+      "state": "fail",
+      "failCode": "synthetic_failure",
+      "failMsg": "Synthetic generation failure"
+    }
+  },
+  "unavailable": {
+    "code": 404,
+    "msg": "Synthetic unavailable observation"
+  }
+}

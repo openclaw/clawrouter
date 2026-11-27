@@ -1,0 +1,693 @@
+{
+  "schema": 1,
+  "projection": true,
+  "source": "0d237fb6e1bd23b27862761ada6588d818150f9b",
+  "controlSha256": "a01be212ffdc671888dd043a2edb61ca627b668cefe9692e115b423ffae482a7",
+  "coordinatorCommit": "d9fba2f899444de5a298a2854f0672f3aa40f4e9",
+  "initialControlSource": "e8938c6063e8133e99cacefd7a2ba78014edb818",
+  "nativePayloads": {
+    "old": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+    "candidate": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72"
+  },
+  "originalRows": [
+    {
+      "kind": "control",
+      "mode": "interrupt-green",
+      "passed": true,
+      "source": "0d237fb6e1bd23b27862761ada6588d818150f9b",
+      "ids": {
+        "run": "1795062677219",
+        "blue": "83abb2dc-988a-4b2c-9509-b85be5f89802",
+        "green": "52a51aff-0387-4c36-9608-9fd3746a7a8e",
+        "recovery": "0d8c2193-35f5-45e6-9133-5825981a2e5a"
+      },
+      "actionsRun": 44459687964,
+      "cleanupErrors": [],
+      "url": "https://github.com/openclaw/clawrouter/actions/runs/44459687964",
+      "cases": {
+        "activation": {
+          "passed": true
+        },
+        "seed": {
+          "passed": true
+        },
+        "continuity-forward": {
+          "passed": true
+        },
+        "continuity-recovery": {
+          "passed": true
+        },
+        "deployment": {
+          "passed": true
+        },
+        "accounting": {
+          "passed": true
+        },
+        "non-http": {
+          "passed": true
+        },
+        "cleanup": {
+          "passed": true,
+          "campaignCleanupPending": true,
+          "hostedResourcesDeleted": false
+        }
+      }
+    },
+    {
+      "kind": "payload",
+      "mode": "fail-smoke",
+      "passed": false,
+      "source": "0d237fb6e1bd23b27862761ada6588d818150f9b",
+      "ids": {
+        "run": "1795062677220",
+        "blue": "0d8c2193-35f5-45e6-9133-5825981a2e5a",
+        "green": "3f3c8f97-ed49-41d1-8220-58a0c86238c1",
+        "recovery": "fc9eca71-a158-4f3c-beb7-887c83be6585"
+      },
+      "actionsRun": 44459962727,
+      "cleanupErrors": [
+        "native/client: cloudflare GET worker-deployments failed during http with HTTP 401; diagnostic={\"service\":\"cloudflare\",\"method\":\"GET\",\"operation\":\"worker-deployments\",\"worker\":\"selected\",\"stage\":\"http\",\"status\":401}"
+      ],
+      "url": "https://github.com/openclaw/clawrouter/actions/runs/44459962727",
+      "cases": {
+        "activation": {
+          "passed": true
+        },
+        "seed": {
+          "passed": true
+        },
+        "continuity-forward": {
+          "passed": true
+        },
+        "payload": {
+          "passed": false,
+          "error": "GREEN-WORKLOADS exited 1; do not replay"
+        },
+        "continuity-recovery": {
+          "passed": true
+        },
+        "deployment": {
+          "passed": true
+        },
+        "accounting": {
+          "passed": true
+        },
+        "non-http": {
+          "passed": false,
+          "error": "cloudflare GET other failed during http with HTTP 401; diagnostic={\"service\":\"cloudflare\",\"method\":\"GET\",\"operation\":\"other\",\"stage\":\"http\",\"status\":401}"
+        },
+        "cleanup": {
+          "passed": false,
+          "nativeAbsent": false
+        }
+      }
+    }
+  ],
+  "continuity": [
+    {
+      "purpose": "control",
+      "sameSavedSession": true,
+      "threadIdSha256": "67a0401f30ffe8f6addc0f40986c41cd1b0469ea04a2b99148a8c9d801dbb218",
+      "sessionIntervention": "none after bounded coordinator launch",
+      "directions": [
+        {
+          "direction": "forward",
+          "resumedAppServer": true,
+          "interrupted": {
+            "status": "completed",
+            "retryNotifications": 0,
+            "finishedAt": 1795063114479
+          },
+          "recoveryMs": 23358,
+          "followupLatencyMs": 2020,
+          "followup": {
+            "status": "completed",
+            "finishedAt": 1795063137287,
+            "retryNotifications": 0,
+            "transportErrors": 0,
+            "answerSha256": "33e021589165a656de286fa17ea1839bf211cbedc44ecef966a1aa87e3ac051f"
+          }
+        },
+        {
+          "direction": "recovery",
+          "resumedAppServer": true,
+          "interrupted": {
+            "status": "completed",
+            "retryNotifications": 0,
+            "finishedAt": 1795063196832
+          },
+          "recoveryMs": 19782,
+          "followupLatencyMs": 2023,
+          "followup": {
+            "status": "completed",
+            "finishedAt": 1795063215899,
+            "retryNotifications": 0,
+            "transportErrors": 0,
+            "answerSha256": "08398c9ce33c6867f9ceb689ddc2cd4abf558b7b42182226a6d4389eb5e71bc7"
+          }
+        }
+      ]
+    },
+    {
+      "purpose": "payload",
+      "sameSavedSession": true,
+      "threadIdSha256": "c3e21769851274563797cb0c5ba5f4b1a6d9776d213fe3867506642aa9ebb297",
+      "sessionIntervention": "none after bounded coordinator launch",
+      "directions": [
+        {
+          "direction": "forward",
+          "resumedAppServer": true,
+          "interrupted": {
+            "status": "completed",
+            "retryNotifications": 0,
+            "finishedAt": 1795063265998
+          },
+          "recoveryMs": 22494,
+          "followupLatencyMs": 1513,
+          "followup": {
+            "status": "completed",
+            "finishedAt": 1795063287852,
+            "retryNotifications": 0,
+            "transportErrors": 0,
+            "answerSha256": "0ef67d655c6e5be0ec50c792d4a9f76e5988814b6673376e24d97740a65cbd49"
+          }
+        },
+        {
+          "direction": "recovery",
+          "resumedAppServer": true,
+          "interrupted": {
+            "status": "completed",
+            "retryNotifications": 0,
+            "finishedAt": 1795063378531
+          },
+          "recoveryMs": 437161,
+          "followupLatencyMs": 2012,
+          "followup": {
+            "status": "completed",
+            "finishedAt": 1795063814988,
+            "retryNotifications": 0,
+            "transportErrors": 0,
+            "answerSha256": "0b2c0daeb556726281e2af8ff2a5d265bdefceb58ea2390f9e29f496cd5fed37"
+          }
+        }
+      ]
+    }
+  ],
+  "payloadCases": [
+    {
+      "mode": "success",
+      "status": 200,
+      "bytes": 329,
+      "response": {
+        "status": 200,
+        "version": "3f3c8f97-ed49-41d1-8220-58a0c86238c1",
+        "bodyComplete": true
+      }
+    },
+    {
+      "mode": "reject",
+      "status": 400,
+      "bytes": 328,
+      "response": {
+        "status": 400,
+        "version": "3f3c8f97-ed49-41d1-8220-58a0c86238c1",
+        "bodyComplete": true
+      }
+    },
+    {
+      "mode": "max",
+      "status": 200,
+      "bytes": 67108864,
+      "response": {
+        "status": 200,
+        "version": "3f3c8f97-ed49-41d1-8220-58a0c86238c1",
+        "bodyComplete": true
+      }
+    },
+    {
+      "mode": "overflow",
+      "status": 413,
+      "bytes": 67108865,
+      "response": {
+        "status": 413,
+        "version": "3f3c8f97-ed49-41d1-8220-58a0c86238c1",
+        "bodyComplete": true
+      }
+    }
+  ],
+  "currentLossProbe": {
+    "outcome": "failed",
+    "stage": "response_body",
+    "response": {
+      "status": 200,
+      "version": "3f3c8f97-ed49-41d1-8220-58a0c86238c1",
+      "bodyComplete": true
+    },
+    "failure": {
+      "kind": "assertion"
+    },
+    "bodyCaptured": false,
+    "disposition": "Original assertion remains failed. Accepted revision-2 loss evidence is reused for unchanged delivery/fixture/SDK code; no claim to have captured this new body.",
+    "caseId": "de20a14cad3c64322ced1448504bcb12",
+    "traceHash": "881e432eb8fa51f1d1f79ac1d41ac6667bbc9502f0ab532d75c96677afa762b6",
+    "independentAccounting": {
+      "matchingExecutions": 1,
+      "matchingFinishes": 1,
+      "clean": false,
+      "uniqueProviderErrorEvents": 1,
+      "actualCostMicros": 7,
+      "reservedCostMicros": 7,
+      "correlation": "Only delivery_unknown case and only provider_error accounting event; finish matches diagnostic trace hash, slot, generation and runtime. Canonical accounting request IDs are separate from pool trace IDs.",
+      "replayed": false
+    }
+  },
+  "accounting": {
+    "requests": 14,
+    "events": 14,
+    "spentMicros": 91,
+    "replays": 0,
+    "nativeStarts": 40,
+    "cases": [
+      {
+        "id": "47b03b75a1f0f845c9e808164c33188d",
+        "mode": "seed",
+        "slot": 0,
+        "generation": 1,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "outcome": "completed"
+      },
+      {
+        "id": "98b16b0c00cc11524d52b8ea66a59f63",
+        "mode": "hold",
+        "slot": 1,
+        "generation": 1,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "outcome": "completed"
+      },
+      {
+        "id": "79832d48c9606c2acbc38334948c77b4",
+        "mode": "recall",
+        "slot": 2,
+        "generation": 2,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "outcome": "completed"
+      },
+      {
+        "id": "f4df2033c4d6bb8c009b9f852bddc87a",
+        "mode": "hold",
+        "slot": 3,
+        "generation": 2,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "outcome": "completed"
+      },
+      {
+        "id": "60de84f1fc3f3d2c5713010b5b3b3ec1",
+        "mode": "recall",
+        "slot": 4,
+        "generation": 3,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "outcome": "completed"
+      },
+      {
+        "id": "8135bc20ed9356446b505bd19130e683",
+        "mode": "seed",
+        "slot": 5,
+        "generation": 3,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "outcome": "completed"
+      },
+      {
+        "id": "907a67dd7a7d8957d5b7c4af28c0f356",
+        "mode": "hold",
+        "slot": 6,
+        "generation": 3,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "outcome": "completed"
+      },
+      {
+        "id": "40688fe311f721e9a5e19cd969a7ce4b",
+        "mode": "recall",
+        "slot": 7,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "outcome": "completed"
+      },
+      {
+        "id": "2e0cea99a5e44c842f5de671535ab8de",
+        "mode": "hold",
+        "slot": 0,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "outcome": "completed"
+      },
+      {
+        "id": "2efbd9688bec8711ba125af9af7d6a2e",
+        "mode": "success",
+        "slot": 1,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "outcome": "completed"
+      },
+      {
+        "id": "eecd4c012ab9f26a519c1f1c19f41ee6",
+        "mode": "reject",
+        "slot": 2,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "outcome": "rejected"
+      },
+      {
+        "id": "0ac6cf1355bf5954c0030d55d1710a24",
+        "mode": "max",
+        "slot": 3,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "outcome": "completed"
+      },
+      {
+        "id": "de20a14cad3c64322ced1448504bcb12",
+        "mode": "lost",
+        "slot": 4,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "outcome": "delivery_unknown"
+      },
+      {
+        "id": "72c29345dba9d97db72fa190bbe8f323",
+        "mode": "recall",
+        "slot": 5,
+        "generation": 5,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "outcome": "completed"
+      }
+    ],
+    "eventsDetail": [
+      {
+        "idHash": "03cee29470543262bdcff07d81422c8c05d15db0b2346965ef4ebda24df5c283",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "0aad9930dfc51bfddd428e2f66415501081f3e5d37c92018107f3075d21ca660"
+      },
+      {
+        "idHash": "9ec12a68415132820c549cc9cff9a16d604100bd8cf82147505d1e576a253cdd",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "e5cff1c4c83fc53e37c0d0040304f1fa715dcdbdd1f8ea8b118dacc7f06d2c78"
+      },
+      {
+        "idHash": "991013bace0e1e1ae1a125953f8bdb8dcc23db7bf87e987016507ed27ff175fb",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "provider_error",
+        "contentRetained": false,
+        "requestIdHash": "541faf852ab3f042474b347b2e6eac6fb3ce9bd7ad5d6616768ee066bf37678f"
+      },
+      {
+        "idHash": "7daf77ee0c0b3e088c6c7877808d68bb97bf5cb54ecd38196ffb1bcd8989ce5b",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "ec6cfe83904cf7a834be5cd8074f7479ee78d594ac4ab48036b96085b8b75733"
+      },
+      {
+        "idHash": "cfa8378f0172395f19a9a1e9b9f727aead85c3e17636a45d8fb12e0e66faf460",
+        "actualCostMicros": 0,
+        "reservedCostMicros": 7,
+        "status": "client_error",
+        "contentRetained": false,
+        "requestIdHash": "41998346b5ee6ab32fb820caa885173c6eb1ea2a3d6eb1170271aa0b1e35e00a"
+      },
+      {
+        "idHash": "50ac7ae05c47e2a4843bc877463fb3f1a5184a7e97389802680d198a459b0f20",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "a55ba726b1c3a1b00dc23c821ddaca7f5a12a13a8736be6d015309f126d2f78d"
+      },
+      {
+        "idHash": "ce9071f0ed7a19bcb73ad5395aabaebbd5f6523a2ed7e598359258ff93a8cea7",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "c791646d258399b1b461af68c416a6f4af3ca54d1a61f4085ba511890ff8c555"
+      },
+      {
+        "idHash": "637e59a2fbbc4b457c0e072dc1093c53aa54f30e36b93d5bfe1cf2d2a39441e0",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "e6a21acadb861b89b804cdbf2b3997d31f343ea261c4b743637f89ed152b3d4c"
+      },
+      {
+        "idHash": "653d078614ba992f3f2f4e8e4d2574498d951bdc0c0b64ab8345242b29c2417e",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "f792f21d1c2a0f63c5f3602c871e868ee193269b1c7daa3f2d1a143a8e4dac7c"
+      },
+      {
+        "idHash": "74a42bac3b1d52e9ab8992527dd75e303ae7c91151cd30a88a6b1ae7dd359eee",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "631596901692148833a8768aa602816c8897f4174186fdf8f96a22ea9e9de25b"
+      },
+      {
+        "idHash": "9a3d6aa99099d17c2b3f7c68e6d3e35b8df962df79f54066336100580e0577b2",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "b8dd6f0032906b2edf17c43adcb149ca83f468fe39c596f41d37762489e16b33"
+      },
+      {
+        "idHash": "05794ea26b7d27a6923f6fef155c4f1bf0441c4d2160ab74ee6f98011f67805a",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "ca807e6ab58ca5d4bc9fe876d457561860d3dd3596934db27cb2ad6790931ddb"
+      },
+      {
+        "idHash": "1fffb7f984ab714f737e8208a19aa7ca48b6d928685c6b05e97cff9bbb807712",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "3da58a511105c097e7d7b1669a075e0a5db4fd0f7648ec65f0deca13f9605817"
+      },
+      {
+        "idHash": "b3bfa13396c515c3ff4e4e43ab6bcc4e3f6e68503dfae1946c89d5541adfb4ed",
+        "actualCostMicros": 7,
+        "reservedCostMicros": 7,
+        "status": "success",
+        "contentRetained": false,
+        "requestIdHash": "ef3bcf5603657cf9aa5c5e63b9c295dc8fe27b5d31eb2ffc35b72c957ab1ecff"
+      }
+    ],
+    "finishes": [
+      {
+        "op": "finish",
+        "slot": 0,
+        "generation": 1,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "status": 200,
+        "idHash": "61c89c0afcac19b97a744fec99d69e26b2705c67d803e3a885f76c878ddb0d2b",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 1,
+        "generation": 1,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "status": 200,
+        "idHash": "8228875ed6d28e1831d8fa5e0411753433258b483dc2c26256f731b86de456d9",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 2,
+        "generation": 2,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "status": 200,
+        "idHash": "dcc83238614705faaf43b7fa001a6d60432ad413d80185bfcbca1debd114331d",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 3,
+        "generation": 2,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "status": 200,
+        "idHash": "5ec88e133fb858bb2857754069996c62b37942d9a5d65e7894b7d2bf6aa62dd3",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 4,
+        "generation": 3,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "status": 200,
+        "idHash": "22acdd4b87b8f8228f82e5f93aafaba9b909587ae2d5fb493138a43b1054cf99",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 5,
+        "generation": 3,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "status": 200,
+        "idHash": "65b3ca59d3d9d0f0d7f60941738083beffaa66ad1395a35b9a238ee2dc02fcf2",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 6,
+        "generation": 3,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "status": 200,
+        "idHash": "a028db5b4ff1a0ddbe709cff004b5e55e08981bacf5efc91b728cac96029e502",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 7,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "status": 200,
+        "idHash": "ee0b422bde9843e107b4b7e7c386157890c7661ad6caaaf3e8c856d708b13ad4",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 1,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "status": 200,
+        "idHash": "8450542f22e4fd56e31b2cda063cf53c67e83368fd449a85d4348191ee08cb14",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 2,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "status": 200,
+        "idHash": "5eaf0b7d770abc2d9983648cd02e697488ded49f8036a438adafa44451595ec6",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 3,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "status": 200,
+        "idHash": "327a71f27a7cf84881bcae6ffc9e041264ca322c9757726aa7aec1260c427d73",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 4,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "status": 200,
+        "idHash": "881e432eb8fa51f1d1f79ac1d41ac6667bbc9502f0ab532d75c96677afa762b6",
+        "clean": false
+      },
+      {
+        "op": "finish",
+        "slot": 0,
+        "generation": 4,
+        "runtimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+        "status": 200,
+        "idHash": "22c8bd10eb87a808334ab8b6bfad58ae7fb1a45933e226e381a202675cb3910a",
+        "clean": true
+      },
+      {
+        "op": "finish",
+        "slot": 5,
+        "generation": 5,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "status": 200,
+        "idHash": "4e9e107ef4be669b71355f25682cfe2011efe34aa2e4ef47234f43c9c1ee62e6",
+        "clean": true
+      }
+    ]
+  },
+  "cleanup": {
+    "at": "2026-11-19T04:52:29.513Z",
+    "passed": true,
+    "source": "0d237fb6e1bd23b27862761ada6588d818150f9b",
+    "worker": "clawrouter-native-qualification-a9eb0bb3258f",
+    "fixtureClosed": true,
+    "nativeInstances": 0,
+    "clientCredentialsAndSavedConversationsRemoved": true,
+    "originalCampaignResultsUnchanged": true,
+    "originalCleanupRecovered": true,
+    "definitionDeletion": "User-operated boundary retained",
+    "productionUnchanged": true,
+    "realProviderRequests": 0
+  },
+  "nonHttpReadback": {
+    "at": "2026-11-19T04:52:25.043Z",
+    "passed": true,
+    "readOnly": true,
+    "schedules": [
+      {
+        "cron": "*/5 * * * *",
+        "created_on": "2026-11-19T04:30:35.724099Z",
+        "modified_on": "2026-11-19T04:30:35.724099Z"
+      }
+    ],
+    "usageQueue": {
+      "queue_id": "a2a61061caab4797a9ee74888fec62e1",
+      "queue_name": "clawrouter-native-qualification-a9eb0bb3258f-usage",
+      "settings": {
+        "delivery_delay": 0,
+        "message_retention_period": 345600
+      },
+      "created_on": "2026-11-19T04:30:04.192959Z",
+      "modified_on": "2026-11-19T04:30:04.192959Z",
+      "producers_total_count": 1,
+      "producers": [
+        {
+          "script": "clawrouter-native-qualification-a9eb0bb3258f",
+          "type": "worker"
+        }
+      ],
+      "consumers_total_count": 1,
+      "consumers": [
+        {
+          "script": "clawrouter-native-qualification-a9eb0bb3258f",
+          "dead_letter_queue": "clawrouter-native-qualification-a9eb0bb3258f-dlq",
+          "settings": {
+            "batch_size": 50,
+            "max_retries": 5,
+            "max_wait_time_ms": 5000,
+            "retry_delay": 0
+          },
+          "consumer_id": "c4e92d9601ca4495bc2c92a531dc9a88",
+          "type": "worker"
+        }
+      ]
+    },
+    "original401Preserved": true
+  },
+  "limits": [
+    "Synthetic provider only; no real-provider inference.",
+    "Original payload-row/campaign false verdicts and API-401 cleanup error are preserved.",
+    "Agent completed cleanup after recapturing the same Wrangler OAuth route; session recovery needed no operator action.",
+    "Native binary digest changed. Relevant loss delivery/fixture source is byte-identical to prior qualified source; see source equivalence.",
+    "Definition deletion remains user-operated; zero owned native instances is independently confirmed."
+  ]
+}

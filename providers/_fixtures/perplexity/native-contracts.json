@@ -1,0 +1,343 @@
+{
+  "schema": "clawrouter.perplexity-native-fixtures.v1",
+  "provenance": {
+    "synthetic": true,
+    "checkedAt": "2026-11-03",
+    "sources": [
+      "https://docs.perplexity.ai/docs/agent-api/migrate-from-sonar/overview",
+      "https://docs.perplexity.ai/api-reference/agent-post",
+      "https://docs.perplexity.ai/api-reference/search-post",
+      "https://docs.perplexity.ai/docs/agent-api/output-control",
+      "https://docs.perplexity.ai/docs/getting-started/pricing"
+    ]
+  },
+  "transport": {
+    "origin": "https://api.perplexity.ai",
+    "credential": "PERPLEXITY_API_KEY",
+    "scheme": "bearer",
+    "search": {
+      "id": "search",
+      "path": "/search",
+      "method": "POST",
+      "requestFormat": "perplexity.search",
+      "responseFormat": "perplexity.search",
+      "capability": "web.search",
+      "streaming": null
+    },
+    "agent": {
+      "id": "agent",
+      "path": "/v1/agent",
+      "alias": "/v1/responses",
+      "method": "POST",
+      "requestFormat": "openai.responses",
+      "responseFormat": "openai.responses",
+      "capability": "llm.responses",
+      "streaming": "sse"
+    }
+  },
+  "search": {
+    "request": {
+      "query": "synthetic router contract",
+      "max_results": 2,
+      "search_domain_filter": [
+        "example.com"
+      ],
+      "search_language_filter": [
+        "en"
+      ],
+      "country": "US",
+      "search_after_date_filter": "10/01/2026",
+      "max_tokens": 2048,
+      "max_tokens_per_page": 1024
+    },
+    "multiQueryRequest": {
+      "query": [
+        "synthetic router contract",
+        "synthetic client contract"
+      ],
+      "search_type": "fast",
+      "max_results": 2
+    },
+    "response": {
+      "id": "search_fixture",
+      "results": [
+        {
+          "title": "Synthetic router documentation",
+          "url": "https://example.com/router",
+          "snippet": "Synthetic public text for a native search contract.",
+          "date": "2026-10-01",
+          "last_updated": "2026-10-20"
+        }
+      ]
+    },
+    "emptyResponse": {
+      "id": "search_fixture_empty",
+      "results": []
+    },
+    "rejection": {
+      "status": 422,
+      "body": {
+        "detail": [
+          {
+            "loc": [
+              "body",
+              "query"
+            ],
+            "msg": "Field required",
+            "type": "missing"
+          }
+        ]
+      }
+    }
+  },
+  "agent": {
+    "request": {
+      "effort": "fast",
+      "input": "Find a synthetic router contract.",
+      "max_steps": 1,
+      "max_output_tokens": 128,
+      "store": false,
+      "background": false
+    },
+    "explicitModelRequest": {
+      "model": "openai/gpt-5.6-luna",
+      "input": "Find a synthetic router contract.",
+      "tools": [
+        {
+          "type": "web_search"
+        }
+      ],
+      "max_steps": 1,
+      "max_output_tokens": 128,
+      "store": false,
+      "background": false
+    },
+    "response": {
+      "id": "resp_fixture_agent",
+      "object": "response",
+      "created_at": 1793664000,
+      "model": "openai/gpt-5.6-luna",
+      "effort": "fast@2026-09-29.0",
+      "status": "completed",
+      "output": [
+        {
+          "type": "search_results",
+          "queries": [
+            "synthetic router contract"
+          ],
+          "results": [
+            {
+              "id": 1,
+              "title": "Synthetic router documentation",
+              "url": "https://example.com/router",
+              "snippet": "Synthetic public text for a native search contract.",
+              "date": "2026-10-01",
+              "last_updated": "2026-10-20",
+              "source": "web"
+            }
+          ]
+        },
+        {
+          "id": "msg_fixture_agent",
+          "type": "message",
+          "role": "assistant",
+          "status": "completed",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Synthetic answer 🦊 [1].",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "error": null,
+      "usage": {
+        "input_tokens": 1000,
+        "output_tokens": 100,
+        "total_tokens": 1100,
+        "input_tokens_details": {
+          "cached_tokens": 200,
+          "cache_read_input_tokens": 200,
+          "cache_creation_input_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 20
+        },
+        "tool_calls_details": {
+          "search_web": {
+            "invocation": 1,
+            "cost_usd": 0.0025
+          }
+        },
+        "cost": {
+          "currency": "USD",
+          "input_cost": 0.001,
+          "output_cost": 0.0005,
+          "cache_read_cost": 0.0002,
+          "cache_creation_cost": 0,
+          "tool_calls_cost": 0.0025,
+          "total_cost": 0.0042
+        }
+      }
+    },
+    "streamEvents": [
+      {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {
+          "id": "resp_fixture_agent",
+          "object": "response",
+          "created_at": 1793664000,
+          "model": "openai/gpt-5.6-luna",
+          "status": "in_progress",
+          "output": []
+        }
+      },
+      {
+        "type": "response.reasoning.search_results",
+        "sequence_number": 1,
+        "results": [
+          {
+            "id": 1,
+            "title": "Synthetic router documentation",
+            "url": "https://example.com/router",
+            "snippet": "Synthetic public text for a native search contract.",
+            "date": "2026-10-01",
+            "last_updated": "2026-10-20",
+            "source": "web"
+          }
+        ]
+      },
+      {
+        "type": "response.output_text.delta",
+        "sequence_number": 2,
+        "item_id": "msg_fixture_agent",
+        "output_index": 1,
+        "content_index": 0,
+        "delta": "Synthetic answer 🦊 [1]."
+      },
+      {
+        "type": "response.completed",
+        "sequence_number": 3,
+        "response": {
+          "id": "resp_fixture_agent",
+          "object": "response",
+          "created_at": 1793664000,
+          "model": "openai/gpt-5.6-luna",
+          "effort": "fast@2026-09-29.0",
+          "status": "completed",
+          "output": [
+            {
+              "type": "search_results",
+              "queries": [
+                "synthetic router contract"
+              ],
+              "results": [
+                {
+                  "id": 1,
+                  "title": "Synthetic router documentation",
+                  "url": "https://example.com/router",
+                  "snippet": "Synthetic public text for a native search contract.",
+                  "date": "2026-10-01",
+                  "last_updated": "2026-10-20",
+                  "source": "web"
+                }
+              ]
+            },
+            {
+              "id": "msg_fixture_agent",
+              "type": "message",
+              "role": "assistant",
+              "status": "completed",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Synthetic answer 🦊 [1].",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "error": null,
+          "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 100,
+            "total_tokens": 1100,
+            "input_tokens_details": {
+              "cached_tokens": 200,
+              "cache_read_input_tokens": 200,
+              "cache_creation_input_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 20
+            },
+            "tool_calls_details": {
+              "search_web": {
+                "invocation": 1,
+                "cost_usd": 0.0025
+              }
+            },
+            "cost": {
+              "currency": "USD",
+              "input_cost": 0.001,
+              "output_cost": 0.0005,
+              "cache_read_cost": 0.0002,
+              "cache_creation_cost": 0,
+              "tool_calls_cost": 0.0025,
+              "total_cost": 0.0042
+            }
+          }
+        }
+      }
+    ],
+    "failureEvents": [
+      {
+        "type": "response.output_text.delta",
+        "sequence_number": 0,
+        "item_id": "msg_fixture_failure",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "Partial synthetic answer."
+      },
+      {
+        "type": "response.failed",
+        "sequence_number": 1,
+        "error": {
+          "code": "upstream_error",
+          "message": "Synthetic provider failure after partial output."
+        }
+      }
+    ]
+  },
+  "billing": {
+    "agentReportedCostMicros": 4200,
+    "agentQualifiedWholeRunBoundMicros": null,
+    "policyFixedMicros": 43,
+    "search": {
+      "source": "https://docs.perplexity.ai/docs/getting-started/pricing",
+      "standardSuccessfulRequestMicros": 5000,
+      "fastSuccessfulRequestMicros": 1000,
+      "multiQueryRequestUnits": 1,
+      "emptySuccessRequestUnits": 1,
+      "rejectedRequestUnits": 0,
+      "runtimeTariffIntegrated": false
+    }
+  },
+  "consumer": {
+    "openclawSourceRevision": "b3aa84d0d79e3bfe7f2ef697fec3f5bf15b634fd",
+    "openclawSource": "extensions/perplexity/src/perplexity-web-search-provider.runtime.ts",
+    "searchResult": {
+      "title": "Synthetic router documentation",
+      "url": "https://example.com/router",
+      "description": "Synthetic public text for a native search contract.",
+      "published": "2026-10-01",
+      "siteName": "example.com"
+    },
+    "agentAnswer": "Synthetic answer 🦊 [1].",
+    "agentSourceUrls": [
+      "https://example.com/router"
+    ],
+    "requiresExternalContentWrapping": true
+  }
+}

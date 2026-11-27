@@ -1,0 +1,23 @@
+{
+  "synthetic": true,
+  "openclawRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/azure-speech/speech-provider.ts",
+  "request": {
+    "method": "POST",
+    "region": "eastus",
+    "path": "/cognitiveservices/v1",
+    "headers": {
+      "Content-Type": "application/ssml+xml",
+      "X-Microsoft-OutputFormat": "raw-8khz-8bit-mono-mulaw"
+    },
+    "body": "<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xml:lang=\"en-US\"><voice name=\"en-US-JennyNeural\">Synthetic café &amp; 中文 😀</voice></speak>"
+  },
+  "response": { "contentType": "application/octet-stream", "base64": "//////////8=" },
+  "consumerOutputFormats": ["audio-24khz-48kbitrate-mono-mp3", "ogg-24khz-16bit-mono-opus", "raw-8khz-8bit-mono-mulaw"],
+  "billing": {
+    "unit": "weighted_input_character",
+    "hanWeight": 2,
+    "actualProviderCostMicrousd": null,
+    "qualification": "Requires region/voice tier and tariff; no free inference from empty audio or language mismatch"
+  }
+}

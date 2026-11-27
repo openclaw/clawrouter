@@ -1,5 +1,20 @@
+import { responseEventIdentities, responseIdentity, type ResponseIdentity } from "./response-identities.ts";
+import { WebSocketContinuationWitnesses } from "./websocket-continuation-witnesses.ts";
+import { BodyLease } from "./body-budget.ts";
+import { JsonBodyStructureLimit, parseBoundedJson, utf8Length } from "./json-body.ts";
+
 type Frame = Record<string, unknown>;
-type Outcome = "completed" | "incomplete" | "failed" | "error" | "disconnect" | "timeout" | "not_sent";
+export type ResponsesCloseCause = "client_disconnect" | "upstream_disconnect" | "client_protocol_error" | "upstream_protocol_error" | "router_limit" | "router_error" | "timeout";
+type Outcome = "completed" | "incomplete" | "failed" | "error" | ResponsesCloseCause;
+type Ending = { outcome: Outcome; terminal: Frame | null };
+type ErrorNotice = { code: string; message: string; status: number; lane?: string };
+
+// Admission can settle before it returns an AdmittedResponse. Carry the owner
+// cause through abort so a late rejection cannot invent a preflight failure.
+export class ResponsesOperationAborted extends Error {
+  readonly cause: ResponsesCloseCause;
+  constructor(cause: ResponsesCloseCause) { super("Responses operation stopped"); this.cause = cause; }
+}
 
 export interface ResponsesSocket {
   send(message: string): void;
@@ -13,31 +28,46 @@ export interface AdmittedResponse {
   payload: string;
   timeoutMs: number;
   connect(): Promise<ResponsesSocket>;
-  settle(outcome: Outcome, terminal: Frame | null, executionStarted: boolean): Promise<void>;
+  /** Synchronous preflight/observations at send, after any connection wait. */
+  beforeSend?(): void;
+  publish(identities: readonly ResponseIdentity[], frame: Frame): Promise<void>;
+  settle(outcome: Outcome, terminal: Frame | null, sent: boolean, executionStarted: boolean): Promise<void>;
 }
 
+export type ResponsesControlObservation = { eventType: "response.create" | "response.interrupt" | "response.steer" | "other"; outcome: "forwarded" | "unsupported_event"; background: boolean };
+
 interface SessionOptions {
-  admit(body: Frame, lane: string | null, requestId: string, pin: string | null, signal: AbortSignal): Promise<AdmittedResponse>;
+  observeControl?(event: ResponsesControlObservation): void;
+  admit(body: Frame, lane: string | null, requestId: string, pin: string | null, signal: AbortSignal, witnesses: WebSocketContinuationWitnesses): Promise<AdmittedResponse>;
   waitUntil(promise: Promise<unknown>): void;
   limits?: Partial<typeof DEFAULT_LIMITS>;
 }
 
-const DEFAULT_LIMITS = { active: 16, lanes: 32, buffered: 48, frameBytes: 4 * 1024 * 1024, bufferedBytes: 8 * 1024 * 1024, outputBytes: 16 * 1024 * 1024, responseMs: 600_000, connectionMs: 3_600_000 };
-const encoder = new TextEncoder();
+// Creates match the HTTP media envelope (Cloudflare delivers at most 32 MiB);
+// the isolate body budget, not these per-connection caps, bounds their memory.
+const DEFAULT_LIMITS = { active: 16, lanes: 32, buffered: 48, interrupts: 128, frameBytes: 32_000_000, bufferedBytes: 32_000_000, upstreamFrameBytes: 8 * 1024 * 1024, outputBytes: 16 * 1024 * 1024, responseMs: 600_000, connectionMs: 3_600_000 };
+const expandedFrameBytes = 8 * 1024 * 1024;
+const OUTPUT_LIMIT_ERROR: ErrorNotice = { code: "websocket_connection_limit_reached", message: "Router WebSocket output limit reached; open a new connection.", status: 400 };
 const terminalTypes = new Map<string, Outcome>([["response.completed", "completed"], ["response.incomplete", "incomplete"], ["response.failed", "failed"], ["error", "error"]]);
 
 interface Operation {
   lane: string;
-  frame: string | null;
+  // Parsed once at receipt; it becomes the selection body, never a second copy.
+  frame: Frame | null;
   bytes: number;
+  lease: BodyLease;
   requestId: string;
   started: number;
   controller: AbortController;
   timer: ReturnType<typeof setTimeout>;
   admitted?: AdmittedResponse;
   responseId?: string;
+  executionStarted: boolean;
+  bindings: Promise<void>;
+  publication: Promise<void>;
+  previousSettlement?: Promise<void>;
   sent: boolean;
-  ending?: Outcome;
+  ending?: Ending;
   settling?: Promise<void>;
 }
 
@@ -46,17 +76,28 @@ export class ResponsesWebSocketSession {
   private client: ResponsesSocket;
   private options: SessionOptions;
   private limits: typeof DEFAULT_LIMITS;
-  private lanes = new Map<string, Array<{ frame: string; bytes: number }>>();
+  private lanes = new Map<string, Array<{ frame: Frame; bytes: number; lease: BodyLease }>>();
   private active = new Map<string, Operation>();
+  private settling = new Set<Operation>();
+  private dispatched = new Map<string, Operation>();
   private terminalIds = new Map<string, string>();
+  // Retain only control identities, never operations or request bodies. ACKs can
+  // arrive after settlement and after a successor starts on the same lane.
+  private interrupts = new Map<string, Set<string>>();
+  private interruptCount = 0;
+  private controlObservations = 0;
   private bufferedBytes = 0;
   private bufferedCount = 0;
   private outputBytes = 0;
   private pin: string | null = null;
+  private witnesses = new WebSocketContinuationWitnesses();
   private upstream: ResponsesSocket | null = null;
   private connecting: Promise<ResponsesSocket> | null = null;
   private admissions: Promise<void> = Promise.resolve();
-  private closed = false;
+  private publication: Promise<void> = Promise.resolve();
+  private publishingBytes = 0;
+  private publishingCount = 0;
+  private ending: ResponsesCloseCause | null = null;
   private connectionTimer: ReturnType<typeof setTimeout>;
 
   constructor(client: ResponsesSocket, options: SessionOptions) {
@@ -64,86 +105,146 @@ export class ResponsesWebSocketSession {
     this.options = options;
     this.limits = { ...DEFAULT_LIMITS, ...options.limits };
     this.connectionTimer = setTimeout(() => {
-      this.error("websocket_connection_limit_reached", "Responses WebSocket connection reached its time limit; open a new connection.", 400);
-      this.close("disconnect");
+      this.close("router_limit", 1000, { code: "websocket_connection_limit_reached", message: "Responses WebSocket connection reached its time limit; open a new connection.", status: 400 });
     }, this.limits.connectionMs);
     client.addEventListener("message", (event) => this.receive(event.data));
-    client.addEventListener("close", () => this.close("disconnect"));
-    client.addEventListener("error", () => this.close("disconnect"));
+    client.addEventListener("close", () => this.close("client_disconnect"));
+    client.addEventListener("error", () => this.close("client_disconnect"));
   }
 
   private receive(data: unknown): void {
-    if (this.closed) return;
+    if (this.ending) return;
     if (typeof data !== "string") {
-      this.error("unsupported_event", "Responses WebSockets accept JSON text response.create events only.", 400);
-      this.close("disconnect", 1003);
+      this.close("client_protocol_error", 1003, { code: "unsupported_event", message: "Responses WebSockets accept JSON text events only.", status: 400 });
       return;
     }
-    const bytes = encoder.encode(data).byteLength;
+    const bytes = utf8Length(data);
     if (bytes > this.limits.frameBytes) {
-      this.error("request_too_large", "Response create exceeds the router WebSocket frame limit.", 413);
+      this.error("request_too_large", "Event exceeds the router WebSocket frame limit.", 413);
       return;
     }
+    // Lease before parsing: under memory pressure a refused create must not
+    // first allocate its parsed body. The lane is unknown until then.
+    const lease = new BodyLease();
+    if (!lease.grow(bytes)) {
+      this.error("server_overloaded", "Large request capacity is busy; retry shortly.", 503);
+      return;
+    }
+    if (!this.accept(data, bytes, lease)) lease.release();
+  }
+
+  // True when the create is queued and owns the lease from here.
+  private accept(data: string, bytes: number, lease: BodyLease): boolean {
     let frame: Frame;
     try {
-      const parsed = JSON.parse(data);
+      // Like HTTP ingress: expanded creates get structural bounds, since 32 MB
+      // of tiny values could otherwise expand past the isolate before admission.
+      const parsed = bytes > expandedFrameBytes ? parseBoundedJson(data) : JSON.parse(data);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
-      frame = parsed;
-    } catch { this.error("invalid_json", "Expected a JSON response.create object.", 400); return; }
+      frame = parsed as Frame;
+    } catch (error) {
+      if (error instanceof JsonBodyStructureLimit) this.error("request_too_large", "Event exceeds the router JSON structure limits (65536 values, 128 nesting levels, 4096-character keys/numbers).", 413);
+      else this.error("invalid_json", "Expected a JSON event object.", 400);
+      return false;
+    }
     const lane = frame.stream_id === undefined ? "" : frame.stream_id;
     if (typeof lane !== "string" || (frame.stream_id !== undefined && !/^[A-Za-z0-9_.-]{1,256}$/.test(lane))) {
       this.error("invalid_stream_id", "stream_id must contain 1–256 letters, numbers, underscores, hyphens, or periods.", 400);
-      return;
+      return false;
     }
+    if (frame.type === "response.interrupt") { this.interrupt(frame, data, lane); return false; }
     if (frame.type !== "response.create" || frame.background === true) {
-      this.error("unsupported_event", "Only response.create without background execution is supported.", 400, lane);
-      return;
+      this.observeControl(frame, "unsupported_event");
+      this.error("unsupported_event", "Only response.create without background execution and response.interrupt are supported.", 400, lane);
+      return false;
     }
     if (!this.lanes.has(lane) && lane && [...this.lanes.keys()].filter(Boolean).length >= this.limits.lanes) {
       this.error("websocket_stream_limit_reached", "Named stream limit reached; reuse a stream_id or open a new connection.", 400, lane);
-      return;
+      return false;
     }
     if (this.bufferedCount >= this.limits.buffered || this.bufferedBytes + bytes > this.limits.bufferedBytes) {
       this.error("websocket_queue_full", "Router request queue is full; wait for an active response to finish.", 429, lane);
-      return;
+      return false;
     }
     const queue = this.lanes.get(lane) ?? [];
     this.lanes.set(lane, queue);
-    queue.push({ frame: data, bytes });
+    queue.push({ frame, bytes, lease });
     this.bufferedCount++;
     this.bufferedBytes += bytes;
     this.schedule();
+    return true;
+  }
+
+  private interrupt(frame: Frame, data: string, lane: string): void {
+    let id: string | undefined;
+    try { id = responseIdentity("response", frame.response_id)?.value; } catch { /* Report a client validation error below. */ }
+    if (!id) { this.error("invalid_response_id", "response.interrupt requires a nonempty response_id of at most 256 bytes.", 400, lane); return; }
+    if (frame.mode !== "discard_partial_items" || Object.keys(frame).some(key => !["type", "response_id", "mode", "stream_id"].includes(key))) {
+      this.observeControl(frame, "unsupported_event");
+      this.error("unsupported_event", "response.interrupt supports only response_id, mode discard_partial_items, and optional stream_id.", 400, lane);
+      return;
+    }
+    const op = this.dispatched.get(lane);
+    if (!(op?.sent && op.responseId === id) && this.terminalIds.get(lane) !== id && !this.interrupts.get(lane)?.has(id)) {
+      this.error("response_not_found", "response_id does not belong to this connection and stream.", 400, lane);
+      return;
+    }
+    // A lifetime cap bounds repeated sends as well as retained late-ACK state.
+    // Interrupts bypass the create queue, but cannot create billable work.
+    if (this.interruptCount >= this.limits.interrupts) {
+      this.close("router_limit", 1000, { code: "websocket_connection_limit_reached", message: "Router WebSocket interrupt limit reached; open a new connection.", status: 400, lane });
+      return;
+    }
+    const ids = this.interrupts.get(lane) ?? new Set<string>();
+    ids.add(id);
+    this.interrupts.set(lane, ids);
+    this.interruptCount++;
+    try { this.upstream!.send(data); this.observeControl(frame, "forwarded"); } catch { this.close("upstream_disconnect"); }
+  }
+
+  private observeControl(frame: Frame, outcome: ResponsesControlObservation["outcome"]): void {
+    // Fixed vocabulary and a lifetime cap: no arbitrary client strings, IDs,
+    // bodies or credentials reach diagnostics, even for malformed events.
+    if (!this.options.observeControl || this.controlObservations++ >= 16) return;
+    const eventType = frame.type === "response.create" || frame.type === "response.interrupt" || frame.type === "response.steer" ? frame.type : "other";
+    try { this.options.observeControl({ eventType, outcome, background: frame.background === true }); } catch { /* Diagnostics cannot affect the protocol. */ }
   }
 
   private schedule(): void {
-    if (this.closed) return;
+    if (this.ending) return;
     for (const [lane, queue] of this.lanes) {
-      if (this.active.size >= this.limits.active) break;
+      if (this.active.size + this.settling.size >= this.limits.active) break;
       if (this.active.has(lane) || !queue.length) continue;
       const queued = queue.shift()!;
-      const op: Operation = { ...queued, lane, requestId: `ws_${crypto.randomUUID()}`, started: Date.now(), controller: new AbortController(), timer: setTimeout(() => this.timeout(op), this.limits.responseMs), sent: false };
+      // Unsent denials settle too, but must never become upstream frame owners.
+      let previousSettlement: Promise<void> | undefined;
+      for (const previous of this.settling) if (previous.lane === lane) previousSettlement = previous.settling;
+      const op: Operation = { ...queued, lane, requestId: `ws_${crypto.randomUUID()}`, started: Date.now(), controller: new AbortController(), timer: setTimeout(() => this.timeout(op), this.limits.responseMs), sent: false, executionStarted: false, bindings: Promise.resolve(), publication: Promise.resolve(), previousSettlement };
       this.active.set(lane, op);
       // Serialize admission so large parsed bodies and the first route selection
-      // have one owner. Already-dispatched responses still run concurrently.
-      this.admissions = this.admissions.then(() => this.dispatch(op)).catch(() => this.close("disconnect"));
+      // and connection establishment have one owner. Lane sends run separately.
+      this.admissions = this.admissions.then(() => this.dispatch(op)).catch(() => this.close("router_error"));
       this.options.waitUntil(this.admissions);
     }
   }
 
   private async dispatch(op: Operation): Promise<void> {
-    if (this.closed || op.ending) { this.releaseFrame(op); this.active.delete(op.lane); return; }
+    if (this.ending || op.ending) { this.retire(op); this.active.delete(op.lane); return; }
     let establishing = false;
     try {
-      const body = JSON.parse(op.frame!);
+      const body = op.frame!;
       delete body.type;
       delete body.stream_id;
       // Current Codex serializes HTTP transport fields in response.create.
       // The upstream WebSocket contract owns streaming and cannot run background jobs.
       delete body.stream;
       delete body.background;
-      op.admitted = await this.options.admit(body, op.lane || null, op.requestId, this.pin, op.controller.signal);
-      if (this.closed || op.ending) { await this.finish(op, "not_sent", null); return; }
-      if (this.pin !== null && this.pin !== op.admitted.pin) throw new Error("route_changed");
+      op.admitted = await this.options.admit(body, op.lane || null, op.requestId, this.pin, op.controller.signal, this.witnesses);
+      if (this.ending || op.ending) { await this.finish(op, this.ending ?? "router_error", null); return; }
+      if (this.pin !== null && this.pin !== op.admitted.pin) {
+        this.close("router_error", 1000, { code: "provider_unavailable", message: "Responses upstream could not accept this request; open a new connection.", status: 502, lane: op.lane });
+        return;
+      }
       this.pin = op.admitted.pin;
       const remaining = Math.min(op.admitted.timeoutMs, this.limits.responseMs) - (Date.now() - op.started);
       clearTimeout(op.timer);
@@ -152,84 +253,170 @@ export class ResponsesWebSocketSession {
       establishing = true;
       if (!this.connecting) this.connecting = op.admitted.connect().then((socket) => {
         this.upstream = socket;
-        if (this.closed) { socket.close(1000, "session closed"); return socket; }
+        if (this.ending) { socket.close(1000, "session closed"); return socket; }
         socket.addEventListener("message", (event) => this.upstreamMessage(event.data));
-        socket.addEventListener("close", () => this.close("disconnect"));
-        socket.addEventListener("error", () => this.close("disconnect"));
+        socket.addEventListener("close", () => this.close("upstream_disconnect"));
+        socket.addEventListener("error", () => this.close("upstream_disconnect"));
         return socket;
       });
       const socket = await this.connecting;
       establishing = false;
-      if (this.closed || op.ending) { await this.finish(op, "not_sent", null); return; }
-      socket.send(op.admitted.payload);
-      op.sent = true;
-      // Settlement captures only immutable accounting facts, never a request body.
-      op.admitted.payload = "";
+      this.options.waitUntil(this.sendOperation(op, socket).catch(() => this.close("router_error")));
     } catch (error) {
-      const failure = error as { status?: number; code?: string; message?: string };
-      this.error(failure.code ?? "provider_unavailable", failure.code ? failure.message ?? "Request could not be dispatched." : "Responses upstream could not accept this request; open a new connection.", failure.status ?? 502, op.lane);
-      if (failure.code === "accounting_unavailable") this.close("disconnect");
-      await this.finish(op, op.sent ? "disconnect" : "not_sent", null);
-      if (establishing || !failure.code) this.close("disconnect");
+      await this.dispatchFailure(op, error, establishing);
     } finally {
-      this.releaseFrame(op);
-      if (!op.admitted) { this.active.delete(op.lane); this.schedule(); }
+      if (!op.admitted) { this.retire(op); this.active.delete(op.lane); this.schedule(); }
     }
   }
 
+  private async sendOperation(op: Operation, socket: ResponsesSocket): Promise<void> {
+    try {
+      // Admission may overlap the prior turn's accounting, dispatch may not.
+      // Keep this lane's wait outside the shared admission/connection chain.
+      await op.previousSettlement;
+      if (this.ending || op.ending) { await this.finish(op, this.ending ?? "router_error", null); return; }
+      op.admitted!.beforeSend?.();
+      socket.send(op.admitted!.payload);
+      op.sent = true;
+      this.dispatched.set(op.lane, op);
+      // Settlement captures only immutable accounting facts, never a request body.
+      op.admitted!.payload = "";
+    } catch (error) {
+      await this.dispatchFailure(op, error);
+    } finally {
+      this.releaseFrame(op);
+    }
+  }
+
+  private async dispatchFailure(op: Operation, error: unknown, establishing = false): Promise<void> {
+    const failure = error as { status?: number; code?: string; message?: string };
+    const notice = { code: failure.code ?? "provider_unavailable", message: failure.code ? failure.message ?? "Request could not be dispatched." : "Responses upstream could not accept this request; open a new connection.", status: failure.status ?? 502, lane: op.lane };
+    // Claim the operation before error delivery can synchronously close the
+    // client. A cancellation already owned by the session wins this race.
+    const finished = this.finish(op, failure.code ? "error" : "upstream_disconnect", failure.code ? this.errorFrame(notice) : null);
+    if (failure.code === "accounting_unavailable") this.close("router_error", 1000, notice);
+    else if (establishing || !failure.code) this.close("upstream_disconnect", 1000, notice);
+    else this.error(notice.code, notice.message, notice.status, notice.lane);
+    await finished;
+  }
+
   private upstreamMessage(data: unknown): void {
-    if (this.closed) return;
-    if (typeof data !== "string" || encoder.encode(data).byteLength > this.limits.frameBytes * 2) { this.close("disconnect", 1009); return; }
+    if (this.ending) return;
+    if (typeof data !== "string" || utf8Length(data) > this.limits.upstreamFrameBytes) { this.close("upstream_protocol_error", 1009); return; }
     let event: Frame;
-    try { event = JSON.parse(data); } catch { this.close("disconnect", 1011); return; }
-    if (!event || typeof event !== "object" || Array.isArray(event)) { this.close("disconnect", 1011); return; }
+    try { event = JSON.parse(data); } catch { this.close("upstream_protocol_error", 1011); return; }
+    if (!event || typeof event !== "object" || Array.isArray(event)) { this.close("upstream_protocol_error", 1011); return; }
     const lane = typeof event.stream_id === "string" ? event.stream_id : "";
-    const op = this.active.get(lane);
+    if (event.type === "response.interrupt.accepted" || event.type === "response.interrupt.failed") {
+      if ((event.stream_id !== undefined && (typeof event.stream_id !== "string" || !/^[A-Za-z0-9_.-]{1,256}$/.test(lane))) || typeof event.response_id !== "string" || !this.interrupts.get(lane)?.has(event.response_id)) {
+        this.close("upstream_protocol_error", 1011);
+        return;
+      }
+      // Control ACKs neither publish continuation ownership nor settle work.
+      // Use the wire FIFO even when the owning terminal is still publishing.
+      this.publish(data, undefined, [], event);
+      return;
+    }
+    const op = this.dispatched.get(lane);
+    if (event.type === "error" && this.interruptCount) {
+      // Errors have no control request correlation. Even a late interrupt can
+      // fail while a successor runs; close and retain sent-work estimates.
+      this.close("upstream_disconnect", 1000, data);
+      return;
+    }
     const response = event.response && typeof event.response === "object" ? event.response as Frame : null;
     const responseId = typeof response?.id === "string" ? response.id : typeof event.response_id === "string" ? event.response_id : undefined;
     const outcome = terminalTypes.get(String(event.type));
     if (responseId && outcome && this.terminalIds.get(lane) === responseId) return;
+    // Terminal ownership is synchronous even while publication is pending.
+    // Later frames cannot rewrite identity or turn rejected work into execution.
+    if (op?.ending) return;
+    let identities: ResponseIdentity[];
+    try { identities = responseEventIdentities(event); }
+    catch { this.close("upstream_protocol_error", 1011); return; }
+    if (identities.length && !op?.sent) { this.close("upstream_protocol_error", 1011); return; }
     if (op?.sent && responseId) {
       // A late terminal from the previous turn must never bind the next turn.
-      // Response ownership is established by the upstream start event only.
+      // Metadata can identify the response before execution actually starts.
       const starts = event.type === "response.created" || event.type === "response.in_progress";
-      if (!op.responseId && !starts) { this.close("disconnect", 1011); return; }
-      if (op.responseId && op.responseId !== responseId) { this.close("disconnect", 1011); return; }
+      if (!op.responseId && !starts && event.type !== "response.metadata") { this.close("upstream_protocol_error", 1011); return; }
+      if (op.responseId && op.responseId !== responseId) { this.close("upstream_protocol_error", 1011); return; }
       op.responseId = responseId;
+      if (starts) op.executionStarted = true;
     }
-    if (outcome && outcome !== "error" && (!responseId || !op?.responseId)) { this.close("disconnect", 1011); return; }
+    if (outcome && outcome !== "error" && (!responseId || !op?.responseId)) { this.close("upstream_protocol_error", 1011); return; }
     if (op?.sent && outcome) {
       if (responseId) this.terminalIds.set(lane, responseId);
-      this.options.waitUntil(this.finish(op, outcome, event));
+      this.claim(op, outcome, event);
     }
-    this.forward(data);
-    if (event.type === "error" && !lane && !op?.sent) this.close("disconnect");
+    if (event.type === "error" && !lane && !op?.sent) { this.close("upstream_disconnect", 1000, data); return; }
+    this.publish(data, op?.sent ? op : undefined, identities, event);
+    if (op?.ending) this.options.waitUntil(this.finish(op, op.ending.outcome, op.ending.terminal));
+  }
+
+  private publish(data: string, op: Operation | undefined, identities: ResponseIdentity[], event: Frame): void {
+    const bytes = utf8Length(data);
+    if (this.publishingCount >= this.limits.buffered || this.publishingBytes + bytes > this.limits.bufferedBytes || !this.reserveOutput(bytes)) {
+      this.close("router_limit", 1009, OUTPUT_LIMIT_ERROR);
+      return;
+    }
+    this.publishingCount++;
+    this.publishingBytes += bytes;
+    const failed = () => {
+      this.close("router_error", 1011, { code: "continuation_unavailable", message: "Continuation ownership could not be recorded; restart with full input.", status: 503, lane: op?.lane });
+    };
+    // Bindings keep their captured producer and per-op order. Only the terminal
+    // delivery joins that chain; earlier wire frames do not wait for storage.
+    const bindings = op ? op.bindings.then(async () => {
+      if (!this.ending) await op.admitted!.publish(identities, event);
+    }).catch(failed) : Promise.resolve();
+    if (op) op.bindings = bindings;
+    const delivered = this.publication.then(async () => {
+      if (terminalTypes.has(String(event.type))) await bindings;
+      if (!this.ending) this.send(data);
+    }).catch(failed);
+    this.publication = delivered;
+    // Pending writes and held terminal frames both consume the output bounds.
+    const published = Promise.all([bindings, delivered]).then(() => {}).finally(() => { this.publishingCount--; this.publishingBytes -= bytes; });
+    if (op) op.publication = published;
+    this.options.waitUntil(published);
   }
 
   private timeout(op: Operation): void {
     if (op.settling) return;
-    op.controller.abort();
-    this.error("response_timeout", "Response exceeded the router execution deadline; open a new connection.", 504, op.lane);
+    this.options.waitUntil(this.finish(op, "timeout", null));
     // Without an upstream cancellation acknowledgement, the socket must close:
     // dispatching another same-lane create would overlap an unaccounted response.
-    this.options.waitUntil(this.finish(op, op.sent ? "timeout" : "not_sent", null));
-    this.close("disconnect");
+    this.close("router_error", 1000, { code: "response_timeout", message: "Response exceeded the router execution deadline; open a new connection.", status: 504, lane: op.lane });
   }
 
   private finish(op: Operation, outcome: Outcome, terminal: Frame | null): Promise<void> {
     if (op.settling) return op.settling;
-    clearTimeout(op.timer);
-    op.ending = outcome;
+    this.claim(op, outcome, terminal);
     if (!op.admitted) return Promise.resolve();
-    op.settling = op.admitted.settle(outcome, terminal, op.responseId !== undefined).catch(() => {
-      this.error("accounting_unavailable", "Response accounting could not finish; open a new connection.", 503, op.lane);
-      this.close("disconnect");
+    const ending = op.ending!;
+    op.settling = op.publication.then(() => {
+      // Release admission only after terminal publication; retain the wire owner.
+      this.settling.add(op);
+      if (this.active.get(op.lane) === op) this.active.delete(op.lane);
+      this.schedule();
+      return op.admitted!.settle(ending.outcome, ending.terminal, op.sent, op.executionStarted);
+    }).catch(() => {
+      this.close("router_error", 1000, { code: "accounting_unavailable", message: "Response accounting could not finish; open a new connection.", status: 503, lane: op.lane });
     }).finally(() => {
-      this.releaseFrame(op);
-      this.active.delete(op.lane);
+      this.retire(op);
+      this.settling.delete(op);
+      if (this.active.get(op.lane) === op) this.active.delete(op.lane);
+      if (this.dispatched.get(op.lane) === op) this.dispatched.delete(op.lane);
       this.schedule();
     });
     return op.settling;
+  }
+
+  private claim(op: Operation, outcome: Outcome, terminal: Frame | null): void {
+    if (op.ending) return;
+    clearTimeout(op.timer);
+    op.ending = { outcome, terminal };
   }
 
   private releaseFrame(op: Operation): void {
@@ -239,35 +426,60 @@ export class ResponsesWebSocketSession {
     this.bufferedCount--;
   }
 
+  // Accounting can own the body until settlement; only then return its lease.
+  private retire(op: Operation): void {
+    this.releaseFrame(op);
+    op.lease.release();
+  }
+
   private error(code: string, message: string, status: number, lane = ""): void {
-    if (this.closed) return;
-    this.forward(JSON.stringify({ type: "error", status, ...(lane ? { stream_id: lane } : {}), error: { type: "invalid_request_error", code, message } }));
+    if (this.ending) return;
+    this.forward(JSON.stringify(this.errorFrame({ code, message, status, lane })));
+  }
+
+  private errorFrame({ code, message, status, lane }: ErrorNotice): Frame {
+    return { type: "error", status, ...(lane ? { stream_id: lane } : {}), error: { type: "invalid_request_error", code, message } };
   }
 
   private forward(message: string): void {
-    if (this.closed) return;
-    this.outputBytes += encoder.encode(message).byteLength;
+    if (this.ending) return;
+    if (this.reserveOutput(utf8Length(message))) this.send(message);
+  }
+
+  private reserveOutput(bytes: number): boolean {
+    this.outputBytes += bytes;
     // Workers WebSocket.send has no drain promise or supported bufferedAmount.
     // A cumulative cap bounds even a peer that never reads; reconnect, never replay here.
     if (this.outputBytes > this.limits.outputBytes) {
-      try { this.client.send(JSON.stringify({ type: "error", status: 400, error: { type: "invalid_request_error", code: "websocket_connection_limit_reached", message: "Router WebSocket output limit reached; open a new connection." } })); } catch { /* Peer already closed. */ }
-      this.close("disconnect", 1009);
-      return;
+      this.close("router_limit", 1009, OUTPUT_LIMIT_ERROR);
+      return false;
     }
-    try { this.client.send(message); } catch { this.close("disconnect"); }
+    return true;
   }
 
-  close(outcome: "disconnect" | "timeout" = "disconnect", code = 1000): void {
-    if (this.closed) return;
-    this.closed = true;
+  private send(message: string): void {
+    try { this.client.send(message); } catch { this.close("client_disconnect"); }
+  }
+
+  close(cause: ResponsesCloseCause = "router_error", code = 1000, notice?: ErrorNotice | string): void {
+    if (this.ending) return;
+    this.ending = cause;
+    this.witnesses.close();
     clearTimeout(this.connectionTimer);
     for (const queue of this.lanes.values()) {
-      for (const item of queue) { this.bufferedBytes -= item.bytes; this.bufferedCount--; }
+      for (const item of queue) { this.bufferedBytes -= item.bytes; this.bufferedCount--; item.lease.release(); }
       queue.length = 0;
     }
-    for (const op of this.active.values()) {
-      op.controller.abort();
-      this.options.waitUntil(this.finish(op, op.sent ? outcome : "not_sent", null));
+    const operations = [...this.active.values(), ...this.settling];
+    for (const op of operations) this.options.waitUntil(this.finish(op, cause, null));
+    for (const op of operations) {
+      const ownedCause = op.ending!.outcome;
+      op.controller.abort(new ResponsesOperationAborted(ownedCause === "timeout" ? "timeout" : cause));
+    }
+    // Cause ownership precedes abort, error delivery and reciprocal close events.
+    if (notice) {
+      if (typeof notice === "string" && this.outputBytes + utf8Length(notice) > this.limits.outputBytes) { notice = OUTPUT_LIMIT_ERROR; code = 1009; }
+      try { this.client.send(typeof notice === "string" ? notice : JSON.stringify(this.errorFrame(notice))); } catch { /* Peer already closed. */ }
     }
     try { this.upstream?.close(code, "session closed"); } catch { /* Socket already closed. */ }
     try { this.client.close(code, "session closed"); } catch { /* Socket already closed. */ }

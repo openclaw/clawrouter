@@ -1,29 +1,26 @@
-import React, { type FormEvent, useEffect, useRef, useState } from "react";
-import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
-import { bindingKey, effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
-import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
-import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
-import { usageCostLabel, usageEventGroups, type UsageEventGroup } from "../usage-analytics";
+import { useEffect, useRef, useState } from "react";
+import { Activity, CalendarDays, KeyRound, ServerCog, Users } from "lucide-react";
+import { errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
+import { EntityTable, Metric, EntityName, InlineError, InlineNote, Status } from "../components";
+import { UsageFreshness, ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
+import type { ConsoleRequest } from "../dashboard-fetch";
+import { usageEventGroups, type UsageEventGroup } from "../usage-analytics";
+import { presentAccountedSpend, presentAllowanceWindows, presentBudget, presentCost, presentPolicyBudget } from "../cost-presentation";
 import {
   effectiveProviderCount,
-  formatBudget,
   formatCount,
   formatDuration,
-  formatMicros,
   formatTimestamp,
   readyCount,
-  request,
   usageEventTone,
   usagePolicyId,
 } from "../ui-helpers";
 import type {
-  AccessForm,
   AccessPolicy,
-  AccessUser,
   AdminOverview,
   AdminTenantSummary,
   AdminUsageRow,
-  PolicyBinding,
+  PrincipalUsage,
   ProxyCredential,
   RetainedRequestContent,
   ServiceItem,
@@ -31,89 +28,48 @@ import type {
   UsageSnapshot,
 } from "../ui-types";
 
-export function UsersScreen({ users, selected, policies, bindings, services, form, setForm, error, onOpenPolicy, onSelect, onNew, onSave, busy }: {
-  users: AccessUser[];
-  selected?: AccessUser;
-  policies: AccessPolicy[];
-  bindings: PolicyBinding[];
-  services: ServiceItem[];
-  form: AccessForm;
-  setForm: (form: AccessForm) => void;
-  error: string;
-  onOpenPolicy: (policy: AccessPolicy) => void;
-  onSelect: (user: AccessUser) => void;
-  onNew: () => void;
-  onSave: (event: FormEvent) => void;
-  busy: boolean;
-}) {
-  const [userQuery, setUserQuery] = useState("");
-  const accessForUser = (user: AccessUser | undefined) => effectiveAccess(user, policies, bindings, services);
-  const selectedAccess = accessForUser(selected);
-  const selectedServices = selectedAccess.services.map((service) => ({ service, label: "granted" }));
-  const selectedGroups = new Set(selected?.groups ?? []);
-  const selectedBindings = bindings
-    .filter((binding) => binding.enabled && selected && (binding.principalType === "user" ? binding.principalId === selected.email : selectedGroups.has(binding.principalId)))
-    .sort((a, b) => a.priority - b.priority || a.policyId.localeCompare(b.policyId));
-  const visibleUsers = users.filter((user) => !userQuery.trim() || [user.email, user.tenantId, user.groups.join(" ")].join(" ").toLowerCase().includes(userQuery.trim().toLowerCase()));
-  return (
-    <div className="entityLayout">
-      <section className="mainPane">
-        <div className="tableSectionHeader userListHeader"><label className="inputWithIcon"><Search aria-hidden="true" /><input value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="search identities or groups" /></label><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New identity</span></button></div>
-        <EntityTable columns={["identity", "role", "tenant", "policies", "services", "retention", "status"]} columnTemplate="minmax(240px, 1.5fr) 80px 110px 78px 78px 92px 104px" rows={visibleUsers.map((user) => {
-          const access = accessForUser(user);
-          return { id: user.email, active: selected?.email === user.email, onClick: () => onSelect(user), cells: [<EntityName icon={Users} title={user.email} subtitle="Cloudflare Access" />, user.role, user.tenantId, String(access.policies.length), String(access.services.length), <Status label={user.contentRetentionDisabled ? "exempt" : "policy"} tone={user.contentRetentionDisabled ? "neutral" : "active"} />, <Status label={user.enabled ? "enabled" : "disabled"} tone={user.enabled ? "active" : "revoked"} />] };
-        })} />
-      </section>
-      <aside className="inspector">
-        <form onSubmit={onSave}>
-          <InspectorHeader icon={Users} title="Access user" subtitle={selected?.email ?? "new user"} />
-          {error ? <InlineError message={error} /> : null}
-          <InlineNote>Users are created from Cloudflare Access on first login with no policies. Admin status controls the console only; service access always requires an explicit user or group binding.</InlineNote>
-          <div className="formGrid compact">
-            <label className="full"><span>email</span><input type="email" value={form.email} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
-            <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
-            <label><span>status</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
-            <label className="full"><span>groups</span><input value={form.groups} onChange={(event) => setForm({ ...form, groups: event.target.value })} placeholder="maintainers, docs" /></label>
-            <label className="full"><span>request content retention</span><select value={form.contentRetentionDisabled ? "exempt" : "policy"} onChange={(event) => setForm({ ...form, contentRetentionDisabled: event.target.value === "exempt" })}><option value="policy">follow policy · retained by default</option><option value="exempt">exempt · never retain</option></select></label>
-          </div>
-          <InlineNote>Exemption wins across browser sessions and every proxy credential owned by this user.</InlineNote>
-          <dl className="facts"><dt>granted services</dt><dd>{selectedAccess.services.length}</dd><dt>active policies</dt><dd>{selectedAccess.policies.length}</dd><dt>console role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
-          <div className="sectionTitle">Direct policies</div>
-          <div className="serviceMatrix">{policies.map((policy) => <label key={policy.policyId}><input type="checkbox" checked={form.policyIds.includes(policy.policyId)} onChange={() => setForm({ ...form, policyIds: form.policyIds.includes(policy.policyId) ? form.policyIds.filter((id) => id !== policy.policyId) : [...form.policyIds, policy.policyId].sort() })} /><span>{policy.policyId}</span><small>{effectiveProviderCount(policy.providers, services)} services</small></label>)}</div>
-          <div className="sectionTitle">Effective policies</div>
-          <div className="miniList">{selectedBindings.length ? selectedBindings.map((binding) => {
-            const policy = policies.find((item) => item.policyId === binding.policyId);
-            return <button type="button" key={bindingKey(binding)} onClick={() => policy && onOpenPolicy(policy)}>{binding.policyId}<span>{binding.principalType === "user" ? "direct" : `via ${binding.principalId}`} · priority {binding.priority}</span></button>;
-          }) : <p>No user or group policies assigned.</p>}</div>
-          <div className="sectionTitle">Effective access</div>
-          <div className="miniList">{selectedServices.length ? selectedServices.slice(0, 8).map(({ service, label }) => <button type="button" key={service.id}>{service.name}<span>{label} · {kindLabel(service.kind)}</span></button>) : <p>No services available for this user.</p>}</div>
-          <div className="inspectorActions"><button type="submit" disabled={busy}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save user</span></button></div>
-        </form>
-      </aside>
-    </div>
-  );
-}
-
-export function UsageScreen({ keys, credentials, services, overview, tenants, usageRows, usage, usageLoaded }: { keys: AccessPolicy[]; credentials: ProxyCredential[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean }) {
+export function UsageScreen({ request, keys, credentials, services, overview, tenants, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt }: { request: ConsoleRequest; keys: AccessPolicy[]; credentials: ProxyCredential[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean; usageStale: boolean; usageError: string; usageUpdatedAt: number | null }) {
   const [retainedContent, setRetainedContent] = useState<RetainedRequestContent | null>(null);
   const [contentError, setContentError] = useState("");
   const [contentLoading, setContentLoading] = useState(false);
   const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
   const contentFeedbackRef = useRef<HTMLDivElement>(null);
+  const contentOperationRef = useRef<AbortController | null>(null);
+  function retireContentRead() {
+    const operation = contentOperationRef.current;
+    // Revoke publication before aborting: cancellation may race a completed read.
+    contentOperationRef.current = null;
+    operation?.abort();
+  }
+  useEffect(() => retireContentRead, []);
   useEffect(() => {
     if (contentLoading || contentError || retainedContent) contentFeedbackRef.current?.scrollIntoView({ block: "nearest" });
   }, [contentError, contentLoading, retainedContent]);
+  function closeContent() {
+    retireContentRead();
+    setRetainedContent(null);
+    setContentError("");
+    setContentLoading(false);
+  }
   async function inspectContent(event: UsageAuditEvent) {
     if (!event.content_ref) return;
+    retireContentRead();
+    const operation = new AbortController();
+    contentOperationRef.current = operation;
+    setRetainedContent(null);
     setContentLoading(true);
     setContentError("");
     try {
-      setRetainedContent(await request<RetainedRequestContent>(window.location.origin, `/v1/admin/content?tenant=${encodeURIComponent(event.tenant_id)}&ref=${encodeURIComponent(event.content_ref)}`));
+      const content = await request<RetainedRequestContent>(window.location.origin, `/v1/admin/content?tenant=${encodeURIComponent(event.tenant_id)}&ref=${encodeURIComponent(event.content_ref)}`, { signal: operation.signal });
+      if (contentOperationRef.current === operation) setRetainedContent(content);
     } catch (error) {
-      setRetainedContent(null);
+      if (contentOperationRef.current !== operation) return;
       setContentError(errorMessage(error));
     } finally {
-      setContentLoading(false);
+      if (contentOperationRef.current === operation) {
+        contentOperationRef.current = null;
+        setContentLoading(false);
+      }
     }
   }
   const activePolicies = keys.filter((key) => key.enabled);
@@ -123,31 +79,35 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
   const tenantRows = tenants.length ? tenants : tenantSummaryFallback(keys, credentials);
   const serviceByProvider = new Map(services.map((service) => [service.provider, service]));
   const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : null;
+  const successCaption = successRate === null ? "—" : successRate === 0 && usage.summary.successCount > 0 ? "<1%" : successRate === 100 && usage.summary.successCount < usage.summary.requestCount ? ">99%" : `${successRate}%`;
   const untrackedRows = rows.filter((row) => row.enabled && row.budget.ledger === "untracked");
   const exhaustedRows = rows.filter((row) => row.enabled && row.budget.configured && row.budget.remainingMicros !== undefined && row.budget.remainingMicros !== null && row.budget.remainingMicros <= 0);
   const ledgerFailureRows = rows.filter((row) => row.enabled && (row.budget.ledger === "unavailable" || row.budget.ledger === "invalid_policy"));
   const requestGroups = usageEventGroups(usage.events);
+  const spend = presentAccountedSpend(usage.summary);
   return (
     <div className="usageCanvas">
+      <p className="panelIntro">These diagnostics use their own ledger windows, not the report’s date range or key filter.</p>
+      <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} />
       <section className="usageSummaryGrid" aria-label="Usage summary">
-        <Metric label="requests" value={formatCount(usage.summary.requestCount)} meta={`${formatCount(usage.summary.totalTokens)} tokens`} />
-        <Metric label="success rate" value={successRate === null ? "—" : `${successRate}%`} meta={successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
-        <Metric label="errors" value={formatCount(usage.summary.errorCount)} meta="upstream and policy outcomes" />
-        <Metric label={usage.summary.unpricedRequestCount ? "accounted spend" : "actual spend"} value={usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount)} meta={`${usage.providers.length} active providers${usage.summary.unpricedRequestCount ? " · excludes unavailable prices" : ""}`} />
+        <Metric label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} meta={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens` : "Usage unavailable"} />
+        <Metric label="success rate" value={successCaption} meta={!usageLoaded ? "Usage unavailable" : successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
+        <Metric label="errors" value={usageLoaded ? formatCount(usage.summary.errorCount) : "—"} meta="upstream and policy outcomes" />
+        <Metric label={spend.label} value={usageLoaded ? spend.value : "—"} meta={usageLoaded ? `Last 30 days · ${spend.note}` : "Usage unavailable"} />
       </section>
 
       <section className="analyticsPanel usageTrafficPanel">
         <header className="analyticsPanelHeader">
           <div><span>Traffic</span><h2>Request activity</h2><p>Daily routed requests across every active policy.</p></div>
-          <div className="analyticsPanelControls"><span className={`ledgerBadge ${usageLoaded ? "ready" : "unavailable"}`}>{usageLoaded ? "Live ledger" : "Ledger unavailable"}</span><span className="periodBadge"><CalendarDays aria-hidden="true" />Last 30 days · UTC</span></div>
+          <div className="analyticsPanelControls"><span className={`ledgerBadge ${usageLoaded && !usageStale ? "ready" : "unavailable"}`}>{usageLoaded ? usageStale ? "Last known ledger" : "Live ledger" : "Ledger unavailable"}</span><span className="periodBadge"><CalendarDays aria-hidden="true" />Last 30 days · UTC</span></div>
         </header>
-        <TrafficAreaChart usage={usage} />
+        {usageLoaded ? <TrafficAreaChart usage={usage} /> : <InlineNote>Request activity unavailable.</InlineNote>}
       </section>
 
       <div className="usageInsightsGrid">
         <section className="analyticsPanel usageProviderPanel">
-          <header className="analyticsPanelHeader"><div><span>Provider mix</span><h2>Traffic distribution</h2><p>Request volume, success, tokens, and accounted spend.</p></div><small>{usage.providers.length} active</small></header>
-          <ProviderUsageChart providers={usage.providers} services={services} />
+          <header className="analyticsPanelHeader"><div><span>Provider mix</span><h2>Traffic distribution</h2><p>Request volume, success, tokens, and accounted spend.</p></div><small>{usageLoaded ? `${usage.providers.length} active` : "unavailable"}</small></header>
+          {usageLoaded ? <ProviderUsageChart providers={usage.providers} services={services} /> : <InlineNote>Provider usage unavailable.</InlineNote>}
         </section>
 
         <section className="analyticsPanel usageHealthPanel">
@@ -158,7 +118,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
               <div className={untrackedRows.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{untrackedRows.length}</strong><span>policies not reporting spend</span></div>
               <div className={ledgerFailureRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{ledgerFailureRows.length}</strong><span>budget ledger failures</span></div>
             </> : <div className="attentionMetric danger"><strong>!</strong><span>live usage ledger unavailable</span></div>}
-            <div className={exhaustedRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{exhaustedRows.length}</strong><span>policies out of budget</span></div>
+            <div className={exhaustedRows.length ? "attentionMetric danger" : usageLoaded ? "attentionMetric healthy" : "attentionMetric"}><strong>{usageLoaded ? exhaustedRows.length : "—"}</strong><span>policies out of budget</span></div>
           </div>
           <div className="usageHealthFooter">
             <div><span>Executable services</span><strong>{readyServices}/{services.length}</strong></div>
@@ -169,22 +129,27 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
       </div>
 
       {contentLoading || contentError || retainedContent ? <div ref={contentFeedbackRef} className="retainedContentFeedback" aria-live="polite">
+        <section className="analyticsPanel retainedContentPanel"><header className="analyticsPanelHeader"><div><span>Request content</span><h2>Retained request</h2>{retainedContent ? <p>{retainedContent.requestId}</p> : null}</div><button type="button" className="buttonSecondary" onClick={closeContent}>Close</button></header>
         {contentLoading ? <InlineNote>Loading retained request…</InlineNote> : null}
         {contentError ? <InlineError message={contentError} /> : null}
-        {retainedContent ? <section className="analyticsPanel retainedContentPanel"><header className="analyticsPanelHeader"><div><span>Request content</span><h2>Retained request</h2><p>{retainedContent.requestId}</p></div><button type="button" className="buttonSecondary" onClick={() => setRetainedContent(null)}>Close</button></header><dl className="facts"><dt>identity</dt><dd>{retainedContent.principalId ?? "credential"}</dd><dt>service</dt><dd>{retainedContent.provider}</dd><dt>expires</dt><dd>{formatTimestamp(retainedContent.expiresAtMs, true)}</dd></dl><pre>{JSON.stringify(retainedContent.body, null, 2)}</pre></section> : null}
+        {retainedContent ? <><dl className="facts"><dt>identity</dt><dd>{retainedContent.principalId ?? "credential"}</dd><dt>service</dt><dd>{retainedContent.provider}</dd><dt>expires</dt><dd>{formatTimestamp(retainedContent.expiresAtMs, true)}</dd></dl><pre>{JSON.stringify(retainedContent.body, null, 2)}</pre></> : null}
+        </section>
       </div> : null}
 
       <section className="analyticsPanel usageTablePanel">
-        <div className="tableSectionHeader"><div><strong>Recent requests</strong><span>{requestGroups.length} requests · {usage.events.length} billable calls</span></div><span>{usageLoaded ? usage.ledger : "unavailable"}</span></div>
+        <div className="tableSectionHeader"><div><strong>Recent requests</strong><span>{usageLoaded ? `${requestGroups.length} requests · ${usage.events.length} recorded calls` : "Request history unavailable"}</span></div><span>{usageLoaded ? usageStale ? "last known" : usage.ledger : "unavailable"}</span></div>
         <EntityTable
           columns={["time", "identity", "service", "operation", "outcome", "content", "cost"]}
-          columnTemplate="92px minmax(170px, 1.2fr) minmax(145px, 1fr) minmax(150px, 1fr) 104px 90px 74px"
+          columnTemplate="92px minmax(170px, 1.2fr) minmax(145px, 1fr) minmax(150px, 1fr) 104px 90px minmax(165px, 1fr)"
           rows={requestGroups.map((group) => {
             const event = group.primary;
             const service = group.compound ? undefined : serviceByProvider.get(event.provider);
             const verifiedIdentity = event.principal_id ?? event.credential_id ?? event.policy_id ?? event.tenant_id;
             const agentIdentity = event.agent_id ? `agent ${event.agent_id}` : event.auth_type ?? "authenticated";
             const agentContext = [event.parent_agent_id && `parent ${event.parent_agent_id}`, event.client && `client ${event.client}`, event.project_id && `project ${event.project_id}`, event.session_id && `session ${event.session_id}`].filter(Boolean).join(" · ");
+            const cost = group.compound
+              ? presentAccountedSpend({ requestCount: group.events.length, actualCostMicros: group.actualCostMicros, unpricedRequestCount: group.unpricedRequestCount }, group.complete)
+              : presentCost(event.actual_cost_micros, event.cost_basis);
             return {
               id: group.id,
               cells: [
@@ -193,39 +158,44 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
                 <EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={group.compound ? "ClawRouter Fusion" : service?.name ?? event.provider} subtitle={group.compound ? `${group.events.length} model calls` : event.provider} />,
                 group.compound
                   ? <button type="button" className="compoundRequestToggle" aria-expanded={expandedRequestId === group.id} onClick={() => setExpandedRequestId((current) => current === group.id ? null : group.id)}><strong>Fusion ensemble</strong><small>{group.complete ? `${group.events.length} calls` : `${group.events.length}/${group.expectedCallCount} calls · partial`}</small></button>
-                  : <span className="auditOperation"><strong>{event.capability ?? event.type}</strong><small>{[event.model, event.cost_basis].filter(Boolean).join(" · ") || event.request_id || "request"}</small></span>,
+                  : <span className="auditOperation"><strong>{event.capability ?? event.type}</strong><small>{event.model || event.request_id || "request"}</small></span>,
                 <Status label={group.compound ? `${group.successCount}/${group.events.length} succeeded` : event.status_code ? `${event.status_code} ${event.status}` : event.status} tone={usageEventTone(event)} />,
                 group.compound
                   ? <span title={group.durationMs != null ? `End-to-end latency ${formatDuration(group.durationMs)}` : undefined}>{group.events.filter((item) => item.content_retained).length} stored</span>
                   : event.content_retained ? <button type="button" className="tableAction" onClick={() => void inspectContent(event)}>View</button> : <span title={event.duration_ms ? `Latency ${formatDuration(event.duration_ms)}` : undefined}>not stored</span>,
-                `${group.complete || group.unpricedRequestCount === group.events.length ? "" : "≥"}${usageCostLabel(formatMicros(group.actualCostMicros), group.events.length, group.unpricedRequestCount)}`,
+                <span className="auditCost"><strong>{cost.value}</strong><small>{cost.label}</small></span>,
               ],
               detail: group.compound && expandedRequestId === group.id ? <CompoundRequestCalls group={group} onInspect={inspectContent} /> : undefined,
             };
           })}
         />
-        {!usage.events.length ? <div className="emptyTable">No request audit events recorded yet.</div> : null}
+        {!usage.events.length ? <div className="emptyTable">{usageLoaded ? "No request audit events recorded yet." : "Request audit events unavailable."}</div> : null}
       </section>
 
+      {usage.principals ? <PrincipalUsageTable principals={usage.principals} loaded={usageLoaded} stale={usageStale} /> : null}
+
       <section className="analyticsPanel usageTablePanel budgetTablePanel">
-        <div className="tableSectionHeader secondaryTableHeader"><div><strong>Policy budgets</strong><span>{rows.length} configured policies</span></div><span>{usageLoaded ? "live ledger" : "policy fallback"}</span></div>
-        <EntityTable columns={["policy", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: usagePolicyId(row), cells: [<EntityName icon={KeyRound} title={usagePolicyId(row)} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />], detail: row.budget.ledger === "per_principal" ? <BudgetBreakdown row={row} /> : undefined }))} />
+        <div className="tableSectionHeader secondaryTableHeader"><div><strong>Policy budgets</strong><span>{rows.length} configured policies</span></div><span>{usageLoaded ? usageStale ? "last known ledger" : "live ledger" : "policy limits only"}</span></div>
+        <p className="panelIntro">UTC calendar month · Used includes reservations. Other policy or provider limits still apply.</p>
+        <EntityTable columns={["policy", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: usagePolicyId(row), cells: [<EntityName icon={KeyRound} title={usagePolicyId(row)} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />], detail: [row.budget, row.budget.daily, row.budget.weekly].some(window => window?.ledger === "per_principal") ? <BudgetBreakdown row={row} /> : undefined }))} />
       </section>
     </div>
   );
 }
 
 function CompoundRequestCalls({ group, onInspect }: { group: UsageEventGroup; onInspect: (event: UsageAuditEvent) => Promise<void> }) {
+  const cost = presentAccountedSpend({ requestCount: group.events.length, actualCostMicros: group.actualCostMicros, unpricedRequestCount: group.unpricedRequestCount }, group.complete);
   return (
-    <div className="compoundRequest" aria-label="Fusion billable calls">
-      <div className="compoundRequestHeader"><strong>{group.complete ? "Billable call detail" : "Partial billable call detail"}</strong><span>{group.durationMs != null ? `${group.complete ? "End-to-end" : "Visible span"} ${formatDuration(group.durationMs)}` : "Latency unavailable"} · {group.complete || group.unpricedRequestCount === group.events.length ? usageCostLabel(formatMicros(group.actualCostMicros), group.events.length, group.unpricedRequestCount) : `at least ${usageCostLabel(formatMicros(group.actualCostMicros), group.events.length, group.unpricedRequestCount)}`}</span></div>
+    <div className="compoundRequest" aria-label="Fusion recorded calls">
+      <div className="compoundRequestHeader"><strong>{group.complete ? "Model call detail" : "Partial model call detail"}</strong><span>{group.durationMs != null ? `${group.complete ? "End-to-end" : "Visible span"} ${formatDuration(group.durationMs)}` : "Latency unavailable"} · {cost.label}: {cost.value}</span></div>
+      <p className="compoundRequestWarning">{cost.note}</p>
       <div className="compoundRequestCalls">
-        {group.events.map((event) => <div key={event.id}>
+        {group.events.map((event) => { const callCost = presentCost(event.actual_cost_micros, event.cost_basis); return <div key={event.id}>
           <span><strong>{compoundStage(event)}</strong><small>{event.provider} · {event.model ?? event.capability ?? "request"}</small></span>
-          <span><small>{event.duration_ms != null ? formatDuration(event.duration_ms) : "—"} · {usageCostLabel(formatMicros(event.actual_cost_micros), 1, event.cost_basis === "unpriced_usage" ? 1 : 0)}</small>{event.content_retained ? <button type="button" className="tableAction" onClick={() => void onInspect(event)}>View</button> : null}</span>
-        </div>)}
+          <span><small>{event.duration_ms != null ? formatDuration(event.duration_ms) : "—"} · {callCost.value}</small><small>{callCost.label}</small>{event.content_retained ? <button type="button" className="tableAction" onClick={() => void onInspect(event)}>View</button> : null}</span>
+        </div>; })}
       </div>
-      {!group.complete ? <p className="compoundRequestWarning">This recent-event window contains {group.events.length} of {group.expectedCallCount} calls. Totals exclude older calls outside the window.</p> : null}
+      {!group.complete ? <p className="compoundRequestWarning">This recent-event window contains {group.events.length} of {group.expectedCallCount} calls. Totals cover only the visible calls.</p> : null}
     </div>
   );
 }
@@ -234,65 +204,48 @@ function compoundStage(event: UsageAuditEvent) {
   return event.compound_request_stage === "fusion_synthesizer" ? "Synthesizer" : `Adviser ${event.compound_request_index ?? ""}`.trim();
 }
 
-export function Metric({ label, value, meta }: { label: string; value: string; meta: string }) {
-  return <div className="metric"><span>{label}</span><strong>{value}</strong><small>{meta}</small></div>;
-}
-
 export function BudgetUsage({ row }: { row: AdminUsageRow }) {
-  const limit = row.budget.limitMicros ?? row.monthlyBudgetMicros;
-  const spent = row.budget.spentMicros;
-  const blocked = row.budget.ledger === "blocked" || limit === 0;
-  const percent = blocked ? 100 : limit !== undefined && limit !== null && spent !== undefined && spent !== null ? Math.min(100, Math.max(0, (spent / limit) * 100)) : null;
-  const spendLabel = row.budget.ledger === "unavailable"
-    ? "Ledger unavailable"
-    : row.budget.ledger === "per_principal"
-      ? "Per maintainer"
-    : row.budget.ledger === "invalid_policy"
-      ? "Invalid budget policy"
-      : spent === undefined || spent === null
-        ? "Spend unavailable"
-        : `${formatMicros(spent)} spent`;
+  const budget = presentPolicyBudget(row);
   return (
-    <span className="budgetUsage">
-      <span><strong>{spendLabel}</strong><small>{formatBudget(limit)} budget</small></span>
-      <span className={`budgetTrack${blocked || (percent !== null && percent >= 100) ? " exhausted" : ""}`}><span style={{ width: `${percent ?? 0}%` }} /></span>
+    <span className="budgetUsage" title={budget.note}>
+      <span><strong>{budget.used}</strong><small>{budget.limit}</small></span>
+      <small>{budget.remaining} · {budget.scopeLabel}</small>
+      {presentAllowanceWindows(row.budget).filter(window => window.label !== "This month").map(window => <small key={window.label}>{window.text}</small>)}
+      <span className={`budgetTrack${budget.exhausted ? " exhausted" : ""}`}><span style={{ width: `${budget.percent ?? 0}%` }} /></span>
     </span>
   );
 }
 
+// Thirty-day totals per user across every policy, with unattributed service-key traffic listed by credential.
+function PrincipalUsageTable({ principals, loaded, stale }: { principals: PrincipalUsage[]; loaded: boolean; stale: boolean }) {
+  return (
+    <section className="analyticsPanel usageTablePanel">
+      <div className="tableSectionHeader secondaryTableHeader"><div><strong>Usage by user</strong><span>{principals.length} identities · last 30 days</span></div><span>{loaded ? stale ? "last known ledger" : "live ledger" : "ledger unavailable"}</span></div>
+      <EntityTable
+        columns={["user", "requests", "tokens", "errors", "accounted spend"]}
+        columnTemplate="minmax(220px, 1.4fr) 110px 140px 90px minmax(160px, 1fr)"
+        rows={principals.map((row) => ({
+          id: JSON.stringify([row.principalId, row.credentialId]),
+          cells: [
+            <EntityName icon={Users} title={row.principalId ?? (row.credentialId ? `service key ${row.credentialId}` : "unattributed")} subtitle={row.principalId ? "user" : "no principal"} />,
+            formatCount(row.summary.requestCount),
+            formatCount(row.summary.totalTokens),
+            formatCount(row.summary.errorCount),
+            presentAccountedSpend(row.summary).value,
+          ],
+        }))}
+      />
+      {!principals.length ? <div className="emptyTable">No requests recorded in this period.</div> : null}
+    </section>
+  );
+}
+
 function BudgetBreakdown({ row }: { row: AdminUsageRow }) {
-  const breakdown = row.budget.breakdown ?? [];
-  return <div className="budgetBreakdown"><strong>Per maintainer</strong>{breakdown.length ? breakdown.map((item) => <div key={item.principal}><span>{item.principal}</span><span>{item.spentMicros == null ? "Spend unavailable" : `${formatMicros(item.spentMicros)} spent`}</span><span>{item.remainingMicros == null ? "—" : `${formatMicros(item.remainingMicros)} left`}</span></div>) : <span>No bound maintainers</span>}</div>;
+  const windows = [["Monthly", row.budget], ["Daily", row.budget.daily], ["Weekly", row.budget.weekly]] as const;
+  const breakdown = windows.flatMap(([label, window]) => window?.configured ? (window.breakdown ?? []).map(item => ({ label, item })) : []);
+  return <div className="budgetBreakdown"><strong>Per principal</strong>{breakdown.length ? breakdown.map(({ label, item }) => { const budget = presentBudget(item, "principal"); return <div key={label + item.principal}><span>{item.principal} · {label}</span><span>{budget.used}</span><span>{budget.remaining}</span></div>; }) : <span>No principal balances reported</span>}</div>;
 }
 
 export function UsageHealth({ row }: { row: AdminUsageRow }) {
-  if (!row.enabled) return <Status label="revoked" tone="revoked" />;
-  if (row.budget.ledger === "unavailable") return <Status label="ledger unavailable" tone="revoked" />;
-  if (row.budget.ledger === "invalid_policy") return <Status label="invalid policy" tone="revoked" />;
-  if (row.budget.ledger === "blocked") return <Status label="budget blocked" tone="revoked" />;
-  if (row.budget.ledger === "unmetered") return <Status label="unmetered" tone="neutral" />;
-  if (row.budget.ledger === "untracked") return <Status label="untracked" tone="neutral" />;
-  if (row.budget.ledger === "per_principal") return <Status label="per maintainer" tone="active" />;
-  if (!row.budget.configured) return <Status label="untracked" tone="neutral" />;
-  if (row.budget.remainingMicros !== undefined && row.budget.remainingMicros !== null && row.budget.remainingMicros <= 0) return <Status label="budget blocked" tone="revoked" />;
-  if (row.budget.spentMicros === undefined || row.budget.spentMicros === null) return <Status label="awaiting usage" tone="neutral" />;
-  return <Status label="healthy" tone="active" />;
-}
-
-export function EntityTable({ columns, columnTemplate, rows }: { columns: string[]; columnTemplate?: string; rows: Array<{ id: string; active?: boolean; onClick?: () => void; cells: React.ReactNode[]; detail?: React.ReactNode }> }) {
-  return (
-    <div className="entityTable" style={{ "--cols": columns.length, "--columns": columnTemplate } as React.CSSProperties}>
-      <div className="tableHead">{columns.map((column) => <span key={column}>{column}</span>)}</div>
-      <div className="tableBody">{rows.map((row) => {
-        const content = row.cells.map((cell, index) => <span key={index} data-label={columns[index]}>{cell}</span>);
-        const className = `tableRow${row.active ? " selected" : ""}${row.onClick ? " interactive" : ""}`;
-        return <React.Fragment key={row.id}>
-          {row.onClick
-            ? <button type="button" className={className} onClick={row.onClick}>{content}</button>
-            : <div className={className}>{content}</div>}
-          {row.detail ? <div className="tableRowDetail">{row.detail}</div> : null}
-        </React.Fragment>;
-      })}</div>
-    </div>
-  );
+  return <Status {...presentPolicyBudget(row).health} />;
 }

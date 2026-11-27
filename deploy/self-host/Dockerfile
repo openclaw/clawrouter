@@ -1,20 +1,26 @@
 # syntax=docker/dockerfile:1
 
-FROM node:24-slim AS build
+FROM node:24.22.1-slim AS build
 
 WORKDIR /app
 
-RUN corepack enable && corepack prepare pnpm@11.27.0 --activate
+RUN corepack enable && corepack prepare pnpm@11.28.4 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY admin/package.json admin/package.json
+COPY packages/provider-plugin-contract/package.json packages/provider-plugin-contract/package.json
 RUN pnpm install --frozen-lockfile
 
 COPY . .
 RUN pnpm provider:compile -- --output worker/generated/provider-snapshot.json \
   && pnpm --dir admin build
 
-FROM node:24-slim AS runtime
+FROM node:24.22.1-slim AS runtime
+
+# workerd's platform verifier needs the system root store in the slim image.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production \
   WRANGLER_SEND_METRICS=false

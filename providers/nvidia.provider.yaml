@@ -1,0 +1,72 @@
+# Hosted Chat and public model metadata; finite catalog qualification: docs/nvidia-model-catalog.md.
+# Catalog exposure and authority: docs/public-catalog-declarations.md.
+schema: clawrouter.service-provider.v1
+id: nvidia
+displayName: NVIDIA hosted NIM
+status: experimental
+class: openai_compatible
+service:
+  platform: nvidia
+  kind: model_provider
+  upstreamService: nvidia
+  configKeys: [NVIDIA_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://integrate.api.nvidia.com/v1
+routing:
+  nativePrefixes: [clawrouter-nvidia, nvidia]
+  modelPrefixes: [nvidia/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+  - id: models.list
+    endpoint: public_models
+    methods: [GET]
+endpoints:
+  chat_completions:
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  public_models:
+    method: GET
+    path: /models
+    nativeProxy: false
+    requestFormat: nvidia.public_catalog
+    responseFormat: nvidia.public_catalog
+    headers:
+      accept: application/json
+    timeoutMs: 10000
+models:
+  entries:
+    - id: nvidia/nvidia/nemotron-3-ultra-550b-a55b
+      displayName: "NVIDIA Nemotron 3 Ultra 550B A55B"
+      upstream: nvidia/nemotron-3-ultra-550b-a55b
+      capabilities: [llm.chat]
+    - id: nvidia/nvidia/nemotron-3.5-lightning-30b-a3b
+      displayName: "NVIDIA Nemotron 3.5 Lightning 30B A3B"
+      upstream: nvidia/nemotron-3.5-lightning-30b-a3b
+      capabilities: [llm.chat]
+    - id: nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b
+      displayName: "NVIDIA Nemotron 3.5 Super VL 120B A12B"
+      upstream: nvidia/nemotron-3.5-super-vl-120b-a12b
+      capabilities: [llm.chat]
+    - id: nvidia/moonshotai/kimi-k2.6
+      displayName: "Kimi K2.6"
+      upstream: moonshotai/kimi-k2.6
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

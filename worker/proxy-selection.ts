@@ -1,17 +1,141 @@
-import { resolveTemplate } from "./provider-templates.ts";
-import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env } from "./types";
-import { capabilityForPath, endpointForPath, modelRoute, transformRequestBody } from "./providers";
-import { decodePathSegment, errorResponse, HttpError } from "./utils";
+import { nativeParams } from "./native-route.ts";
+import { normalizeUnifiedAccessPrograms } from "./access-programs.ts";
+import { prepareMiniMaxSearch } from "./minimax-search.ts";
+import { miniMaxSearchRequirement, miniMaxSearchDenied } from "./minimax-search-credential.ts";
+import { prepareVeniceChatBinding } from "./venice-chat-binding.ts";
+import { prepareVeniceChatResponse } from "./venice-chat-runtime.ts";
+import { prepareNativeMiniMaxImage } from "./native-minimax-images.ts";
+import { prepareNativeMiniMaxSpeech } from "./native-minimax-speech.ts";
+import { prepareNativeMiniMaxMusic } from "./native-minimax-music.ts";
+import { miniMaxSpeechModels } from "./minimax-speech.ts";
+import { isBedrockEmbeddingModel } from "./provider-bedrock-embeddings.ts";
+import { googleAudioRequest } from "./google-audio-classification.ts";
+import { prepareNativeBasetenSystemOne } from "./native-baseten-systemone.ts";
+import { prepareNativeSage } from "./native-sage.ts";
+import { prepareNativeSystemOne } from "./native-systemone.ts";
+import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
+import { googleImageRequest } from "./google-image-classification.ts";
+import { validateCompactRequest } from "./responses-compact.ts";
+import { validateSpeechRequest } from "./speech-request.ts";
+import { prepareNativeElevenLabsSpeech } from "./native-elevenlabs-speech.ts";
+import { prepareNativeImage } from "./native-images.ts";
+import { prepareNativeOpenRouterTranscription } from "./native-openrouter-transcription.ts";
+import { prepareNativeOpenRouterPcmSpeech } from "./native-openrouter-pcm-speech.ts";
+import { prepareNativeOpenRouterSpeech } from "./native-openrouter-speech.ts";
+import { prepareNativeOpenRouterMusic } from "./native-openrouter-music.ts";
+import { inlineMusicInput } from "./openrouter-music-runtime.ts";
+import { publishedMusicInput } from "./published-music-runtime.ts";
+import { prepareNativeDeepSeekSearch } from "./native-deepseek-search.ts";
+import { prepareNativeGoogleMusic } from "./native-google-music.ts";
+import { prepareNativeGoogleSpeech } from "./native-google-speech.ts";
+import { prepareNativeGradiumSpeech } from "./native-gradium-speech.ts";
+import { prepareNativeGoogleImage } from "./native-google-images.ts";
+import type { NativeResponse } from "./native-response.ts";
+import type { NativeQueryBinding } from "./native-query.ts";
+import { nativeEmbeddingInput, prepareNativeEmbedding } from "./native-embeddings.ts";
+import { selectRequestTariff } from "./request-tariff.ts";
+import { prepareRadiusRequest } from "./provider-radius.ts";
+import { prepareOllamaChatRequest } from "./provider-ollama.ts";
+import { isStandaloneSearch, validateStandaloneSearch } from "./standalone-search.ts";
+import { discoveryQuery, prepareModelDiscovery } from "./model-discovery-request.ts";
+import { isModelDiscovery } from "./model-discovery-formats.ts";
+import { validateResponsesInputTokens } from "./responses-input-tokens.ts";
+import { validateImageEdit } from "./image-edits.ts";
+import { validateImageGeneration } from "./image-generation.ts";
+import { resolveTemplate, PreparationAdmission, isPreparationLimit } from "./provider-templates.ts";
+import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env, ProxyRequestBody } from "./types";
+import { transformRequestBody } from "./provider-request"; import { endpointForPath, modelRoute, providerForModel, providerModel, unifiedPathForEndpoint } from "./provider-catalog"; import { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
+import { errorResponse } from "./utils";
+import { HttpError } from "./http-error";
 
 export interface ProxySelection {
+  preparation?: PreparationAdmission;
   provider: CompiledProvider;
   endpoint: CompiledEndpoint;
   model: CompiledModel | null;
   capability: string;
-  body: Record<string, unknown>;
+  body: ProxyRequestBody;
   pathParams: Record<string, string>;
   method: string;
   timeoutMs?: number;
+  nativeResponse?: NativeResponse;
+  nativeQuery?: NativeQueryBinding;
+}
+
+export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.endpoint.request_format === "minimax.search") {
+    if (selection.model !== null || !miniMaxSearchRequirement({ provider: selection.provider, endpoint: selection.endpoint, mode: "http", model: null })
+      || selection.capability !== "search.web" || selection.method !== "POST" || Object.keys(selection.pathParams).length) miniMaxSearchDenied();
+    prepareMiniMaxSearch(selection.provider.base_urls.default === "https://api.minimax.io" ? "global" : "cn", selection.body);
+    return; // Factory receives its original owner-qualified origin during preparation.
+  }
+  if (selection.provider.id === "github-copilot")
+    throw new HttpError(400, "copilot_public_route_required", "Copilot requires its exact owner-bound native or manifest route");
+  if (selection.provider.id === "minimax"
+    && ["music-2.6", "music-2.6-free", "music-cover", "music-cover-free"].includes(selection.model?.upstream ?? (!Array.isArray(selection.body) && typeof selection.body.model === "string" ? selection.body.model : ""))
+    && (selection.endpoint.request_format !== "minimax.music" || selection.capability !== "music.generate"))
+    throw new HttpError(400, "native_music_route_required", "MiniMax music requires its qualified native music route");
+  if (selection.provider.id === "minimax" && (selection.model?.upstream === "image-01"
+    || !Array.isArray(selection.body) && selection.body.model === "image-01")
+    && (selection.endpoint.request_format !== "minimax.images" || selection.capability !== "image.generate"))
+    throw new HttpError(400, "native_image_route_required", "MiniMax images require their qualified native image route");
+  if (selection.provider.id === "minimax" && miniMaxSpeechModels.some(model => model === (selection.model?.upstream ?? (!Array.isArray(selection.body) ? selection.body.model : undefined)))
+    && selection.endpoint.request_format !== "minimax.speech")
+    throw new HttpError(400, "native_audio_route_required", "MiniMax speech models require their qualified native media route");
+  if (selection.provider.id === "aws-bedrock" && (selection.model?.capabilities.includes("llm.embeddings")
+    || isBedrockEmbeddingModel(selection.model?.upstream ?? selection.pathParams?.model ?? ""))
+    && selection.capability !== "llm.embeddings")
+    throw new HttpError(400, "native_embedding_route_required", "Bedrock embedding models require their qualified native embedding route");
+  selection.nativeResponse = inlineMusicInput(selection)?.nativeResponse ?? publishedMusicInput(selection)?.nativeResponse ?? prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
+    ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeSage(selection) ?? prepareNativeSystemOne(selection)
+    ?? prepareNativeGradiumSpeech(selection)
+    ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection) ?? prepareNativeGoogleSpeech(selection)
+    ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeOpenRouterMusic(selection) ?? prepareNativeOpenRouterPcmSpeech(selection) ?? prepareNativeOpenRouterSpeech(selection)
+    ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection) ?? prepareNativeMiniMaxImage(selection) ?? prepareNativeMiniMaxMusic(selection)
+    ?? prepareNativeElevenLabsSpeech(selection) ?? prepareVeniceChatResponse(selection);
+  if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
+    && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))
+    throw new HttpError(400, "native_image_route_required", "Google image generation requires its qualified nonstream native image route");
+  if (googleAudioRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
+    && (!["google.music_generate", "google.speech_generate_content", "google.speech_interactions"].includes(selection.endpoint.request_format) || !selection.nativeResponse))
+    throw new HttpError(400, "native_audio_route_required", "Google audio output requires its qualified nonstream native audio route");
+  if (selection.nativeResponse) return;
+  if (selection.endpoint.requestPricing) selectRequestTariff(selection.endpoint, selection.body);
+  if (selection.endpoint.request_format === "radius.messages") {
+    const body = requestObject(selection.body);
+    try { selection.body = { ...prepareRadiusRequest(body, typeof body.model === "string" ? body.model : "") }; }
+    catch { throw new HttpError(400, "invalid_radius_request", "native messages require a selected model, Pi context and valid options"); }
+    return;
+  }
+  if (selection.endpoint.request_format === "ollama.chat") {
+    const body = requestObject(selection.body);
+    try { prepareOllamaChatRequest(body, typeof body.model === "string" ? body.model : ""); }
+    catch { throw new HttpError(400, "invalid_ollama_chat_request", "native Chat requires a selected model, native messages and valid tools, thinking, stream and options fields"); }
+    return;
+  }
+  if (isStandaloneSearch(selection.endpoint)) {
+    if (!selection.model) throw new HttpError(400, "model_required", "standalone search requires a qualified registered model");
+    validateStandaloneSearch(requestObject(selection.body));
+    return;
+  }
+  if (selection.endpoint.request_format === "openai.responses_input_tokens") {
+    validateResponsesInputTokens(requestObject(selection.body));
+    if (!selection.model) throw new HttpError(400, "model_required", "a registered Responses model is required for input token counting");
+    return;
+  }
+  if (selection.endpoint.request_format === "openai.responses_compact") {
+    validateCompactRequest(requestObject(selection.body), selection.model);
+    return;
+  }
+  if (["openai.images_generations", "openai.images_edits"].includes(selection.endpoint.request_format)) {
+    const pricing = selection.model?.pricing;
+    if (pricing?.unit !== "image_token") throw new HttpError(400, "image_model_unqualified", "a registered image generation tariff is required");
+    if (selection.endpoint.request_format === "openai.images_edits") validateImageEdit(requestObject(selection.body), pricing);
+    else validateImageGeneration(requestObject(selection.body), pricing);
+    return;
+  }
+  if (selection.endpoint.request_format !== "openai.audio_speech") return;
+  validateSpeechRequest(requestObject(selection.body), selection.model);
 }
 
 interface ProxySelectionFailure {
@@ -19,18 +143,26 @@ interface ProxySelectionFailure {
   auditSelection: ProxySelection | null;
 }
 
-export function concreteOpenAiSelection(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number): ProxySelection | ProxySelectionFailure {
+export function concreteOpenAiSelection(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number, preparation?: PreparationAdmission): ProxySelection | ProxySelectionFailure {
+  // Standalone selection (including WebSocket selection) begins one operation.
+  // Proxy entries supply their existing token; returned selections carry it onward.
+  preparation ??= new PreparationAdmission();
   const modelId = typeof body.model === "string" ? body.model : "";
-  const route = modelRoute(modelId);
-  if (!route) return selectionFailure(errorResponse("model_not_found", `model ${modelId} is not registered`, 404));
   const capability = capabilityForPath(path);
+  const route = modelRoute(modelId, capability ?? undefined);
+  if (!route) return selectionFailure(errorResponse("model_not_found", `model ${modelId} is not registered`, 404));
   const endpoint = endpointForPath(route.provider, path);
   if (!capability || !endpoint || !route.model.capabilities.includes(capability)) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} does not support ${path}`, 400));
+  if (unifiedPathForEndpoint(route.provider, endpoint) !== path) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} requires its provider-native endpoint`, 400));
   try {
-    const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env);
-    const transformed = transformRequestBody(route.provider, path, upstreamModel, { ...body, model: upstreamModel }, env);
-    return { provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST", timeoutMs };
+    const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env, preparation);
+    const upstreamBody = { ...body, model: upstreamModel };
+    if (capability === "llm.responses" || (capability === "llm.chat" && route.provider.id !== "openai"))
+      normalizeUnifiedAccessPrograms(upstreamBody, route.provider.id === "openai");
+    const transformed = transformRequestBody(route.provider, path, upstreamModel, upstreamBody, env, preparation);
+    return { preparation, provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST", timeoutMs };
   } catch (error) {
+    if (isPreparationLimit(error)) throw error;
     const failure = error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
     return selectionFailure(errorResponse(failure.code, failure.message, failure.status), {
       provider: route.provider, endpoint, model: route.model, capability, body, pathParams: { model: modelId, deployment: modelId }, method: "POST", timeoutMs,
@@ -46,39 +178,70 @@ export function isSelectionFailure(value: ProxySelection | ProxySelectionFailure
   return "response" in value;
 }
 
-export function prepareManifestRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, inputPathParams: Record<string, string>, env: Env, native = false): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
-  const modelId = typeof body.model === "string" ? body.model : null;
-  const bodyRoute = modelId ? providerModelRoute(provider, modelId) : null;
-  const globalBodyRoute = modelId ? modelRoute(modelId) : null;
-  if (!native && globalBodyRoute && globalBodyRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${modelId} does not belong to provider ${provider.id}`);
-
+export function prepareManifestRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, inputBody: unknown, inputPathParams: Record<string, string>, env: Env, native = false, preparation?: PreparationAdmission): { preparation: PreparationAdmission; model: CompiledModel | null; body: ProxyRequestBody; pathParams: Record<string, string> } {
+  preparation ??= new PreparationAdmission(); // Explicit standalone selection entry.
+  preparation.paths(inputPathParams, endpoint.path_param_styles);
+  if (endpoint.request_format === "cloudflare_ai_gateway.universal") {
+    if (!Array.isArray(inputBody)) throw new HttpError(400, "invalid_request_body", "universal gateway body must be a JSON array");
+    // Entries are ordered upstream fallbacks, not one model request. Keep their
+    // native queries intact and do not invent a model or price for the wrapper.
+    return { preparation, model: null, body: inputBody.map((entry) => requestObject(entry, "universal gateway entry")), pathParams: inputPathParams };
+  }
+  const body = requestObject(inputBody);
+  // Managed job models are native inputs, not inference catalog selectors.
+  // The explicit protocol adapter validates them before credential selection.
+  if (endpoint.lifecycle) {
+    if (endpoint.modelPassthrough) throw new HttpError(400, "invalid_managed_route", "managed lifecycles cannot use model passthrough");
+    return { preparation, model: null, body, pathParams: inputPathParams };
+  }
+  if (endpoint.request_format === "openai.moderations" && body.model === undefined) body.model = "omni-moderation-latest";
+  if (isModelDiscovery(endpoint)) return { ...prepareModelDiscovery(provider, endpoint, body, inputPathParams), preparation };
+  const embedding = nativeEmbeddingInput(provider, endpoint);
+  // Native models/foo is a wire assertion, not a second router selector.
+  const modelId = !embedding && typeof body.model === "string" ? body.model : null;
   const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
-  const pathRoute = pathModelId ? providerModelRoute(provider, pathModelId) : null;
-  const globalPathRoute = pathModelId ? modelRoute(pathModelId) : null;
-  if (!native && globalPathRoute && globalPathRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${pathModelId} does not belong to provider ${provider.id}`);
-
-  const bodyUpstream = bodyRoute ? resolvedUpstreamModel(provider, bodyRoute.model, env) : null;
-  const pathUpstream = pathRoute ? resolvedUpstreamModel(provider, pathRoute.model, env) : pathModelId;
+  const resolve = (value: string | null) => {
+    if (value === null) return null;
+    const owner = providerForModel(value);
+    if (!native && owner && owner.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${value} does not belong to provider ${provider.id}`);
+    const model = providerModel(provider, value, endpoint, native);
+    if (!model || !modelSupportsEndpoint(provider, model, endpoint)) throw new HttpError(400, "model_capability_unsupported", `model ${value} does not support ${endpoint.id}`);
+    return model;
+  };
+  const bodyModel = resolve(modelId), pathModel = resolve(pathModelId);
+  const bodyUpstream = bodyModel ? resolvedUpstreamModel(provider, bodyModel, env, preparation) : null;
+  const pathUpstream = pathModel ? resolvedUpstreamModel(provider, pathModel, env, preparation) : null;
   if (bodyUpstream && pathUpstream && bodyUpstream !== pathUpstream) throw new HttpError(400, "model_path_mismatch", "body model and path model must resolve to the same upstream model");
 
-  const model = bodyRoute?.model ?? pathRoute?.model ?? (!modelId && !pathModelId ? provider.models[0] ?? null : null);
-  const upstreamModel = bodyUpstream ?? pathUpstream ?? (model && !model.upstream.includes("${") ? model.upstream : null);
-  const pathParams = normalizeModelPathParams(provider, endpoint, inputPathParams, bodyRoute, env, native);
+  const model = bodyModel ?? pathModel;
+  if (!nativeModelEligible(endpoint.request_format, model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model is not qualified for this native protocol");
+  const upstreamModel = bodyUpstream ?? pathUpstream;
+  if (native && provider.id === "venice" && endpoint.request_format === "openai.chat_completions" && upstreamModel)
+    prepareVeniceChatBinding(body, upstreamModel);
+  const replacementKeys = endpoint.path_params.filter(param => param === "model" || param === "deployment");
+  preparation.paths(inputPathParams, endpoint.path_param_styles, upstreamModel ?? undefined, replacementKeys);
+  const pathParams = { ...inputPathParams };
+  for (const name of replacementKeys) {
+    if (upstreamModel) pathParams[name] = upstreamModel;
+  }
+  if (embedding) return { preparation, model, body, pathParams };
   const transformedInput = { ...body };
   if (endpoint.path_params.some((name) => name === "model" || name === "deployment")) delete transformedInput.model;
   else if (modelId && upstreamModel) transformedInput.model = upstreamModel;
   return {
-    model,
-    body: model && upstreamModel ? transformRequestBody(provider, endpoint.path, upstreamModel, transformedInput, env) : transformedInput,
+    preparation, model,
+    body: model && upstreamModel ? transformRequestBody(provider, endpoint.path, upstreamModel, transformedInput, env, preparation) : transformedInput,
     pathParams,
   };
 }
 
-export function prepareNativeRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, path: string, env: Env): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
-  return prepareManifestRequest(provider, endpoint, body, nativeParams(endpoint, path), env, true);
+export function prepareNativeRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: unknown, path: string, env: Env, preparation?: PreparationAdmission): { preparation: PreparationAdmission; model: CompiledModel | null; body: ProxyRequestBody; pathParams: Record<string, string> } {
+  preparation ??= new PreparationAdmission(); // Standalone native selection.
+  preparation.text(path, 8192);
+  return prepareManifestRequest(provider, endpoint, body, nativeParams(endpoint, path, preparation), env, true, preparation);
 }
 
-export function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: Record<string, unknown> } {
+export function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: URLSearchParams | Record<string, unknown>; body: Record<string, unknown> } {
   const query = new URL(request.url).searchParams;
   const pathParams: Record<string, string> = {};
   for (const name of endpoint.path_params) {
@@ -86,19 +249,24 @@ export function directManifestEnvelope(request: Request, endpoint: CompiledEndpo
     if (value != null) pathParams[name] = value;
     query.delete(name);
   }
-  return { method: request.method, pathParams, query: searchParamsRecord(query), body: {} };
+  return { method: request.method, pathParams, query: isModelDiscovery(endpoint) ? discoveryQuery(query) : query, body: {} };
 }
 
-export function manifestEnvelope(value: unknown): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: Record<string, unknown> } {
+export function manifestEnvelope(value: unknown, preparation?: PreparationAdmission, pathParamStyles?: CompiledEndpoint["path_param_styles"]): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: unknown } {
   const envelope = requestObject(value, "manifest request");
   if (envelope.method !== undefined && typeof envelope.method !== "string") throw new HttpError(400, "invalid_request_body", "manifest method must be a string");
   const pathParams = optionalObject(envelope.pathParams, "manifest pathParams");
-  if (Object.values(pathParams).some((item) => typeof item !== "string")) throw new HttpError(400, "invalid_request_body", "manifest pathParams values must be strings");
+  let parameters = 0;
+  for (const name in pathParams) if (Object.hasOwn(pathParams, name)) {
+    if (++parameters > 32) preparation?.fail();
+    if (typeof pathParams[name] !== "string") throw new HttpError(400, "invalid_request_body", "manifest pathParams values must be strings");
+  }
+  preparation?.paths(pathParams as Record<string, string>, pathParamStyles);
   return {
     method: envelope.method as string | undefined,
     pathParams: pathParams as Record<string, string>,
     query: optionalObject(envelope.query, "manifest query"),
-    body: optionalObject(envelope.body, "manifest body"),
+    body: envelope.body === undefined ? {} : envelope.body,
   };
 }
 
@@ -113,49 +281,7 @@ export function requestObject(value: unknown, label = "request body"): Record<st
 
 export function searchParamsRecord(params: URLSearchParams): Record<string, string> { const result: Record<string, string> = {}; params.forEach((value, key) => { result[key] = value; }); return result; }
 
-function resolvedUpstreamModel(provider: CompiledProvider, model: CompiledModel, env: Env): string {
-  return model.upstream.includes("${") ? resolveTemplate(provider, model.upstream, env) : model.upstream;
-}
-
-function normalizeModelPathParams(provider: CompiledProvider, endpoint: CompiledEndpoint, input: Record<string, string>, bodyModel: ReturnType<typeof modelRoute>, env: Env, native: boolean): Record<string, string> {
-  const output = { ...input };
-  for (const name of endpoint.path_params.filter((param) => param === "model" || param === "deployment")) {
-    const publicId = output[name];
-    const globalRoute = publicId ? modelRoute(publicId) : bodyModel;
-    if (!native && globalRoute && globalRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${publicId} does not belong to provider ${provider.id}`);
-    const route = publicId ? providerModelRoute(provider, publicId) : bodyModel;
-    if (route) output[name] = resolvedUpstreamModel(provider, route.model, env);
-  }
-  return output;
-}
-
-function providerModelRoute(provider: CompiledProvider, value: string): { provider: CompiledProvider; model: CompiledModel } | null {
-  const global = modelRoute(value);
-  if (global?.provider.id === provider.id) return global;
-  const model = provider.models.find((candidate) => candidate.id === value || candidate.upstream === value);
-  if (model) return { provider, model };
-  const template = provider.models.find((candidate) => candidate.upstream.includes("${")) ?? provider.models[0];
-  if (!template || !value) return null;
-  const inheritsTemplatePricing = provider.id === "local-openai";
-  return {
-    provider,
-    model: {
-      ...template,
-      id: value,
-      upstream: value,
-      pricing_ref: inheritsTemplatePricing ? template.pricing_ref : null,
-      pricing: inheritsTemplatePricing ? template.pricing : null,
-    },
-  };
-}
-
-export function nativeMatch(endpoint: CompiledEndpoint, path: string): boolean {
-  const pattern = endpoint.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\$\\\{[^}]+\\\}/g, "[^/]+");
-  return new RegExp(`^${pattern}$`).test(path);
-}
-function nativeParams(endpoint: CompiledEndpoint, path: string): Record<string, string> {
-  const names = [...endpoint.path.matchAll(/\$\{([^}]+)\}/g)].map((match) => match[1]);
-  const pattern = endpoint.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\$\\\{[^}]+\\\}/g, "([^/]+)");
-  const match = path.match(new RegExp(`^${pattern}$`));
-  return Object.fromEntries(names.map((name, index) => [name, decodePathSegment(match?.[index + 1] ?? "")]));
+function resolvedUpstreamModel(provider: CompiledProvider, model: CompiledModel, env: Env, preparation?: PreparationAdmission): string {
+  preparation?.text(model.upstream, 16384);
+  return model.upstream.includes("${") ? resolveTemplate(provider, model.upstream, env, preparation) : model.upstream;
 }

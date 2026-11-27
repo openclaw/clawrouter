@@ -42,5 +42,3 @@ export function providerById(id) {
     },
   };
 }
-
-export async function syncGrantPoolIndex() {}

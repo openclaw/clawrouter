@@ -7,13 +7,26 @@ import type { EntitlementsResponse, ProviderReadiness, ProviderRow, RouteCatalog
 export function useCatalog(allowDemo: boolean) {
   const [providers, setProviders] = useState<ProviderRow[]>(allowDemo ? demo.providers : []);
   const [routes, setRoutes] = useState<RouteCatalog>(allowDemo ? demo.routes : emptyRoutes);
-  const [entitlements, setEntitlements] = useState<EntitlementsResponse | null>(allowDemo ? demo.entitlements : null);
+  const [entitlementSnapshot, setEntitlements] = useState<EntitlementsResponse | null>(allowDemo ? demo.entitlements : null);
   const [providerReadiness, setProviderReadiness] = useState<Record<string, ProviderReadiness>>(
     allowDemo ? readinessMap(demo.entitlements.providers.map((item) => item.readiness)) : {},
   );
+  // A demo connection edit is local: project only the changed connection into its
+  // existing policy row. Live personal readiness always comes from the session.
+  const demoReadiness = allowDemo ? providerReadiness : null;
+  const entitlements = useMemo(() => {
+    if (!demoReadiness || !entitlementSnapshot) return entitlementSnapshot;
+    return {
+      ...entitlementSnapshot,
+      providers: entitlementSnapshot.providers.map((access) => {
+        const readiness = demoReadiness[access.provider];
+        return readiness && readiness.connectionEnabled !== access.readiness.connectionEnabled ? { ...access, readiness } : access;
+      }),
+    };
+  }, [demoReadiness, entitlementSnapshot]);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("all");
-  const [selectedServiceId, setSelectedServiceId] = useState(demo.services[0]?.id ?? "");
+  const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const accessByProvider = useMemo(() => accessMap(entitlements), [entitlements]);
   const services = useMemo(
     () => serviceItems(providers, routes, providerReadiness, accessByProvider),
@@ -32,7 +45,8 @@ export function useCatalog(allowDemo: boolean) {
     () => services.filter((item) => (kind === "all" || item.kind === kind) && matchesServiceQuery(item, query)),
     [kind, query, services],
   );
-  const selectedService = services.find((item) => item.id === selectedServiceId) ?? services[0];
+  // Keep an explicit selection across filters; otherwise inspect the first visible result.
+  const selectedService = services.find((item) => item.id === selectedServiceId) ?? filteredServices[0];
 
   function setEntitlementsWithReadiness(next: EntitlementsResponse | null) {
     setEntitlements(next);

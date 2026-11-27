@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
-import { parseArgs } from "./cli-args.mjs";
+import { parseArgs, required, optionalValue, requiredOption, setOptional } from "./cli-args.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const ticketFile = requiredOption(args, "ticket-file");
@@ -15,6 +15,8 @@ setOptional(payload, "accessToken", readSecret(args, "access-token"));
 setOptional(payload, "refreshToken", readSecret(args, "refresh-token"));
 setOptional(payload, "tokenType", optionalValue(args, "token-type"));
 setOptional(payload, "expiresAt", optionalValue(args, "expires-at"));
+setOptional(payload, "refreshTokenExpiresAt", optionalValue(args, "refresh-token-expires-at"));
+setOptional(payload, "lastManualAuthorizationAt", optionalValue(args, "last-manual-authorization-at"));
 setOptional(payload, "accountId", optionalValue(args, "account-id"));
 const scopes = optionalValue(args, "scopes");
 if (scopes) payload.scopes = [...new Set(scopes.split(",").map((value) => value.trim()).filter(Boolean))];
@@ -60,9 +62,5 @@ function assertProtectedFile(path) {
   if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) throw new Error("ticket file permissions are too broad; expected mode 0600");
 }
 
-function requiredOption(values, name) { return required(optionalValue(values, name), `--${name}`); }
-function required(value, name) { if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required`); return value.trim(); }
-function optionalValue(values, name) { const value = values[name]; if (value === undefined) return undefined; if (value === true) throw new Error(`--${name} requires a value`); return value.trim(); }
-function setOptional(object, key, value) { if (value !== undefined) object[key] = value; }
 async function boundedJson(response) { const text = await response.text(); if (text.length > 128 * 1024) throw new Error("server response was too large"); try { return JSON.parse(text); } catch { throw new Error("server returned invalid JSON"); } }
 function safeError(body) { return typeof body?.error?.message === "string" ? body.error.message : "request rejected"; }
