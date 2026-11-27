@@ -11,12 +11,20 @@ test.beforeEach(async ({ page }) => {
 
 test("dashboard is WCAG AA clean and visually stable", async ({ page }) => {
   const { responses, providers } = dashboardFixture();
+  let selectFontLoaded = false;
   await page.route("**/v1/**", async (route) => {
-    const body = responses[new URL(route.request().url()).pathname];
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/v1/session") {
+      // Chromium can retain fallback line metrics inside a native select after a font swap.
+      // Mount the authenticated fixture with its final font instead of repainting it later.
+      selectFontLoaded = await page.evaluate(async () => (await document.fonts.load('12.5px "Archivo Variable"', "180 days")).length > 0);
+    }
+    const body = responses[path];
     await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
   });
   await page.goto("/");
   await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  expect(selectFontLoaded).toBe(true);
   await expect(page.locator(".dashboardStats > div").first().locator("strong")).toHaveText(`8/${providers.length}`);
   await expect(page.locator(".dashboardServiceGrid article strong")).toHaveText(providers.slice(0, 10).map((provider) => provider.display_name));
   await expect(page.getByRole("button", { name: "Show 1 more services" })).toBeVisible();
