@@ -249,14 +249,13 @@ test('identity replacement clears report cache and late former-owner events', as
   expect(queries.filter(url => url.pathname.endsWith('/report'))).toHaveLength(2);
 });
 
-test('null credential groups and event details say Dashboard session, never a policy fallback', async ({ page }) => {
+test('null credential groups and activity rows say Dashboard session, never a policy fallback', async ({ page }) => {
   await mockUsage(page);
   await page.goto('/dashboard/my-usage');
   await activity(page);
   await expect(page.locator('.personalActivityTable tbody > tr')).toHaveCount(3);
   const sessionEvent = page.locator('.personalActivityTable tbody > tr').nth(1);
-  await sessionEvent.getByText('Call details', { exact: true }).click();
-  await expect(sessionEvent.locator('.personalEventDetails > div').filter({ has: page.getByText('Key ID', { exact: true }) })).toContainText('Dashboard session');
+  await expect(sessionEvent.getByRole('rowheader').getByText('Dashboard session', { exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('key');
   await details(page);
   const groups = page.getByRole('region', { name: 'Retained usage ranking', exact: true });
@@ -279,12 +278,10 @@ test('available key names retain their actual ID and filters; missing key metada
   await page.goto('/dashboard/my-usage');
   await activity(page);
   await expect(page.locator('.personalActivityTable tbody > tr')).toHaveCount(3);
-  const detail = page.locator('.personalActivityTable tbody > tr').first();
-  await detail.getByText('Call details', { exact: true }).click();
-  await expect(detail.locator('.personalEventDetails > div').filter({ has: page.getByText('Key ID', { exact: true }) })).toContainText('studio-key');
-  const missing = page.locator('.personalActivityTable tbody > tr').last();
-  await missing.getByText('Call details', { exact: true }).click();
-  await expect(missing.locator('.personalEventDetails > div').filter({ has: page.getByText('Key ID', { exact: true }) })).toHaveText('Key IDremoved-key');
+  const rows = page.locator('.personalActivityTable tbody > tr');
+  await expect(rows.first().getByText('Key: studio-key', { exact: true })).toBeVisible();
+  await expect(rows.first()).not.toContainText('Studio laptop');
+  await expect(rows.last().getByText('Key: removed-key', { exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('key');
   await details(page);
   await page.getByRole('button', { name: /member@example.com · studio-key/ }).click();
