@@ -80,13 +80,34 @@ test("empty HTTP failures keep the request path and status fallback", async (con
   });
 });
 
-test("Playground preserves structured failure bodies and HTTP status", async (context) => {
-  const body = { error: { code: "model_unavailable", message: "Model is not ready", detail: { model: "test/model" } } };
-  context.mock.method(globalThis, "fetch", async () => Response.json(body, { status: 400 }));
-  const response = await playgroundRequest("https://console.example", "/v1/playground/responses");
-  assert.equal(response.ok, false);
-  assert.equal(response.status, 400);
-  assert.equal(response.raw, JSON.stringify(body, null, 2));
+for (const [label, status, contentType, body] of [
+  ["JSON success", 200, "application/json", '{"items":[{"id":9007199254740992},{"id":9007199254740993}],"score":0.123456789012345678901,"scale":1.00e+32}'],
+  ["structured failure", 400, "application/problem+json", '{"error":{"code":"model_unavailable","message":"Model is not ready","detail":{"id":9007199254740993,"scale":1e400}}}'],
+  ["plain text", 200, "text/plain", "  item 9007199254740993\nnot JSON\n"],
+]) {
+  test(`Playground preserves the received ${label} text and metadata`, async (context) => {
+    context.mock.method(globalThis, "fetch", async () => new Response(body, {
+      status, headers: { "content-type": contentType, "x-clawrouter-content-retention": "off" },
+    }));
+    const response = await playgroundRequest("https://console.example", "/v1/playground/responses");
+    assert.equal(response.raw, body);
+    assert.equal(response.ok, status === 200);
+    assert.equal(response.status, status);
+    assert.equal(response.contentType, contentType);
+    assert.equal(response.retention, "off");
+  });
+}
+
+test("Playground describes empty and binary responses without rendering binary data", async (context) => {
+  for (const [body, status, contentType, expected] of [
+    [null, 204, "application/json", "HTTP 204 No Content"],
+    [new Uint8Array([0, 255, 48]), 200, "application/octet-stream", "HTTP 200 OK\napplication/octet-stream response (3 bytes)"],
+  ]) {
+    context.mock.method(globalThis, "fetch", async () => new Response(body, { status, headers: { "content-type": contentType } }));
+    const response = await playgroundRequest("https://console.example", "/v1/playground/responses");
+    assert.equal(response.raw, expected);
+    assert.equal(response.status, status);
+  }
 });
 
 test("dashboard JSON request leaves headroom for a typed 30s Worker timeout and keeps a caller signal", async (context) => {
