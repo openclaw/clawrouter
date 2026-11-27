@@ -2,7 +2,6 @@ import { type FormEvent, type SetStateAction, useCallback, useEffect, useRef, us
 import {
   playgroundAccessEndpoint,
   playgroundBlocker,
-  playgroundPayload,
   playgroundResponseText,
   playgroundServicePreset,
   playgroundSupportsTemperature,
@@ -11,6 +10,7 @@ import {
   errorMessage,
 } from "../domain";
 import { demo, demoServicePreset } from "../ui-config";
+import { playgroundDraftPayload } from "../playground-draft";
 import { catalogModels, createPlaygroundTurn, playgroundRequest } from "../ui-helpers";
 import type { CatalogModel } from "../domain";
 import type { PlaygroundForm, PlaygroundTurn, ProviderAccess, ProviderReadiness, RouteCatalog } from "../ui-types";
@@ -117,19 +117,13 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
       setError({ field: "composer", message: form.mode === "model" ? "Not sent. Enter a message." : "Not sent. Enter a JSON request body." });
       return;
     }
-    const conversation = form.mode === "model"
-      ? turns.filter((turn) => turn.mode === "model" && !turn.error).flatMap((turn) => [
-        { role: "user" as const, content: turn.prompt },
-        { role: "assistant" as const, content: turn.response },
-      ])
-      : [];
     const provider = form.mode === "model" ? selectedModel?.provider ?? "unknown" : selectedServiceRoute?.provider ?? "unknown";
     const model = form.mode === "model" ? selectedModel?.id ?? form.model : selectedServiceRoute?.endpoint ?? form.serviceRoute;
     const endpoint = playgroundAccessEndpoint(form, selectedServiceRoute);
-    let payload: ReturnType<typeof playgroundPayload>;
+    let payload: ReturnType<typeof playgroundDraftPayload>;
     let requestPreview: string;
     try {
-      payload = playgroundPayload(form, selectedServiceRoute, conversation);
+      payload = playgroundDraftPayload(form, selectedServiceRoute, turns);
       requestPreview = JSON.stringify(payload, null, 2);
     } catch (cause) {
       const issue = payloadError(form, cause);

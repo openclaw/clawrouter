@@ -1,6 +1,7 @@
-import { type FormEvent, useEffect, useRef } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { ArrowUp, Bot, Bug, MessageSquare, Plus, ServerCog, SlidersHorizontal } from "lucide-react";
 import {
+  errorMessage,
   playgroundAccessEndpoint,
   playgroundBlocker,
   playgroundServicePreset,
@@ -12,7 +13,7 @@ import {
 import { InlineError, InlineNote, PanelTitle } from "../components";
 import {
   type CatalogModel,
-  playgroundRequestPreview,
+  playgroundCurl,
   providerName,
   serviceModelFromForm,
   serviceModelOptions,
@@ -20,6 +21,7 @@ import {
 } from "../ui-helpers";
 import type { PlaygroundForm, PlaygroundTurn, ProviderAccess, ProviderReadiness, RouteCatalog } from "../ui-types";
 import type { PlaygroundDraftError } from "../hooks/use-playground";
+import { playgroundDraftPayload } from "../playground-draft";
 
 export function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, selectedServiceRoute, accessByProvider, readinessByProvider, requestMode, setRequestMode, turns, selectedTurnId, setSelectedTurnId, error, onRun, onNewConversation, busy }: {
   form: PlaygroundForm;
@@ -48,7 +50,6 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
   const selectedReadiness = selectedProvider ? readinessByProvider[selectedProvider] : undefined;
   const methods = selectedServiceRoute?.methods.length ? selectedServiceRoute.methods : ["POST"];
   const selectedTurn = turns.find((turn) => turn.id === selectedTurnId);
-  const currentRequest = playgroundRequestPreview(form, requestMode, selectedServiceRoute);
 
   useEffect(() => {
     const element = transcript.current;
@@ -176,7 +177,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
                 {routeTargets.map((route) => <option key={routeKey(route)} value={`service:${routeKey(route)}`}>{route.endpoint.replaceAll("_", " ")}</option>)}
               </select>
               <span className="composerStatus"><span className={`connectionDot ${selectedReadiness?.executable ? "ready" : ""}`} />{readinessLabel(selectedReadiness)}</span>
-              <button type="button" className="composerInspect" onClick={() => setSelectedTurnId(selectedTurnId === "setup" ? "" : "setup")}><SlidersHorizontal aria-hidden="true" /><span>Controls</span></button>
+              <button type="button" className="composerInspect" aria-label="Conversation controls" onClick={() => setSelectedTurnId(selectedTurnId === "setup" ? "" : "setup")}><SlidersHorizontal aria-hidden="true" /><span>Controls</span></button>
               <button type="submit" className="composerSend" disabled={busy || Boolean(blocker)} title={blocker ?? "Send message"}><ArrowUp aria-hidden="true" /><span className="srOnly">Send</span></button>
             </div>
           </div>
@@ -230,13 +231,35 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
               <dt>access</dt><dd>{selectedAccess ? (selectedAccess.allowed ? selectedAccess.policies.join(", ") || "session" : "not granted") : "unknown"}</dd>
               <dt>endpoint</dt><dd>{playgroundAccessEndpoint(form, selectedServiceRoute)}</dd>
             </dl>
-            <details className="requestDrawer">
-              <summary onClick={() => setSelectedTurnId("setup")}><span><ServerCog className="buttonIcon" aria-hidden="true" /> Preview request</span></summary>
-              <pre>{currentRequest}</pre>
-            </details>
+            <DraftRequestDrawer form={form} mode={requestMode} route={selectedServiceRoute} turns={turns} onInspect={() => setSelectedTurnId("setup")} />
           </>
         )}
       </aside>
     </form>
+  );
+}
+
+function DraftRequestDrawer({ form, mode, route, turns, onInspect }: {
+  form: PlaygroundForm;
+  mode: "json" | "curl";
+  route?: RouteCatalog["manifestProxy"][number];
+  turns: PlaygroundTurn[];
+  onInspect: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  // Don't serialize the full transcript on each keystroke in a closed drawer.
+  function preview() {
+    try {
+      const payload = playgroundDraftPayload(form, route, turns);
+      return mode === "json" ? JSON.stringify(payload, null, 2) : playgroundCurl(form, payload, route);
+    } catch (error) {
+      return errorMessage(error);
+    }
+  }
+  return (
+    <details className="requestDrawer" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary onClick={onInspect}><span><ServerCog className="buttonIcon" aria-hidden="true" /> Preview request</span></summary>
+      {open ? <pre role="region" aria-label="Draft request payload" tabIndex={0}>{preview()}</pre> : null}
+    </details>
   );
 }
