@@ -1,0 +1,523 @@
+{
+  "schema": "fusion-undici-live-transfer-v1",
+  "date": "2026-11-27",
+  "scope": "Three newly selected historical Undici tasks in a previously exposed repository; one live draw per arm. Runtime JavaScript only. No production qualification.",
+  "policy": {
+    "control": "one strong call",
+    "cascade": "one cheap draft; one fresh strong fallback only after public rejection",
+    "fallbackReceivesDraft": false,
+    "reasoning": "medium",
+    "maxOutputTokens": 8192,
+    "requestTimeoutMs": 180000,
+    "maxCalls": 9,
+    "stageCapMicros": 2000000,
+    "armCapMicros": 500000,
+    "armOrder": [
+      "strong,cascade",
+      "cascade,strong",
+      "strong,cascade"
+    ],
+    "artifact": "strict anchored edits against originals",
+    "sourceContext": "editable originals and one-hop production dependencies; public tests and recursively required test helpers from the base revision",
+    "publicGate": "valid complete tests; exact qualified reference count; zero skips; syntax passes",
+    "fullGate": "same full count and no skips; all full tests pass; evaluated after every live arm",
+    "elapsed": "sum of measured live arm wall time, including per-call preflight, API, decoding and public verification; excludes later full grading and receipt-only audit",
+    "image": "sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c",
+    "prices": {
+      "openai/gpt-6-luna": {
+        "provider": "openai",
+        "upstream": "gpt-6-luna",
+        "price": {
+          "input": 1.0000000000000001e-07,
+          "cached": 1e-08,
+          "write": 1.25e-07,
+          "output": 5e-07,
+          "request": 0,
+          "tiers": []
+        },
+        "source": "https://developers.openai.com/api/docs/models/gpt-6-luna"
+      },
+      "openai/gpt-6.1-terra": {
+        "provider": "openai",
+        "upstream": "gpt-6.1-terra",
+        "price": {
+          "input": 1e-06,
+          "cached": 5e-08,
+          "write": 1.25e-06,
+          "output": 5e-06,
+          "request": 0,
+          "tiers": []
+        },
+        "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+      }
+    },
+    "priceBasis": "Frozen published-tariff usage estimates, not an invoice reconciliation; cache-neutral prices all input at uncached tariff."
+  },
+  "exposure": {
+    "protocolFilesScanned": 853,
+    "journalFilesScanned": 170,
+    "selectedIdsAndCommitsAbsent": true,
+    "repositoryPreviouslyExposed": true,
+    "trainingDecontaminationClaim": false
+  },
+  "cases": [
+    {
+      "id": "undici-b217373bb024",
+      "base": "789ef26461c648480433846607154f52d74ec9ab",
+      "oracle": "b217373bb024cd93f85eb5b3ffd25684855f60f8",
+      "instruction": "fix(websocket): bound automatic PONG writes under backpressure",
+      "editPaths": [
+        "lib/web/websocket/receiver.js"
+      ],
+      "tests": [
+        "test/websocket/pong-backpressure.js"
+      ],
+      "baseArchiveSha256": "23f01cdf2aa4c48594da3563ce2217d1243e14fc9f128fc837898e8e128b7d0f",
+      "testLibraryBundleSha256": "883b73e5f2ac32ca84438fcf318725cc602dd04c78b55b38f24349d4bda46517",
+      "testLibraryLockSha256": "4d266ea7f721c3f344e59e91316588468d55ad88a1d5c3d6527592b088d1cdbb",
+      "contextPaths": [
+        "lib/web/websocket/receiver.js",
+        "test/websocket/pong-backpressure.js",
+        "lib/web/websocket/constants.js",
+        "lib/web/websocket/util.js",
+        "lib/web/websocket/connection.js",
+        "lib/web/websocket/frame.js",
+        "lib/web/websocket/permessage-deflate.js",
+        "lib/core/errors.js",
+        "lib/core/constants.js"
+      ],
+      "expectedTests": {
+        "public": 2,
+        "full": 3
+      },
+      "qualification": {
+        "referenceFull": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": true,
+          "tests": 3,
+          "skipped": 0
+        },
+        "baselineFull": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": false,
+          "tests": 3,
+          "skipped": 0
+        },
+        "referencePublic": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": true,
+          "tests": 2,
+          "skipped": 0
+        },
+        "baselinePublic": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": false,
+          "tests": 2,
+          "skipped": 0
+        }
+      }
+    },
+    {
+      "id": "undici-105b5d4fac4e",
+      "base": "c3de4723fbc85684ee36b93dd76e1a921ed5a958",
+      "oracle": "105b5d4fac4e2a9072291a0dbca8bff3bcefd50e",
+      "instruction": "fix(interceptor): limit response error body size (#5942)",
+      "editPaths": [
+        "lib/core/errors.js",
+        "lib/interceptor/response-error.js"
+      ],
+      "tests": [
+        "test/interceptors/response-error.js"
+      ],
+      "baseArchiveSha256": "712d4d72ec02946a2ec5b3c623b35bc18c3b34a80b481f50e331b1d121aec500",
+      "testLibraryBundleSha256": "883b73e5f2ac32ca84438fcf318725cc602dd04c78b55b38f24349d4bda46517",
+      "testLibraryLockSha256": "78d7cc4bcc2ad0ad83de75b6d78b690feffacae724131351bbcbcd19cb801b84",
+      "contextPaths": [
+        "lib/core/errors.js",
+        "lib/interceptor/response-error.js",
+        "test/interceptors/response-error.js",
+        "lib/core/util.js",
+        "lib/handler/decorator-handler.js",
+        "index.js"
+      ],
+      "expectedTests": {
+        "public": 13,
+        "full": 14
+      },
+      "qualification": {
+        "referenceFull": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": true,
+          "tests": 14,
+          "skipped": 0
+        },
+        "baselineFull": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": false,
+          "tests": 14,
+          "skipped": 0
+        },
+        "referencePublic": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": true,
+          "tests": 13,
+          "skipped": 0
+        },
+        "baselinePublic": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": false,
+          "tests": 13,
+          "skipped": 0
+        }
+      }
+    },
+    {
+      "id": "undici-34b27da5ba07",
+      "base": "78aa1a0a2352daa2793daeb1f53a4646cf4e3de8",
+      "oracle": "34b27da5ba07ea4cd21e50de56f88373733de8d4",
+      "instruction": "fix(http2): pause bodyTimeout while applying backpressure (#5884)",
+      "editPaths": [
+        "lib/dispatcher/client-h2.js"
+      ],
+      "tests": [
+        "test/http2-timeout.js"
+      ],
+      "baseArchiveSha256": "0cbf75c49e459b96d0fe9babf8da0d2dd6face2a914f055ff2dea7efdcfe855c",
+      "testLibraryBundleSha256": "c953d2053b92395fdfb44832f4b116f618406b9db07edfae43fdb67470686bd4",
+      "testLibraryLockSha256": "0880e2fa195b1869f24eb978d31ac7012953e0cc95ce72f9e99e4766e8b3e875",
+      "contextPaths": [
+        "lib/dispatcher/client-h2.js",
+        "test/http2-timeout.js",
+        "lib/core/util.js",
+        "lib/core/errors.js",
+        "lib/core/symbols.js",
+        "lib/core/diagnostics.js",
+        "lib/web/fetch/body.js",
+        "index.js"
+      ],
+      "expectedTests": {
+        "public": 4,
+        "full": 5
+      },
+      "qualification": {
+        "referenceFull": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": true,
+          "tests": 5,
+          "skipped": 0
+        },
+        "baselineFull": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": false,
+          "tests": 5,
+          "skipped": 0
+        },
+        "referencePublic": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": true,
+          "tests": 4,
+          "skipped": 0
+        },
+        "baselinePublic": {
+          "compilerPassed": true,
+          "valid": true,
+          "passed": false,
+          "tests": 4,
+          "skipped": 0
+        }
+      }
+    }
+  ],
+  "records": [
+    {
+      "caseId": "undici-b217373bb024",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 42131,
+      "normalizedMicros": 36730,
+      "elapsedMs": 44198.196125,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "expectedTests": 3
+      }
+    },
+    {
+      "caseId": "undici-b217373bb024",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 3692,
+      "normalizedMicros": 3151,
+      "elapsedMs": 19731.882459,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "expectedTests": 3
+      }
+    },
+    {
+      "caseId": "undici-105b5d4fac4e",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "costMicros": 36027,
+      "normalizedMicros": 30245,
+      "elapsedMs": 35214.454209,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 14,
+        "expectedTests": 14
+      }
+    },
+    {
+      "caseId": "undici-105b5d4fac4e",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 8130,
+      "normalizedMicros": 28106,
+      "elapsedMs": 20487.037249999994,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 14,
+        "expectedTests": 14
+      }
+    },
+    {
+      "caseId": "undici-34b27da5ba07",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 61153,
+      "normalizedMicros": 50327,
+      "elapsedMs": 25151.365707999998,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 5,
+        "expectedTests": 5
+      }
+    },
+    {
+      "caseId": "undici-34b27da5ba07",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 6129,
+      "normalizedMicros": 5047,
+      "elapsedMs": 19008.158208999987,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 5,
+        "expectedTests": 5
+      }
+    }
+  ],
+  "calls": [
+    {
+      "caseId": "undici-b217373bb024",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 42131,
+      "normalizedMicros": 36730,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 21602,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 3025
+      },
+      "disposition": "complete",
+      "elapsedMs": 39112.270749999996,
+      "protocolSha256": "419a5ad7a4197930dfd2ab4cbb8b9ad4d6831bd3f7026c47c5d86b2a15d15cb8",
+      "journalSha256": "015a997c3730f1ce1ace2543ed792d1a4ee3bbd5d2f1aa2ca3ba2cc4ea9872f8"
+    },
+    {
+      "caseId": "undici-b217373bb024",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 3692,
+      "normalizedMicros": 3151,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 21602,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1981
+      },
+      "disposition": "complete",
+      "elapsedMs": 14574.504165999999,
+      "protocolSha256": "11d6d5caabb76f6ba6d8a00ae8dd8094e0b66874a046fe6059917b74de454b8b",
+      "journalSha256": "8aaa946447eaa7169e730a0cab6d912eee1688649d6250c01d81a7f391e8c47f"
+    },
+    {
+      "caseId": "undici-105b5d4fac4e",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 3594,
+      "normalizedMicros": 3069,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 21028,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1930
+      },
+      "disposition": "complete",
+      "elapsedMs": 12839.033500000005,
+      "protocolSha256": "9507e643a6e19ddf97d4233efe81c5a7cde756d66e7265b963b9dddf412c00c6",
+      "journalSha256": "b1cecf28e34530864e97a930ef8d88aee88aa1b45a203be8d0515959c74483ae"
+    },
+    {
+      "caseId": "undici-105b5d4fac4e",
+      "strategy": "cascade",
+      "role": "fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 32433,
+      "normalizedMicros": 27176,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 21028,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1229
+      },
+      "disposition": "complete",
+      "elapsedMs": 14943.087042,
+      "protocolSha256": "9720afbc640d587b5c4e80c6cee82143e8ca610f5d63b203e64b8f3a2491c931",
+      "journalSha256": "8f6dd13d1b8a2a20e4ff697aba8567fc37ab6c019e43eaf531f35b9adbabac87"
+    },
+    {
+      "caseId": "undici-105b5d4fac4e",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 8130,
+      "normalizedMicros": 28106,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 21028,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1415
+      },
+      "disposition": "complete",
+      "elapsedMs": 16844.53925,
+      "protocolSha256": "fc900260e5dd9d26a3ccf8226d8cf1126091c9287505920869c211d10a79d6a8",
+      "journalSha256": "83aacf39d4acab600e3e3dc8af68eb355fdca85a10e051c66d55f00bc8ed4469"
+    },
+    {
+      "caseId": "undici-34b27da5ba07",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 61153,
+      "normalizedMicros": 50327,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 43304,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1404
+      },
+      "disposition": "complete",
+      "elapsedMs": 18593.48879099998,
+      "protocolSha256": "6ad1e7efbf0b6ead9acee46a4ede66aec1f4fb30392d122cc0c9ef3a9d422530",
+      "journalSha256": "fd1a79afeb57ddb5a940b342194bd1fc0f4a72acea1a8e954091c93a0ad915f0"
+    },
+    {
+      "caseId": "undici-34b27da5ba07",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 6129,
+      "normalizedMicros": 5047,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 43304,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1431
+      },
+      "disposition": "complete",
+      "elapsedMs": 11349.00579200001,
+      "protocolSha256": "fc41aec627f124f9f257b6f1fb7a205c89895b430d1172fee79e9b71a2473ad6",
+      "journalSha256": "feae7765481cd5b880a8922c3a7d79b6970df12a890b3e1f27553469ccb97e77"
+    }
+  ],
+  "summary": {
+    "strong": {
+      "passed": 3,
+      "costMicros": 111414,
+      "elapsedMs": 89836.599083
+    },
+    "cascade": {
+      "passed": 3,
+      "costMicros": 45848,
+      "elapsedMs": 73954.49487699999
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 1,
+    "escalations": 1,
+    "costRatio": 0.41151022313174285,
+    "elapsedRatio": 0.8232112038065184,
+    "costComparison": {
+      "costBasis": "invoice-and-cache-neutral-v1",
+      "strong": {
+        "costMicros": 111414,
+        "normalizedMicros": 115163
+      },
+      "cascade": {
+        "costMicros": 45848,
+        "normalizedMicros": 38443
+      },
+      "costRatio": 0.41151022313174285,
+      "normalizedCostRatio": 0.33381381172772506,
+      "invoiceCostScreen": true,
+      "normalizedCostScreen": true,
+      "costScreen": true
+    },
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": true,
+    "qualifiedProductionGain": false
+  },
+  "actualExperimentCostMicros": 157262,
+  "evidence": {
+    "protocolSha256": "914dd9d80b6af05b397f480f4488b92246e913cfaa440a305d25702197d31e69",
+    "resultSha256": "b517c57086b2a04b75914a3b3fdb6dbe6f704a699313d2ab902f0502781f1873",
+    "terminalAuditSha256": "7e12dc270f0b1ec99c8d43817c8ce693d44bff056addb7042f38a62605a4979c",
+    "screenProtocolSha256": "d98c0ae84e5751c20575eac195be9e39b3573451b53cb683dc63dfb568caf746",
+    "screenQualificationSha256": "773b844b3600c338ebc37bafdcbf03eb1c1e606111221a5307392d151a07e81c",
+    "audited": true,
+    "rawEvidencePrivate": true,
+    "reproductionLimit": "Sanitized arithmetic and outcome recomputation only. Raw responses, source context, and private harness are not bundled."
+  }
+}
