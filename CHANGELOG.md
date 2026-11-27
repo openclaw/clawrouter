@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow the native-test Fusion cascade to opt into a two-call repair with an isolated failed draft and bounded public feedback.
+
 - Add an opt-in native-test cascade adapter that rejects incomplete verification before fallback and preserves parser receipt types.
 - Record a two-repair big-integer Fusion controller check: 6/6 cascade passes, no fallback, 89.78% lower API cost and 10.01% lower observed mean workflow time than direct Terra, with explicit sampling limits.
 
