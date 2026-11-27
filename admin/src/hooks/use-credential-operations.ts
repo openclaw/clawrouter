@@ -10,7 +10,9 @@ type Intent = { surface: Surface; operation: "create" | "rotate" | "revoke" | "p
 type Reveal = { key: string; credentialId: string; policyId: string; operation: "create" | "rotate"; scope: number; presentation: number };
 type Feedback = { surface: Surface; error: string; notice: string; reveal: Reveal | null };
 const emptyFeedback: Feedback = { surface: "personal", error: "", notice: "", reveal: null };
-const emptyRows = { admin: [] as ProxyCredential[], personal: [] as ProxyCredential[], policyIds: [] as string[] };
+type ReadState = "loading" | "ready" | "unavailable" | "stale";
+const emptyRows = { admin: [] as ProxyCredential[], personal: [] as ProxyCredential[], policyIds: [] as string[], keyRead: "loading" as ReadState, policyRead: "loading" as ReadState };
+function failedRead(previous: ReadState): ReadState { return previous === "ready" || previous === "stale" ? "stale" : "unavailable"; }
 
 export function useCredentialOperations(captureScope: () => CapturedSessionScope, requestForScope: (scope: CapturedSessionScope) => ConsoleRequest, setStatus: Dispatch<SetStateAction<string>>, refresh: (ownsScope: () => boolean) => Promise<void>) {
   const presentationRef = useRef({ surface: null as Surface | null, epoch: 0 });
@@ -43,11 +45,21 @@ export function useCredentialOperations(captureScope: () => CapturedSessionScope
   }
 
   function captureHydration() { return mutationRef.current; }
-  function hydrate(surface: Surface, credentials: ProxyCredential[], snapshot: number, policies: string[] = []) {
+  function admitsRead(snapshot: number) {
     const scope = captureScope();
-    if (!scope.session.authenticated || pendingRef.current?.scope === scope.epoch || snapshot !== mutationRef.current) return;
-    if (surface === "admin" && scope.session.role !== "admin") return;
-    setRows((current) => ({ ...current, [surface]: credentials, ...(surface === "personal" ? { policyIds: [...new Set(policies)].sort() } : {}) }));
+    return scope.session.authenticated && pendingRef.current?.scope !== scope.epoch && snapshot === mutationRef.current;
+  }
+  // Undefined: this read supplied no verdict for that resource. Null: its read failed.
+  function reportPersonal(snapshot: number, credentials?: ProxyCredential[] | null, policies?: string[] | null) {
+    if (!admitsRead(snapshot)) return;
+    setRows(current => ({ ...current,
+      ...(credentials === undefined ? {} : credentials === null ? { keyRead: failedRead(current.keyRead) } : { personal: credentials, keyRead: "ready" }),
+      ...(policies === undefined ? {} : policies === null ? { policyRead: failedRead(current.policyRead) } : { policyIds: [...new Set(policies)].sort(), policyRead: "ready" }),
+    }));
+  }
+  function hydrate(surface: Surface, credentials: ProxyCredential[], snapshot: number, policies: string[] = []) {
+    if (surface === "personal") return reportPersonal(snapshot, credentials, policies);
+    if (admitsRead(snapshot) && captureScope().session.role === "admin") setRows(current => ({ ...current, admin: credentials }));
   }
 
   function reject(surface: Surface, error: string) {
@@ -134,10 +146,11 @@ export function useCredentialOperations(captureScope: () => CapturedSessionScope
     if (busy && pending?.scope === scope.epoch && pending.surface === surface && (pending.operation === "create" || pending.operation === "rotate")) {
       pendingReveal = isPresented(surface, pending.presentation) ? "available" : "dismissed";
     }
-    return { items: rows[surface], busy, pendingReveal, error: owned ? feedback.error : "", notice: owned ? feedback.notice : "", reveal, dismiss: invalidatePresentation, refresh: () => refresh(captureScope().isCurrent) };
+    const inventory = surface === "personal" && scope.session.role === "user" ? { keys: rows.keyRead, policies: rows.policyRead } : null;
+    return { items: rows[surface], inventory, busy, pendingReveal, error: owned ? feedback.error : "", notice: owned ? feedback.notice : "", reveal, dismiss: invalidatePresentation, refresh: () => refresh(captureScope().isCurrent) };
   }
 
-  return { rows, scopeEpoch: captureScope().epoch, busy, clearScope, observePresentation, invalidatePresentation, captureHydration, hydrate, mutate, forSurface, reject };
+  return { rows, scopeEpoch: captureScope().epoch, busy, clearScope, observePresentation, invalidatePresentation, captureHydration, hydrate, reportPersonal, mutate, forSurface, reject };
 }
 
 export type CredentialOperations = ReturnType<typeof useCredentialOperations>;
