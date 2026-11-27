@@ -1,7 +1,7 @@
 import { googleMusicModels, observeGoogleMusic, prepareGoogleMusic } from "./google-music.ts";
 import { jsonBodyBytes } from "./json-body.ts";
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
-import { readNativeJson } from "./native-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
+import { readIdentityNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { HttpError } from "./http-error.ts";
@@ -35,15 +35,7 @@ export function prepareNativeGoogleMusic(selection: ProxySelection): NativeRespo
     origin: "https://generativelanguage.googleapis.com", path: prepared.path,
     acquire: () => nativeResponseLease(32 * 1024 * 1024),
     async read(response, signal) {
-      const encoding = response.headers.get("content-encoding");
-      if (response.status !== 200 || response.redirected || encoding !== null && encoding.trim().toLowerCase() !== "identity") {
-        void response.body?.cancel().catch(() => undefined); invalid();
-      }
-      if (encoding !== null) {
-        const headers = new Headers(response.headers); headers.delete("content-encoding");
-        response = new Response(response.body, { status: response.status, headers });
-      }
-      return readNativeJson(response, signal, jsonLimit, original => {
+      return readIdentityNativeJson(response, signal, jsonLimit, original => {
         const observed = observeGoogleMusic(original, prepared, true);
         const candidate = object(list(observed.body.candidates)[0]), content = object(candidate.content);
         const parts = list(content.parts).filter(value => object(value).thought !== true);

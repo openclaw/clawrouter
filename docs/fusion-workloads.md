@@ -15,6 +15,35 @@ The first corpus covers catalog protocol validation, native model identity,
 streaming response ownership, and Copilot catalog/request identity. Only the
 declared source files are writable. Source dependencies remain readable.
 
+### External task descriptions
+
+For new external repair cohorts, freeze the author's problem description and
+required behavior before inference. A commit title alone can omit requirements
+checked by withheld tests. Passing those tests then measures whether the model
+guessed the missing contract, not just whether it implemented the stated task.
+
+`externalTaskBrief` in `scripts/fusion-task-brief.mjs` builds an opt-in instruction
+from a public issue or PR title and body. It omits fenced code, template comments,
+and test, verification, benchmark and status sections introduced by Markdown
+`#` headings. It records the
+source URL, exact title/body hashes, selected instruction hash and omitted
+sections. It rejects missing narrative and oversized output rather than falling
+back to the title or truncating requirements. It makes no network or model calls.
+
+Store the returned `instruction` on the task and `provenance` in the frozen
+protocol. Keep the captured source body with the private experiment evidence so
+the hashes and selected sections can be checked later.
+
+Review the selected narrative against the task contract before freezing a cohort.
+Section filtering cannot prove semantic completeness or remove every reference
+to a solution or test. A PR's change narrative can contain implementation hints;
+label that input as author guidance, not an independent pre-solution issue.
+Keep code, executable acceptance tests and reference patches out of the input.
+
+If a task description changes after evaluation, use a new protocol and keep the
+old scores unchanged. Previously evaluated cases remain exposed development
+data, even when their instructions are corrected.
+
 Tasks that add modules may list up to 12 `newPaths`, each also present in
 `editPaths`. The pinned parent must not contain them. Each disposable trial
 creates empty files under existing, non-symlink source directories; the source

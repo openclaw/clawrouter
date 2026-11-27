@@ -5,7 +5,7 @@ import { grantRoutingPolicy } from "./grant-routing.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import { jsonBodyStream } from "./json-body.ts";
-import { discoveryAllows } from "./model-discovery.ts";
+import { discoveryAllows } from "./model-discovery-request.ts";
 import { nativeResponseLease } from "./native-response.ts";
 import { applyProviderCredential } from "./provider-auth.ts";
 import type { ProxySelection } from "./proxy-selection.ts";

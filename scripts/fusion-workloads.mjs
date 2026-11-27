@@ -1,3 +1,4 @@
+import { failureStopCommand } from './fusion-failure-stop.mjs';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
@@ -202,11 +203,14 @@ for(const name of JSON.parse(process.argv[1])){const file=p.resolve('/work',name
 if(!file.startsWith('/work/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_new_parent');
 fs.writeFileSync(file,'',{flag:'wx'});}`, JSON.stringify(paths)]);
     if (publicTests.length) {
-      await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');
-for(const name of JSON.parse(process.argv[1])){const file=p.resolve('/work',name),dir=p.dirname(file);
-if(!file.startsWith('/work/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_public_test_parent');
-try{fs.writeFileSync(file,'',{flag:'wx'});}catch(error){if(error.code!=='EEXIST')throw error;}}`, JSON.stringify(publicTests.map(file => file.path))]);
-      await writeFiles(box, publicTests);
+      await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path'),root=process.argv[1];
+const files=JSON.parse(fs.readFileSync(0,'utf8'));
+for(const f of files){const file=p.resolve(root,f.path),dir=p.dirname(file);
+if(!file.startsWith(root+'/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_public_test_parent');
+try{fs.writeFileSync(file,'',{flag:'wx'});}catch(error){if(error.code!=='EEXIST')throw error;}}
+for(const f of files){const file=p.resolve(root,f.path);
+if(!file.startsWith(root+'/')||fs.lstatSync(file).isSymbolicLink()||fs.realpathSync(file)!==file)throw Error('invalid_public_test_file');
+fs.writeFileSync(file,f.content);}`, '/work'], { input: JSON.stringify(publicTests), timeout: 120000 });
     }
     return box;
   } catch (error) { await box.close(); throw error; }
@@ -330,10 +334,20 @@ function normalizeTapTimings(text) {
   return lines.join('\n').replace(/(^# tests [0-9]+\r?\n# suites [0-9]+\r?\n# pass [0-9]+\r?\n# fail [0-9]+\r?\n# cancelled [0-9]+\r?\n# skipped [0-9]+\r?\n# todo [0-9]+\r?\n# duration_ms )[0-9]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?((?:\r?\n)*)(?![\s\S])/mi, '$1<elapsed>$2');
 }
 
-function testFeedback(result, normalizeTimings) {
-  const normalize = text => normalizeTimings ? normalizeTapTimings(text) : text;
+function normalizeNodeWarningPids(text) {
+  // Only the process identifier in a top-level Node warning header is metadata.
+  // Indented assertion values, warning codes and messages remain evidence.
+  return text.replace(/^(# )?\(node:[1-9][0-9]*\)( (?:\[[^\r\n]*\] )?(?:Warning|[A-Za-z]+Warning):)/gm,
+    '$1(node:<pid>)$2');
+}
+
+function testFeedback(result, normalizeTimings, normalizeProcessIds = false) {
+  const normalize = text => {
+    if (normalizeTimings) text = normalizeTapTimings(text);
+    return normalizeProcessIds ? normalizeNodeWarningPids(text) : text;
+  };
   const stdout = normalize(result.stdout.toString());
-  const text = normalizeTimings ? stdout + normalize(result.stderr.toString()) : Buffer.concat([result.stdout, result.stderr]).toString();
+  const text = normalizeTimings || normalizeProcessIds ? stdout + normalize(result.stderr.toString()) : Buffer.concat([result.stdout, result.stderr]).toString();
   if (text.length <= 12000) return text;
   const diagnostics = [];
   let failureDepth = -1;
@@ -364,19 +378,33 @@ function tapTestName(name) {
   return name.replace(/[\b\f\t\n\r\v\\#]/g, character => escapes[character]);
 }
 
-export async function check(box, paths, timeout = 120000, { testNamePrefix, normalizeFeedbackTimings = false, countTestTimeoutsAsFailures = false } = {}) {
+function nodeTestRuntimeArgs({ exposeGc = false }) {
+  if (typeof exposeGc !== 'boolean') throw new Error('invalid_gc_runtime_option');
+  return exposeGc ? ['--expose-gc'] : [];
+}
+
+export async function check(box, paths, timeout = 120000, { testNamePrefix, testTimeoutMs, exposeGc = false, normalizeFeedbackTimings = false, normalizeFeedbackProcessIds = false, countTestTimeoutsAsFailures = false, stopOnTestFailure = false } = {}) {
+  const runtimeArgs = nodeTestRuntimeArgs({ exposeGc });
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
   if (typeof normalizeFeedbackTimings !== 'boolean') throw new Error('invalid_feedback_timing_option');
+  if (typeof normalizeFeedbackProcessIds !== 'boolean') throw new Error('invalid_feedback_process_id_option');
   if (typeof countTestTimeoutsAsFailures !== 'boolean') throw new Error('invalid_test_timeout_accounting');
+  if (typeof stopOnTestFailure !== 'boolean') throw new Error('invalid_failure_stop_option');
   // Kill the in-container process group before the Docker client deadline.
   // A killed client alone leaves the test runner and its children alive.
   const limit = timeout - Math.min(2000, Math.ceil(timeout / 10));
+  if (testTimeoutMs !== undefined && (!Number.isSafeInteger(testTimeoutMs) || testTimeoutMs < 1
+    || testTimeoutMs > 2147483647 || testTimeoutMs >= limit)) throw new Error('invalid_node_test_timeout');
+  const deadline = testTimeoutMs === undefined ? [] : [`--test-timeout=${testTimeoutMs}`];
   const pattern = namedTestPattern(testNamePrefix);
   const selection = pattern === undefined ? [] : [`--test-name-pattern=^${pattern}`];
+  const invocation = stopOnTestFailure
+    ? failureStopCommand(paths, { exposeGc, testTimeoutMs, pattern: pattern === undefined ? undefined : `^${pattern}` })
+    : { args: ['node', ...runtimeArgs, '--test-reporter=tap', ...deadline, ...selection, '--test', ...paths] };
   const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
-    'node', '--test-reporter=tap', ...selection, '--test', ...paths], { allowFailure: true, timeout });
+    ...invocation.args], { allowFailure: true, timeout, ...(stopOnTestFailure ? { input: invocation.input } : {}) });
   const metrics = testResult(result, { countTestTimeoutsAsFailures });
-  if (pattern === undefined) return { ...metrics, feedback: testFeedback(result, normalizeFeedbackTimings) };
+  if (pattern === undefined) return { ...metrics, feedback: testFeedback(result, normalizeFeedbackTimings, normalizeFeedbackProcessIds) };
   // Node can report the test file itself as passing when no name matched.
   const encodedPrefix = tapTestName(testNamePrefix);
   const fileLabels = paths.map(path => tapTestName(path.replace(/^\.\//, '')));
@@ -397,12 +425,13 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix, norm
     return matched;
   });
   return { ...metrics, passed: metrics.passed && matchedTestPrefix, matchedTestPrefix,
-    feedback: matchedTestPrefix ? testFeedback(result, normalizeFeedbackTimings)
-      : ('No test matched the required name prefix.\n' + testFeedback(result, normalizeFeedbackTimings)).slice(0, 12000) };
+    feedback: matchedTestPrefix ? testFeedback(result, normalizeFeedbackTimings, normalizeFeedbackProcessIds)
+      : ('No test matched the required name prefix.\n' + testFeedback(result, normalizeFeedbackTimings, normalizeFeedbackProcessIds)).slice(0, 12000) };
 }
 
 /** Final acceptance cannot let candidate imports rewrite their own tests. */
 export async function checkAcceptance(box, paths, supportPaths = [], timeout = 120000, options = {}) {
+  nodeTestRuntimeArgs(options);
   namedTestPattern(options.testNamePrefix);
   if (!Number.isSafeInteger(timeout) || timeout < 1 || !Array.isArray(paths) || !paths.length
     || !Array.isArray(supportPaths) || typeof box.execUnprivileged !== 'function') {

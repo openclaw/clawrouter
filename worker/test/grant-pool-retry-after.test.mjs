@@ -87,7 +87,7 @@ test('stable catalog identity does not admit inference before the scoped cooldow
 for (const legacy of [false, true]) for (const [name, stateA, stateB, retryAfter, routing = { includedQuotaReservePercent: 10 }] of [
   ['rate-limit cooldowns', r => cooling(60, r), r => cooling(150, r), '60'],
   ['a quota window reset beats a later cooldown', r => cooling(200, r), r => exhausted(90, r), '90'],
-  ['subscription reserve exhaustion waits for its reset', r => cooling(200, r), r => exhausted(45, r, 5), '45'],
+  // A grant only in the reserve band is drained, not waited for: reserve-drain.test.mjs.
   ['sub-second remainders round up', r => ({ ...cooling(0, r), cooldownUntil: new Date(now + 250).toISOString() }), r => cooling(30, r), '1'],
   ['an earlier authentication cooldown is not a recovery', r => authFailed(30, r), r => cooling(120, r), '120'],
   ['an authentication cooldown with a resettable window is not a recovery', r => ({ ...exhausted(10, r), cooldownUntil: at(20), lastSignal: 'authentication' }), r => exhausted(90, r), '90'],

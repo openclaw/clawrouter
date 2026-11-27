@@ -5,7 +5,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
-const { prepareModelDiscovery, validateDiscoveryQuery, discoveryAllows } = await import("../model-discovery.ts");
+const { prepareModelDiscovery, validateDiscoveryQuery, discoveryAllows } = await import("../model-discovery-request.ts");
 const { requestyCatalogRequest, readRequestyModels } = await import("../requesty-model-catalog.ts");
 const { REQUESTY_MODELS_FORMAT } = await import("../model-discovery-formats.ts");
 const source = parse(readFileSync(new URL("../../providers/requesty.provider.yaml", import.meta.url), "utf8"));

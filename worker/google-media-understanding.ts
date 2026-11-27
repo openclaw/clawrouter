@@ -1,5 +1,5 @@
 import { readGoogleJson } from "./google-json.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const googleUnderstandingModel = "gemini-3-flash-preview";
 const mimes = {

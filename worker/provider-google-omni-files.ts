@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { canonicalGoogleVeoBytes, googleVeoApiBase, readGoogleVeoBytes, readGoogleVeoFile } from "./provider-google-veo-files.ts";
 
 export const googleOmniEnvelopeBytes = 16 * 1024 * 1024;

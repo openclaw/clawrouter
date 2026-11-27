@@ -316,6 +316,133 @@ test("managed sign-in offers reload and invalid successful responses never open 
   }
 });
 
+// History entries remain navigable while the protected console is unmounted.
+for (const scenario of ["Back before retry", "Forward during retry", "no traversal"] as const) {
+  test(`verified member return follows browser history: ${scenario}`, async ({ page }) => {
+    const state = await fixture(page, "user");
+    const suffix = "?source=fixture#return";
+    const nav = page.getByRole("navigation", { name: "console" });
+    const heading = page.getByRole("heading", { level: 1 });
+    await open(page, `/dashboard/catalog${suffix}`);
+    await nav.getByRole("button", { name: "Playground", exact: true }).press("Enter");
+    await expect(heading).toHaveText("Playground");
+    if (scenario === "Forward during retry") {
+      await page.goBack();
+      await expect(heading).toHaveText("Catalog");
+    }
+    state.replies.set("/v1/session", authError("access_session_required"));
+    await focus(page);
+    await signedOut(page);
+    if (scenario === "Back before retry") await page.goBack();
+
+    const expected = scenario === "Back before retry" ? "Catalog" : "Playground";
+    const expectedUrl = new URL(`/dashboard/${expected.toLowerCase()}${suffix}`, page.url()).href;
+    const historyLength = await page.evaluate(() => history.length);
+    const verification = deferred();
+    state.replies.delete("/v1/session");
+    state.waits.set("/v1/session", verification.promise);
+    try {
+      await page.getByRole("button", { name: "Retry access" }).press("Enter");
+      await expect(heading).toHaveText("Checking access");
+      if (scenario === "Forward during retry") await page.goForward();
+      await expect(page).toHaveURL(expectedUrl);
+      await expect(nav).toHaveCount(0);
+      await expect(page.locator(".appShell")).toHaveCount(0);
+    } finally { verification.release(); }
+
+    await connected(page);
+    await expect(page).toHaveURL(expectedUrl);
+    await expect(heading).toHaveText(expected);
+    await expect(nav.locator('[aria-current="page"]')).toHaveText(expected);
+    expect(await page.evaluate(() => history.length)).toBe(historyLength);
+    const next = nav.getByRole("button", { name: expected === "Catalog" ? "Playground" : "Catalog", exact: true });
+    // A refresh started on the recovered view must not undo a later keyboard navigation.
+    const refresh = deferred();
+    state.waits.set("/v1/session", refresh.promise);
+    const rechecking = page.waitForRequest(r => new URL(r.url()).pathname === "/v1/session");
+    const refreshed = page.waitForResponse(r => new URL(r.url()).pathname === "/v1/session/credentials");
+    try {
+      await focus(page);
+      await rechecking;
+      await next.press("Enter");
+      await expect(next).toHaveAttribute("aria-current", "page");
+    } finally { refresh.release(); }
+    await refreshed;
+    await flush(page);
+    await expect(next).toBeFocused();
+    await expect(next).toHaveAttribute("aria-current", "page");
+    expect(state.writes).toEqual([]);
+  });
+}
+
+for (const role of ["user", "admin"] as const) {
+  test(`verified ${role} remount does not read the usage page left during sign-in`, async ({ page }) => {
+    const state = await fixture(page, role);
+    await page.clock.install();
+    const nav = page.getByRole("navigation", { name: "console" });
+    const usageTitle = role === "admin" ? "Usage" : "My usage";
+    const report = role === "admin" ? "/v1/admin/usage/report" : "/v1/session/usage/report";
+    state.replies.set(report, { status: 200, json: { kind: "no_access" } });
+    await open(page, "/dashboard/catalog");
+    const firstReport = page.waitForResponse(r => new URL(r.url()).pathname === report);
+    await nav.getByRole("button", { name: usageTitle, exact: true }).click();
+    await firstReport;
+    state.replies.set("/v1/session", authError("access_session_required"));
+    await focus(page);
+    await signedOut(page);
+    await page.goBack();
+    await expect(page).toHaveURL(url => url.pathname === "/dashboard/catalog");
+    state.replies.delete("/v1/session");
+    const start = state.requests.length;
+    await page.getByRole("button", { name: "Retry access" }).press("Enter");
+    await connected(page);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Catalog");
+    // Include deferred report reads as well as the bootstrap's immediate ledger read.
+    await page.clock.runFor(300);
+    const readPaths = state.requests.slice(start).map(r => r.path);
+    expect(readPaths).not.toContain(report);
+    if (role === "admin") expect(readPaths).not.toContain("/v1/admin/usage");
+  });
+}
+
+test("verified member return still replaces an admin-only route with Catalog", async ({ page }) => {
+  const state = await fixture(page, "user");
+  state.replies.set("/v1/session", authError("access_session_required"));
+  await page.goto("/dashboard/users?source=fixture#return");
+  await signedOut(page);
+  const length = await page.evaluate(() => history.length);
+  state.replies.delete("/v1/session");
+  await page.getByRole("button", { name: "Retry access" }).press("Enter");
+  await expect(page).toHaveURL(url => url.pathname === "/dashboard/catalog" && url.search === "?source=fixture" && url.hash === "#return");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Catalog");
+  expect(await page.evaluate(() => history.length)).toBe(length);
+  expect(state.requests.filter(r => r.path.startsWith("/v1/admin/"))).toEqual([]);
+});
+
+test("member return stays gated on denied, expired and unknown session verdicts", async ({ page }) => {
+  const state = await fixture(page, "user");
+  state.replies.set("/v1/session", authError("access_session_required"));
+  await page.goto("/dashboard/catalog?source=fixture#return");
+  await signedOut(page);
+  const url = page.url();
+  const cases: [Reply, string][] = [
+    [{ status: 403, json: { error: { message: "Access denied" } } }, "Access denied"],
+    [authError("access_session_required"), "Sign-in required"],
+    [{ status: 200, json: {} }, "did not return a verified browser session"],
+  ];
+  for (const [verdict, message] of cases) {
+    state.replies.set("/v1/session", verdict);
+    const response = page.waitForResponse(r => new URL(r.url()).pathname === "/v1/session");
+    await page.getByRole("button", { name: "Retry access" }).press("Enter");
+    expect((await response).status()).toBe(verdict.status);
+    await expect(page.locator(".loginShell")).toContainText(message);
+    await expect(page).toHaveURL(url);
+    await expect(page.locator(".appShell")).toHaveCount(0);
+    await expect(page.getByRole("navigation", { name: "console" })).toHaveCount(0);
+  }
+  expect(state.requests.every(({ path, method }) => method === "GET" && ["/v1", "/v1/session"].includes(path))).toBe(true);
+});
+
 interface PlaygroundRequest { signal?: AbortSignal | null; resolve: (response: Response) => void }
 type TestWindow = Window & { releaseHash?: () => void; playgroundRequests?: PlaygroundRequest[] };
 type Reply = { status: number; json?: unknown; body?: string };
@@ -331,9 +458,9 @@ async function completePlayground(page: Page, index: number, text: string) {
   await flush(page);
 }
 
-async function fixture(page: Page) {
+async function fixture(page: Page, role: "admin" | "user" = "admin") {
   const state = {
-    email: "admin@example.com", subject: "first-subject", groups: [] as string[], local: false,
+    email: role === "admin" ? "admin@example.com" : "member@example.test", subject: "first-subject", groups: [] as string[], local: false,
     requests: [] as { path: string; method: string }[], writes: [] as { path: string; method: string }[],
     replies: new Map<string, Reply>(), waits: new Map<string, Promise<void>>(),
   };
@@ -348,7 +475,7 @@ async function fixture(page: Page) {
     const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
     state.requests.push({ path, method });
     if (method !== "GET") state.writes.push({ path, method });
-    const session = { authenticated: true, auth: state.local ? "local" : "cloudflare_access", role: "admin", email: state.email, subject: state.subject, groups: state.groups, tenantId: "default", entitlements: { providers: access } };
+    const session = { authenticated: true, auth: state.local ? "local" : "cloudflare_access", role, email: state.email, subject: state.subject, groups: state.groups, tenantId: "default", entitlements: { providers: access } };
     const responses: Record<string, unknown> = {
       "/v1": { endpoints: state.local ? { sessionLogin: "/v1/session/login" } : {} },
       "/v1/session": session, "/v1/session/login": { ok: true },

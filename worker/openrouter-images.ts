@@ -1,4 +1,4 @@
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 import { readNativeJson } from "./native-json.ts";
 
 export const openRouterImageModels = ["google/gemini-3.1-flash-image-preview", "google/gemini-3-pro-image-preview", "openai/gpt-5.4-image-2"] as const;

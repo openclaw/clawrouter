@@ -1,5 +1,11 @@
 # Low-cost Fusion research and screening
 
+The [live Undici transfer pilot](fusion-undici-live-transfer.md) matched
+strong-only at 3/3 tasks with 58.85% lower model cost and 17.68% less measured
+workflow time, including public verification. One cheap draft required a
+successful strong fallback. This small, single-draw study on an exposed
+repository passes its development screen; production routing stays unchanged.
+
 Research baseline reviewed on 2026-11-05; routing follow-up on 2026-11-24.
 Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
@@ -9,6 +15,39 @@ retains 30 tasks, three trials and all 270 outcomes. Cheap-first saved 23.0% in
 model charges but passed 81/90 versus strong-only's 85/90; cheap-only passed
 70/90. It failed quality preservation. The report includes both predeclared
 admission strata and source-clustered uncertainty; no default is promoted.
+
+The [fallback-repair follow-up](fusion-fallback-repair-study.md) records mixed
+effects from precise edit feedback, two recovered failures from one extra strong
+repair, and an offline fresh-workflow replay. The latter is a candidate for fresh
+validation, not a live routing result.
+
+The [interrupted fresh-fallback study](fusion-fresh-workflow-study.md) records
+240 of 270 planned outcomes: 79/80 cascade successes versus 80/80 strong-only.
+A same-millisecond cache boundary let a bad draft pass its original public
+check; replay rejected it and stopped before the final batch. Lower recorded
+cost does not qualify this policy. The failure and fixed-clock diagnostic remain
+visible, with no replacement calls or default change.
+
+Clock-sensitive verification can prepare an explicit fixture with
+`freezeNodeTestClock` from `scripts/fusion-fixed-clock.mjs`. Supply the exact
+source SHA-256, one test title and a trusted JavaScript parser returning a
+Babel File or ESTree Program with character offsets. Executable registration
+nodes, not comment or string content, select the test. Pin the parser version
+alongside the fixture. The helper returns a new file plus original
+and transformed hashes; it freezes `Date.now()` inside that test using Node's
+test-context mock, which is restored when the test ends. Other clocks and timer
+scheduling are unchanged. The helper accepts only one standalone
+`test('title', async () => {` registration with no existing callback parameters.
+Unsupported or ambiguous input fails instead of being guessed.
+
+Use this before freezing a new evaluation protocol. Keep the original file and
+qualify the transformed suite against both the unfixed baseline and the known
+reference fix. Give every compared model the same declared fixture, and bind
+its hashes into the protocol. Never silently change an existing study or reuse
+old results as proof for a new verifier. A frozen clock can expose strict
+`now > staleAt` boundary mistakes; it is unsuitable for tests that need time to
+advance. This is an opt-in preparation utility, not automatic verifier repair
+or evidence of improved model quality.
 
 The [adapted coding-cohort study](fusion-livecodebench-study.md) records a
 12-task development lead for strong review followed by small-model repair:
@@ -58,6 +97,11 @@ or cost gains, including zero-score rows. Known-cost execution errors with no
 grading attempt remain failures; a supplied incomplete grade invalidates the run.
 Grounded and checked repair profiles also stop on incomplete visible checks,
 including checks after an edit or a review submission.
+
+## Independent cheap and strong controls
+
+The [seven-task, two-repository comparison](fusion-independent-controls.md) includes matched independent cheap-only and strong-only arms: cascade 7/7, strong-only 7/7 and cheap-only 2/7, with three fallback rescues. Cascade model cost was 51.33% lower than strong-only and measured time 5.99% higher. This is a bounded development result, not production qualification.
+
 
 ## Bounded caller-side tool trajectories
 
@@ -2186,6 +2230,13 @@ check. The result includes `matchedTestPrefix` when selection is requested.
 `checkAcceptance` accepts the same options as its fifth argument and retains
 its protected-file checks. Default calls continue to run all tests.
 
+For trusted fixtures that require `globalThis.gc`, pass `{ exposeGc: true }` to
+`check` or `checkAcceptance`. This adds only Node's `--expose-gc` flag; the default
+is off. Invalid option values fail before execution or acceptance snapshots.
+Predeclare this runtime option for every comparison arm and pin it with the
+fixture. Requalify both baseline and reference under that same runtime before
+using it in a new study. It does not repair or replace previous results.
+
 For replayable feedback, callers can also set `normalizeFeedbackTimings: true`.
 This replaces TAP test durations and the final duration summary with `<elapsed>`
 before the 12,000-character feedback limit is applied. Normalizing after clipping
@@ -2193,6 +2244,13 @@ cannot recover characters displaced by longer timing values. The default
 preserves timing text. Raw output digests, test counts and verdicts remain
 unchanged; the option does not normalize other variable diagnostics or repair
 previously clipped receipts.
+
+Set `normalizeFeedbackProcessIds: true` to replace the numeric process ID in
+top-level Node warning headers with `<pid>` before clipping feedback. This
+preserves warning codes, messages, stacks, indented assertion values, raw output
+digests, and verdicts. The default retains the original text. This only handles
+warning-header process IDs; it does not make arbitrary diagnostics deterministic
+or qualify a previously failed replay. Freeze the option before new model calls.
 
 Name selection checks execution evidence. It does not establish assertion
 quality or complete requirement coverage, and it is not a substitute for the
@@ -2503,3 +2561,131 @@ These identify private receipts, not a bundled independent reproduction suite.
 This single convenience-sampled historical task does not establish statistical
 reliability, independence from model training, production savings or a routing
 default. It also did not exercise the new invalid-edit preservation behavior.
+
+## Fresh public-controller routing pilot
+
+The [six-task routing pilot](fusion-public-repair-pilot.md) uses the public
+cheap-repair controller on locally unexposed cases. It matches strong-only
+quality at 26.4% lower model cost and 18.3% more workflow time, while cheap-only
+solves four of six tasks. All outcomes and replay-audit evidence are retained.
+This passes the declared pilot screen; it does not qualify production routing
+or demonstrate a cross-model rescue.
+
+## Public repair repeatability
+
+The [three-repeat study](fusion-public-repair-repeats.md) keeps the first fresh
+six-task pilot separate and reports 54 new outcomes on those same six exposed
+tasks. Its aggregate passes the frozen cost, time and quality screen, with one
+failed repeat retained. This supports broader testing of the opt-in workflow;
+it does not change routing defaults or qualify a production gain.
+
+`summarizeRepeatability(records, taskIds)` retains the six-task default. Declare
+a different cohort size before collecting results with `{ expectedTasks: 12 }`.
+The helper still requires every task and all three strategies in each of three
+repeats; 12 tasks produce 36 paired samples, not 36 independent tasks.
+
+For `{ costBasis: 'invoice-and-cache-neutral-v1' }`, every record must include
+`normalizedMicros`. Both invoice and cache-neutral cost ratios must pass the
+20% savings gate, alongside the existing quality and workflow-time checks.
+Missing normalized costs fail validation rather than falling back to invoices.
+
+## Twelve-task routing pilot
+
+The [combined cohort pilot](fusion-cross-cohort-pilot.md) matched strong quality
+on twelve repairs while cheap alone passed six. Its 19.51% model-cost saving
+missed the fixed 20% gate; workflow time increased 14.06%. All 36 outcomes and both
+original screening shortfalls are retained. This is not a production qualification.
+
+## One-cheap-attempt repeatability
+
+The [three-draw development report](fusion-one-cheap-repeats.md) compares one
+cheap attempt followed by verified fresh strong fallback against both controls.
+On twelve exposed tasks sampled three times, cascade and strong each pass
+36/36 while cheap passes 24/36. Cascade model cost falls 50.92%, with 8.06% more
+workflow time. All three draws pass the declared efficiency screen; these are
+twelve tasks, not thirty-six independent examples. The report includes the
+caller-side recipe, every outcome and the failed earlier policy for context.
+It does not change production routing or qualify the Worker ensemble endpoint.
+
+## Thirty-task development transfer
+
+The [complete thirty-task follow-up](fusion-transfer30-baseline.md) fails the
+quality-preservation and time gates despite 40.18% lower model cost. Cascade and
+strong each solve 27/30, but the cascade loses one strong-only success and solves
+a different task; workflow time rises 28.06%. Cheap-only solves 24/30. These are
+thirty exposed tasks in one repository, divided into accounting batches, not
+three repeated draws. The report retains every outcome and all three terminal replay audits; it does
+not qualify production routing.
+
+The [anchored-edit follow-up](fusion-anchored-transfer30.md) retains the same
+thirty tasks and original fixtures. Cascade and strong each solve 29/30 with
+zero lost strong successes, while cheap solves 22/30. Model cost falls 27.41%,
+but workflow time rises 77.86%, failing the time gate. These are new draws on
+exposed tasks, not causal evidence that anchors fixed the prior quality loss.
+
+The [first-failure feedback follow-up](fusion-first-failure-transfer30.md)
+passes the complete development screen: cascade and strong both solve 29/30,
+with 38.84% lower model cost and 2.35% less workflow time for the cascade.
+All ninety outcomes and three exact replay audits are retained. This remains
+one draw on the same exposed repository, not production qualification.
+
+The [exact-anchor recovery repeat](fusion-hard-anchor-study.md) also scores
+29/30 for cascade and strong-only, with 23/30 for cheap-only. Estimated model
+cost falls 41.65%, but workflow time rises 13.97%, failing its stricter
+no-slowdown gate. All thirty tasks, ninety outcomes and 118 calls passed replay
+audits. The report retains the failed recovery candidates and shows that three
+recovered final outputs helped the cheap-only control; no recovered cascade
+draft directly completed a task in this draw.
+
+## SemVer task-transfer smoke
+
+The [SemVer pilot and transfer report](fusion-semver-transfer.md) retains a
+cost-increasing initial policy, an exposed development repeat and two new
+same-package tasks. On the two admitted transfer tasks, cascade and strong
+both solve 2/2 while cheap solves 1/2; replayed model cost falls 43.42%, or
+44.17% without cache discounts. Two other candidates failed model-free
+qualification and received no model calls. This small paired replay does not
+qualify production behavior or live workflow latency.
+
+
+## Exact-anchor recovery check
+
+The [recovery-enabled LRU development check](fusion-anchor-recovery-study.md)
+scored 9/9 for cascade and strong-only, versus 7/9 for independent cheap-only.
+The cascade used 68.61% less estimated model cost and 15.71% less aggregate
+workflow time. Its repeated-development gate still failed: one round was
+slower, and another tied cheap-only quality. Three already exposed tasks were
+sampled three times; no production or routing-default change is qualified.
+
+## Fresh-package cost and latency check
+
+The [six-task fresh-package comparison](fusion-fresh-package-study.md) matched
+strong-only at 6/6, versus independent cheap-only at 4/6. Estimated model cost
+fell 55.88%, but workflow time increased 24.68%, failing the frozen no-slowdown
+gate. All 18 arms, 20 calls and ten candidate qualifications are retained. The
+result supports a cost/latency tradeoff, not an overall or production gain.
+
+The [repair-fallback follow-up](fusion-repair-latency-study.md) reduced paired
+fallback API time by 24.19%, but failed its component cost gate. A complete
+six-task development replay then scored 6/6 in every arm: cascade used 70.12%
+less model cost than strong-only but took 3.40% longer, while cheap-only was
+both cheaper and faster. Neither experiment qualifies an overall gain.
+
+The [three-round LRU-cache comparison](fusion-lru-repeat-study.md) scored 9/9
+for cascade and strong-only, versus 5/9 for independent cheap-only. Aggregate
+model cost fell 51.92% and workflow time fell 3.31%, but two rounds were slower
+than strong-only. The stricter repeated-development gate failed. These are
+three independent tasks sampled three times, not nine independent tasks.
+A zero-call follow-up recovered every rejected cheap edit through a unique
+exact-source match, and all seven recovered batches passed the original tests.
+The observed quality gap reflects edit-format rejection on this sample;
+prospective decoder validation is still required.
+
+
+## Fresh URI transfer check
+
+The [four-task URI comparison](fusion-uri-transfer-study.md) passed 4/4 in all
+three arms. Cascade cost 66.60% less and took 8.04% less workflow time than
+strong-only, but independent cheap-only matched quality at 80.39% less cost
+and 25.59% less time than cascade. The fusion-value gate failed. All six
+candidate qualifications, twelve arms and thirteen calls are retained.

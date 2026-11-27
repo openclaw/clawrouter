@@ -1,5 +1,5 @@
 import { assertFalRunDispatch } from "./fal-dispatch.ts";
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 import { observeFalImage, readFalImage, type FalImageRequest } from "./fal-images.ts";
 
 export const falGrokImageModels = ["xai/grok-imagine-image", "xai/grok-imagine-image/edit", "xai/grok-imagine-image/quality/edit"] as const;

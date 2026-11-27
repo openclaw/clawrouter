@@ -1,5 +1,5 @@
 import { inputRetirement } from "./input-retirement.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const xaiSpeechFormats = { mp3: "audio/mpeg", wav: "audio/wav", pcm: "audio/pcm", mulaw: "audio/basic", alaw: "audio/alaw" } as const;
 export const xaiSpeechFallbackVoices = ["ara", "eve", "leo", "rex", "sal"] as const;

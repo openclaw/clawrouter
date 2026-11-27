@@ -1,0 +1,260 @@
+{
+  "schema": "fusion-semantic-routing-screen-v1",
+  "scope": "Exposed development traces only; no live routed workflow.",
+  "taskCount": 30,
+  "sourceGroups": 20,
+  "modelCalls": 0,
+  "newCostMicros": 0,
+  "method": {
+    "input": "Original instruction, excluding trailing issue number; no source text or outcome labels in embeddings.",
+    "encoder": "all-MiniLM-L6-v2 ONNX, 384 dimensions, normalized mean pooling, 256-token maximum",
+    "grid": [
+      null,
+      [
+        1,
+        0.0
+      ],
+      [
+        1,
+        0.5
+      ],
+      [
+        1,
+        0.7
+      ],
+      [
+        1,
+        0.85
+      ],
+      [
+        1,
+        0.95
+      ],
+      [
+        3,
+        0.0
+      ],
+      [
+        3,
+        0.5
+      ],
+      [
+        3,
+        0.7
+      ],
+      [
+        3,
+        0.85
+      ],
+      [
+        3,
+        0.95
+      ],
+      [
+        5,
+        0.0
+      ],
+      [
+        5,
+        0.5
+      ],
+      [
+        5,
+        0.7
+      ],
+      [
+        5,
+        0.85
+      ],
+      [
+        5,
+        0.95
+      ]
+    ],
+    "selection": "Nested leave-one-source-file-out; choose minimum-cost eligible policy, then fewer cheap routes, then fixed grid order; default all-strong.",
+    "acceptance": "Quality at least strong and above cheap; no lost strong successes or false accepts; recorded and normalized cost <= 0.8 * strong; summed workflow time <= strong.",
+    "candidate": "Independent cheap control (up to two attempts), followed by independent strong control on public-test failure; charge both traces.",
+    "overhead": "Full measured cold single-query subprocess time charged to every task for a nonconstant fold policy; zero for constant all-strong."
+  },
+  "coldProbeMs": 261.6736670024693,
+  "maxWarmQueryMs": 1.6192089533433318,
+  "chargedRouterMs": 261.6736670024693,
+  "parentAuditSha256": [
+    "b7d89d58c85d274773522be6c7069755a2b51350ae76bca2807dfa5c8f8d80e3",
+    "c4050857c7dba57ab88ac48b550902b18f33b80f65cf584b8c14d66c604d9c88",
+    "73f1b967885f590d189510f506aa96f0f0a1658fbb702ba2499e223576d52e72"
+  ],
+  "protocolSha256": "f02a0a05bac102ab4982b07fa0ba77db2903eb8bc127111a6fdb1cc29b3fa7b0",
+  "featuresSha256": "692d48633ce7ff0f477f83d98f0634bbfa205bd64b823abc913a8d3e08de7718",
+  "resultSha256": "5b0f4d3fb6776b5aa5f4da1116015b76e1684f3bbc497d4c33ef1ba2c1bb72fc",
+  "auditSha256": "2b6eff6f776eb28cf7469aaf09fafbc888eb8e50228162a4eb2bc9c09864eadb",
+  "folds": [
+    {
+      "group": "lib/api/readable.js",
+      "config": null,
+      "ids": [
+        "undici-57f50a278b86"
+      ]
+    },
+    {
+      "group": "lib/cache/memory-cache-store.js",
+      "config": null,
+      "ids": [
+        "undici-47c2493a992e",
+        "undici-3e622dc7947b"
+      ]
+    },
+    {
+      "group": "lib/core/connect.js",
+      "config": null,
+      "ids": [
+        "undici-d983b4f9ac1a"
+      ]
+    },
+    {
+      "group": "lib/dispatcher/balanced-pool.js",
+      "config": null,
+      "ids": [
+        "undici-8f5868fbdbc8"
+      ]
+    },
+    {
+      "group": "lib/dispatcher/client-h1.js",
+      "config": null,
+      "ids": [
+        "undici-a490364ec273",
+        "undici-a287effccc5e",
+        "undici-7d3cf924c262"
+      ]
+    },
+    {
+      "group": "lib/dispatcher/dispatcher1-wrapper.js",
+      "config": null,
+      "ids": [
+        "undici-5e6e0e96e86f"
+      ]
+    },
+    {
+      "group": "lib/global.js",
+      "config": null,
+      "ids": [
+        "undici-a0922b0b6b5d"
+      ]
+    },
+    {
+      "group": "lib/handler/deduplication-handler.js",
+      "config": null,
+      "ids": [
+        "undici-bee01389d78a",
+        "undici-f387057bd1e0"
+      ]
+    },
+    {
+      "group": "lib/handler/redirect-handler.js",
+      "config": null,
+      "ids": [
+        "undici-762f3b5a743a"
+      ]
+    },
+    {
+      "group": "lib/handler/retry-handler.js",
+      "config": null,
+      "ids": [
+        "undici-c5b3a6e478d1",
+        "undici-0160a719063f",
+        "undici-f2e02f69a3c1"
+      ]
+    },
+    {
+      "group": "lib/interceptor/cache.js",
+      "config": null,
+      "ids": [
+        "undici-65fd635cc9bb",
+        "undici-ee5e88705110"
+      ]
+    },
+    {
+      "group": "lib/interceptor/decompress.js",
+      "config": null,
+      "ids": [
+        "undici-f36ea9cab02a"
+      ]
+    },
+    {
+      "group": "lib/interceptor/deduplicate.js",
+      "config": null,
+      "ids": [
+        "undici-471d4257259e"
+      ]
+    },
+    {
+      "group": "lib/mock/mock-utils.js",
+      "config": null,
+      "ids": [
+        "undici-7f50f74d02c2",
+        "undici-b111adbb675e",
+        "undici-a18ef2d05af4"
+      ]
+    },
+    {
+      "group": "lib/util/cache.js",
+      "config": null,
+      "ids": [
+        "undici-4fe5bc5fefe5"
+      ]
+    },
+    {
+      "group": "lib/web/cookies/index.js",
+      "config": null,
+      "ids": [
+        "undici-b73952a4f74e"
+      ]
+    },
+    {
+      "group": "lib/web/cookies/parse.js",
+      "config": null,
+      "ids": [
+        "undici-d43e421f839a",
+        "undici-6de6e9a14a1d"
+      ]
+    },
+    {
+      "group": "lib/web/cookies/util.js",
+      "config": null,
+      "ids": [
+        "undici-6933139baebc"
+      ]
+    },
+    {
+      "group": "lib/web/eventsource/eventsource.js",
+      "config": null,
+      "ids": [
+        "undici-b8b2ae8f199e"
+      ]
+    },
+    {
+      "group": "lib/web/websocket/receiver.js",
+      "config": null,
+      "ids": [
+        "undici-2bc04d019f14"
+      ]
+    }
+  ],
+  "summary": {
+    "passed": 29,
+    "baselinePassed": 29,
+    "cheapPassed": 23,
+    "losses": 0,
+    "falseAccepts": 0,
+    "candidateRoutes": 0,
+    "fallbacks": 0,
+    "costMicros": 323571,
+    "normalizedMicros": 323573,
+    "baselineCostMicros": 323571,
+    "baselineNormalizedMicros": 323573,
+    "elapsedMs": 389221.9982870001,
+    "baselineElapsedMs": 389221.9982870001
+  },
+  "developmentScreen": false,
+  "qualifiedProductionGain": false
+}

@@ -11,7 +11,7 @@ const { authenticateProxyKey, musicCoverVerification, proxyAdmission, proxyKeyVe
 const { inspectGrantCredentials, putGrantCredentials, revokeGrantCredentials, materializeGrantCredentials } = await import("../grant-credentials.ts");
 const { miniMaxMediaProjection } = await import("../native-media-credential.ts");
 const { minimaxMusicCoverBinding } = await import("../../shared/native-media-binding.ts");
-const { grantSupports } = await import("../provider-auth.ts");
+const { grantSupports } = await import("../grant-compatibility.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
 const MiB = 1024 * 1024, tick = () => new Promise(resolve => setImmediate(resolve));
 const headers = new Headers({ authorization: "Bearer clawrouter-live-fixture-fixture-secret" });

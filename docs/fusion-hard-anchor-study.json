@@ -1,0 +1,3968 @@
+{
+  "version": 1,
+  "audited": true,
+  "scope": "One new draw on all thirty previously exposed Undici tasks; development evidence only.",
+  "previouslyExposed": true,
+  "sourceSha": "60b563031a93bc32e44dd974f8d0d7a7897dbf06",
+  "models": {
+    "draft": "openai/gpt-6-luna",
+    "strong": "openai/gpt-6.1-terra"
+  },
+  "pricing": {
+    "openai/gpt-6-luna": {
+      "price": {
+        "input": 1.0000000000000001e-7,
+        "cached": 1e-8,
+        "write": 1.25e-7,
+        "output": 5e-7,
+        "request": 0,
+        "tiers": []
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna"
+    },
+    "openai/gpt-6.1-terra": {
+      "price": {
+        "input": 0.000001,
+        "cached": 5e-8,
+        "write": 0.00000125,
+        "output": 0.000005,
+        "request": 0,
+        "tiers": []
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+    }
+  },
+  "policy": {
+    "draftAttempts": 1,
+    "fallbackMode": "fresh",
+    "fallbackAttempts": 2,
+    "controlAttempts": 2,
+    "admission": "all-cases",
+    "artifactFormat": "anchored-edits",
+    "relocateUniqueSearch": true,
+    "stopOnTestFailure": true,
+    "testTimeoutMs": 5000,
+    "feedback": "first-complete-failure-with-loopback-port-aliases",
+    "maxElapsedRatio": 1
+  },
+  "qualificationSha256": "6cdde3951a927004d753d055ee535ac98bfc61d230fb63b7614369956b6564a2",
+  "diagnostic": {
+    "protocolSha256": "df0f932ed04f15ad53ba6da6446f41961283fe50b62b5b883021ac2a5f927388",
+    "summarySha256": "b56ea79c06f2bb226c5af87c2e6987af4e65fd332535bb8e232760ecb181908c",
+    "inspectedCheapStages": 72,
+    "strictRejected": 7,
+    "recoveredDecodes": 4,
+    "recoveredBoth": 2,
+    "outcomes": [
+      {
+        "key": "2/case-1/cascade/draft",
+        "id": "undici-bee01389d78a",
+        "public": {
+          "valid": false,
+          "passed": false,
+          "tests": 2,
+          "expectedTests": 16
+        },
+        "full": {
+          "valid": true,
+          "passed": false,
+          "tests": 17,
+          "expectedTests": 17
+        }
+      },
+      {
+        "key": "3/case-3/cascade/draft",
+        "id": "undici-a18ef2d05af4",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 117,
+          "expectedTests": 117
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 123,
+          "expectedTests": 123
+        }
+      },
+      {
+        "key": "3/case-7/cascade/draft",
+        "id": "undici-4fe5bc5fefe5",
+        "public": {
+          "valid": false,
+          "passed": false,
+          "tests": 17,
+          "expectedTests": 82
+        },
+        "full": {
+          "valid": true,
+          "passed": false,
+          "tests": 90,
+          "expectedTests": 90
+        }
+      },
+      {
+        "key": "3/case-8/cheap/cheap-repair",
+        "id": "undici-a0922b0b6b5d",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 2,
+          "expectedTests": 2
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 3,
+          "expectedTests": 3
+        }
+      }
+    ]
+  },
+  "decoderCensus": {
+    "calls": 118,
+    "strictRejected": 9,
+    "recovered": [
+      {
+        "batch": 1,
+        "stage": "case-7/cascade/draft",
+        "caseId": "undici-47c2493a992e",
+        "anotherAttemptFollowed": true,
+        "finalArmPublicPassed": true,
+        "finalArmPassed": true
+      },
+      {
+        "batch": 3,
+        "stage": "case-0/cheap/cheap",
+        "caseId": "undici-f2e02f69a3c1",
+        "anotherAttemptFollowed": false,
+        "finalArmPublicPassed": true,
+        "finalArmPassed": true
+      },
+      {
+        "batch": 3,
+        "stage": "case-1/cheap/cheap",
+        "caseId": "undici-7f50f74d02c2",
+        "anotherAttemptFollowed": false,
+        "finalArmPublicPassed": true,
+        "finalArmPassed": true
+      },
+      {
+        "batch": 3,
+        "stage": "case-8/cheap/cheap",
+        "caseId": "undici-a0922b0b6b5d",
+        "anotherAttemptFollowed": false,
+        "finalArmPublicPassed": true,
+        "finalArmPassed": true
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "undici-a490364ec273",
+      "base": "76ce759d6917273983292f5ba79e3b9608b3d69e",
+      "oracle": "a490364ec273b618f8209e8cb511b88050bed9ca",
+      "source": "lib/dispatcher/client-h1.js"
+    },
+    {
+      "id": "undici-a287effccc5e",
+      "base": "e0f7f3ab7d2bccfc9544f44168f6b0e19a3d5d64",
+      "oracle": "a287effccc5efd84923806a9b2cb23a193dbb1d5",
+      "source": "lib/dispatcher/client-h1.js"
+    },
+    {
+      "id": "undici-c5b3a6e478d1",
+      "base": "a464b753d9e8eaba82f5ee5694dffe26789038b9",
+      "oracle": "c5b3a6e478d144b0cc7b465947b40ccfe164b52a",
+      "source": "lib/handler/retry-handler.js"
+    },
+    {
+      "id": "undici-d983b4f9ac1a",
+      "base": "5e6e0e96e86f8cbc03faffb12611c412240814e0",
+      "oracle": "d983b4f9ac1a330bf173e93799ede0b6f9ccb6ac",
+      "source": "lib/core/connect.js"
+    },
+    {
+      "id": "undici-5e6e0e96e86f",
+      "base": "762f3b5a743af24db00093f0478873f2afdd97b2",
+      "oracle": "5e6e0e96e86f8cbc03faffb12611c412240814e0",
+      "source": "lib/dispatcher/dispatcher1-wrapper.js"
+    },
+    {
+      "id": "undici-762f3b5a743a",
+      "base": "b8b2ae8f199e677819e1772fb2214ede2d85ed55",
+      "oracle": "762f3b5a743af24db00093f0478873f2afdd97b2",
+      "source": "lib/handler/redirect-handler.js"
+    },
+    {
+      "id": "undici-b8b2ae8f199e",
+      "base": "47c2493a992e520d030ad1bbaf337bdf424a205a",
+      "oracle": "b8b2ae8f199e677819e1772fb2214ede2d85ed55",
+      "source": "lib/web/eventsource/eventsource.js"
+    },
+    {
+      "id": "undici-47c2493a992e",
+      "base": "481d809c69d9587d4ea8dd6370e398cb7717b4c7",
+      "oracle": "47c2493a992e520d030ad1bbaf337bdf424a205a",
+      "source": "lib/cache/memory-cache-store.js"
+    },
+    {
+      "id": "undici-2bc04d019f14",
+      "base": "cd10be230d92db714804cf4194b0fb2042d3331a",
+      "oracle": "2bc04d019f14952293bbd166ba0d0b07f2e87711",
+      "source": "lib/web/websocket/receiver.js"
+    },
+    {
+      "id": "undici-6933139baebc",
+      "base": "65fd635cc9bb9ed50087ad1ca1271a5bbc573129",
+      "oracle": "6933139baebca36b470c6db663d4207f29944867",
+      "source": "lib/web/cookies/util.js"
+    },
+    {
+      "id": "undici-65fd635cc9bb",
+      "base": "bee01389d78adb34eea221140807bb1d843d57f1",
+      "oracle": "65fd635cc9bb9ed50087ad1ca1271a5bbc573129",
+      "source": "lib/interceptor/cache.js"
+    },
+    {
+      "id": "undici-bee01389d78a",
+      "base": "485c85c289150a40c26eaa7c133b65e9b868f0eb",
+      "oracle": "bee01389d78adb34eea221140807bb1d843d57f1",
+      "source": "lib/handler/deduplication-handler.js"
+    },
+    {
+      "id": "undici-b73952a4f74e",
+      "base": "a975197451c3bb966d10cf80b21ca9fefb38076b",
+      "oracle": "b73952a4f74eff55c9bf03bdf0efabd2702986d1",
+      "source": "lib/web/cookies/index.js"
+    },
+    {
+      "id": "undici-0160a719063f",
+      "base": "66e12816064cf3068f63bd134748b7fc4e779bad",
+      "oracle": "0160a719063fb0a77f4fdf9500b9166b91e14329",
+      "source": "lib/handler/retry-handler.js"
+    },
+    {
+      "id": "undici-8f5868fbdbc8",
+      "base": "2be07bf97b3022e0324142d31f99f6e019d815e3",
+      "oracle": "8f5868fbdbc8f1146dfc1bcd1f2d117790141390",
+      "source": "lib/dispatcher/balanced-pool.js"
+    },
+    {
+      "id": "undici-ee5e88705110",
+      "base": "54cc756e65bb3a65e3578653565d533bc1c6729c",
+      "oracle": "ee5e88705110364e2d5827787468cc5f5b44fe1c",
+      "source": "lib/interceptor/cache.js"
+    },
+    {
+      "id": "undici-d43e421f839a",
+      "base": "0e2b1c1189d5de3ea6cf02b789509851d55c7d53",
+      "oracle": "d43e421f839a5d5892888a8b520c2ecc25793516",
+      "source": "lib/web/cookies/parse.js"
+    },
+    {
+      "id": "undici-3e622dc7947b",
+      "base": "fc3450dcf1d5faea8e3971dd8c6973604292470b",
+      "oracle": "3e622dc7947b583751ed7a2c0ac49db8810b212f",
+      "source": "lib/cache/memory-cache-store.js"
+    },
+    {
+      "id": "undici-6de6e9a14a1d",
+      "base": "e609acb02d8d4cafe1c0d238e48c6d602fcc16cf",
+      "oracle": "6de6e9a14a1d027f8b4c75b70b54ab05358e8937",
+      "source": "lib/web/cookies/parse.js"
+    },
+    {
+      "id": "undici-f387057bd1e0",
+      "base": "f7df237f02d2da057881294533c3348c785d2af3",
+      "oracle": "f387057bd1e01b01c2a6b7bc0eab57e3a1dc76e2",
+      "source": "lib/handler/deduplication-handler.js"
+    },
+    {
+      "id": "undici-f2e02f69a3c1",
+      "base": "2afeee468a975071c472ea34bc4594642208e576",
+      "oracle": "f2e02f69a3c1de5f462403e342cde2f71fe88990",
+      "source": "lib/handler/retry-handler.js"
+    },
+    {
+      "id": "undici-7f50f74d02c2",
+      "base": "c8d80e6b2dcfab282557b08f51352937bc9e5692",
+      "oracle": "7f50f74d02c275cb94e0d04c74c37f3d61b70cef",
+      "source": "lib/mock/mock-utils.js"
+    },
+    {
+      "id": "undici-b111adbb675e",
+      "base": "ae4a3e37a2ddfe798b64771176e31e8e7819c743",
+      "oracle": "b111adbb675ebfcfa52790346dcd88e61c700818",
+      "source": "lib/mock/mock-utils.js"
+    },
+    {
+      "id": "undici-a18ef2d05af4",
+      "base": "2ab178a3e3260fe2a516bdcf1a5154cdf579f8bb",
+      "oracle": "a18ef2d05af48047339be51d8817492abc30f39d",
+      "source": "lib/mock/mock-utils.js"
+    },
+    {
+      "id": "undici-471d4257259e",
+      "base": "165b5827835a46b752757436be4b875b8e0b09d2",
+      "oracle": "471d4257259e1d45db79bff3bb4ae85099f37022",
+      "source": "lib/interceptor/deduplicate.js"
+    },
+    {
+      "id": "undici-57f50a278b86",
+      "base": "bd43ddfaf26912ddfcaae149a01dbb96433aea4f",
+      "oracle": "57f50a278b86beef6b8c09af2f53a79cd69b32b7",
+      "source": "lib/api/readable.js"
+    },
+    {
+      "id": "undici-7d3cf924c262",
+      "base": "c601fff1c56eca84438c3ed4ecb39404252be622",
+      "oracle": "7d3cf924c262c486bc77f951348f4e5c847b7b42",
+      "source": "lib/dispatcher/client-h1.js"
+    },
+    {
+      "id": "undici-4fe5bc5fefe5",
+      "base": "10d93fc332f2c8c161982dec3833201de29891b5",
+      "oracle": "4fe5bc5fefe5ac81a200fc8e1cf84b8bf8464451",
+      "source": "lib/util/cache.js"
+    },
+    {
+      "id": "undici-a0922b0b6b5d",
+      "base": "354a151f615f03d72f6aff02f3ad18a7e99a72b5",
+      "oracle": "a0922b0b6b5db878881017abb6fca3bbcdea555a",
+      "source": "lib/global.js"
+    },
+    {
+      "id": "undici-f36ea9cab02a",
+      "base": "1760faa557f5f29c6dbd33fcbe6b0422cee16856",
+      "oracle": "f36ea9cab02ae7e2b785646b1dbc8745059a018a",
+      "source": "lib/interceptor/decompress.js"
+    }
+  ],
+  "taskIds": [
+    "undici-a490364ec273",
+    "undici-a287effccc5e",
+    "undici-c5b3a6e478d1",
+    "undici-d983b4f9ac1a",
+    "undici-5e6e0e96e86f",
+    "undici-762f3b5a743a",
+    "undici-b8b2ae8f199e",
+    "undici-47c2493a992e",
+    "undici-2bc04d019f14",
+    "undici-6933139baebc",
+    "undici-65fd635cc9bb",
+    "undici-bee01389d78a",
+    "undici-b73952a4f74e",
+    "undici-0160a719063f",
+    "undici-8f5868fbdbc8",
+    "undici-ee5e88705110",
+    "undici-d43e421f839a",
+    "undici-3e622dc7947b",
+    "undici-6de6e9a14a1d",
+    "undici-f387057bd1e0",
+    "undici-f2e02f69a3c1",
+    "undici-7f50f74d02c2",
+    "undici-b111adbb675e",
+    "undici-a18ef2d05af4",
+    "undici-471d4257259e",
+    "undici-57f50a278b86",
+    "undici-7d3cf924c262",
+    "undici-4fe5bc5fefe5",
+    "undici-a0922b0b6b5d",
+    "undici-f36ea9cab02a"
+  ],
+  "batches": [
+    {
+      "batch": 1,
+      "protocolSha256": "768c2001d9dc93b9ba133beb60756ddec52d177ddb0aafe731990fc24f06a049",
+      "resultSha256": "b1cc142dfe935bb9b73591960a3a670710c4fc177b4c24b2e5840079cd77c90c",
+      "auditSha256": "b7d89d58c85d274773522be6c7069755a2b51350ae76bca2807dfa5c8f8d80e3",
+      "audited": true,
+      "calls": 38,
+      "spentOrReservedMicros": 323876607,
+      "summary": {
+        "uniqueTasks": 10,
+        "drawsPerTask": 1,
+        "pairedSamples": 10,
+        "outcomes": 30,
+        "costBasis": "invoice-and-cache-neutral-v1",
+        "aggregate": {
+          "strong": {
+            "passed": 10,
+            "costMicros": 119300,
+            "normalizedMicros": 119300,
+            "elapsedMs": 111478.64195700003
+          },
+          "cascade": {
+            "passed": 10,
+            "costMicros": 36137,
+            "normalizedMicros": 36137,
+            "elapsedMs": 108346.45937800003
+          },
+          "cheap": {
+            "passed": 7,
+            "costMicros": 20326,
+            "normalizedMicros": 20327,
+            "elapsedMs": 158526.00908200006
+          },
+          "costRatio": 0.3029086336965633,
+          "normalizedCostRatio": 0.3029086336965633,
+          "elapsedRatio": 0.9719032944426417,
+          "falseAccepts": 0,
+          "strongLosses": 0,
+          "efficiencyGate": true
+        },
+        "transferLead": true,
+        "qualifiedProductionGain": false
+      }
+    },
+    {
+      "batch": 2,
+      "protocolSha256": "b5ec00baab086c3ff689c18aa4df03d80e636975e721a5003b28a2bb9a513c44",
+      "resultSha256": "fd745ccf2a9f99bb15164827a1ff43987923d305bd21063f9697d238cd963cd7",
+      "auditSha256": "c4050857c7dba57ab88ac48b550902b18f33b80f65cf584b8c14d66c604d9c88",
+      "audited": true,
+      "calls": 41,
+      "spentOrReservedMicros": 324065419,
+      "summary": {
+        "uniqueTasks": 10,
+        "drawsPerTask": 1,
+        "pairedSamples": 10,
+        "outcomes": 30,
+        "costBasis": "invoice-and-cache-neutral-v1",
+        "aggregate": {
+          "strong": {
+            "passed": 9,
+            "costMicros": 102643,
+            "normalizedMicros": 102644,
+            "elapsedMs": 159136.686833
+          },
+          "cascade": {
+            "passed": 9,
+            "costMicros": 74464,
+            "normalizedMicros": 74465,
+            "elapsedMs": 186056.11770799995
+          },
+          "cheap": {
+            "passed": 7,
+            "costMicros": 11705,
+            "normalizedMicros": 11705,
+            "elapsedMs": 109456.41750100006
+          },
+          "costRatio": 0.725465935329248,
+          "normalizedCostRatio": 0.7254686099528467,
+          "elapsedRatio": 1.1691591763704965,
+          "falseAccepts": 0,
+          "strongLosses": 0,
+          "efficiencyGate": false
+        },
+        "transferLead": false,
+        "qualifiedProductionGain": false
+      }
+    },
+    {
+      "batch": 3,
+      "protocolSha256": "92cac0219b7205fc602d512736d40aa9f12e8c8ac14a3576c5e6c98cab8b0c94",
+      "resultSha256": "b306a55f0818688bf81b337a29e5c240f10bdae530d35622957772f5c33a8b23",
+      "auditSha256": "73f1b967885f590d189510f506aa96f0f0a1658fbb702ba2499e223576d52e72",
+      "audited": true,
+      "calls": 39,
+      "spentOrReservedMicros": 324261688,
+      "summary": {
+        "uniqueTasks": 10,
+        "drawsPerTask": 1,
+        "pairedSamples": 10,
+        "outcomes": 30,
+        "costBasis": "invoice-and-cache-neutral-v1",
+        "aggregate": {
+          "strong": {
+            "passed": 10,
+            "costMicros": 101628,
+            "normalizedMicros": 101629,
+            "elapsedMs": 118606.66949700002
+          },
+          "cascade": {
+            "passed": 10,
+            "costMicros": 78199,
+            "normalizedMicros": 78200,
+            "elapsedMs": 149180.47129100002
+          },
+          "cheap": {
+            "passed": 9,
+            "costMicros": 16442,
+            "normalizedMicros": 16444,
+            "elapsedMs": 110451.67412499993
+          },
+          "costRatio": 0.7694631400795057,
+          "normalizedCostRatio": 0.7694654084956065,
+          "elapsedRatio": 1.2577747265281176,
+          "falseAccepts": 0,
+          "strongLosses": 0,
+          "efficiencyGate": false
+        },
+        "transferLead": false,
+        "qualifiedProductionGain": false
+      }
+    }
+  ],
+  "records": [
+    {
+      "caseId": "undici-a490364ec273",
+      "strategy": "strong",
+      "costMicros": 28709,
+      "normalizedMicros": 28709,
+      "elapsedMs": 20407.58125,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-a490364ec273",
+      "strategy": "cascade",
+      "costMicros": 2702,
+      "normalizedMicros": 2702,
+      "elapsedMs": 9532.280542,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-a490364ec273",
+      "strategy": "cheap",
+      "costMicros": 5028,
+      "normalizedMicros": 5028,
+      "elapsedMs": 30573.527457999997,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-a287effccc5e",
+      "strategy": "cascade",
+      "costMicros": 2286,
+      "normalizedMicros": 2286,
+      "elapsedMs": 4770.354541000001,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-a287effccc5e",
+      "strategy": "cheap",
+      "costMicros": 5350,
+      "normalizedMicros": 5351,
+      "elapsedMs": 28406.088791000002,
+      "publicPassed": false,
+      "fullValid": true,
+      "fullPassed": false,
+      "passed": false,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-a287effccc5e",
+      "strategy": "strong",
+      "costMicros": 23971,
+      "normalizedMicros": 23971,
+      "elapsedMs": 12144.171291000006,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-c5b3a6e478d1",
+      "strategy": "strong",
+      "costMicros": 10702,
+      "normalizedMicros": 10702,
+      "elapsedMs": 21913.030415999994,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-c5b3a6e478d1",
+      "strategy": "cheap",
+      "costMicros": 1073,
+      "normalizedMicros": 1073,
+      "elapsedMs": 20060.335332999995,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-c5b3a6e478d1",
+      "strategy": "cascade",
+      "costMicros": 1086,
+      "normalizedMicros": 1086,
+      "elapsedMs": 18926.01908400003,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-d983b4f9ac1a",
+      "strategy": "cascade",
+      "costMicros": 5117,
+      "normalizedMicros": 5117,
+      "elapsedMs": 9291.504084000015,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-d983b4f9ac1a",
+      "strategy": "strong",
+      "costMicros": 4757,
+      "normalizedMicros": 4757,
+      "elapsedMs": 6693.418417000008,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-d983b4f9ac1a",
+      "strategy": "cheap",
+      "costMicros": 1270,
+      "normalizedMicros": 1270,
+      "elapsedMs": 12985.271667000023,
+      "publicPassed": false,
+      "fullValid": true,
+      "fullPassed": false,
+      "passed": false,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-5e6e0e96e86f",
+      "strategy": "cheap",
+      "costMicros": 606,
+      "normalizedMicros": 606,
+      "elapsedMs": 7610.291750000004,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-5e6e0e96e86f",
+      "strategy": "strong",
+      "costMicros": 5277,
+      "normalizedMicros": 5277,
+      "elapsedMs": 12293.213832999987,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-5e6e0e96e86f",
+      "strategy": "cascade",
+      "costMicros": 645,
+      "normalizedMicros": 645,
+      "elapsedMs": 7931.809917000006,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-762f3b5a743a",
+      "strategy": "cheap",
+      "costMicros": 2115,
+      "normalizedMicros": 2115,
+      "elapsedMs": 14295.293250000017,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-762f3b5a743a",
+      "strategy": "strong",
+      "costMicros": 10128,
+      "normalizedMicros": 10128,
+      "elapsedMs": 6035.393875000009,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-762f3b5a743a",
+      "strategy": "cascade",
+      "costMicros": 1112,
+      "normalizedMicros": 1112,
+      "elapsedMs": 5595.648708000022,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-b8b2ae8f199e",
+      "strategy": "strong",
+      "costMicros": 10643,
+      "normalizedMicros": 10643,
+      "elapsedMs": 9284.866582999995,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-b8b2ae8f199e",
+      "strategy": "cascade",
+      "costMicros": 11034,
+      "normalizedMicros": 11034,
+      "elapsedMs": 13583.858833999984,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-b8b2ae8f199e",
+      "strategy": "cheap",
+      "costMicros": 1127,
+      "normalizedMicros": 1127,
+      "elapsedMs": 6348.139500000048,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-47c2493a992e",
+      "strategy": "cascade",
+      "costMicros": 10459,
+      "normalizedMicros": 10459,
+      "elapsedMs": 23974.773209000006,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-47c2493a992e",
+      "strategy": "strong",
+      "costMicros": 8985,
+      "normalizedMicros": 8985,
+      "elapsedMs": 13364.528665999998,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-47c2493a992e",
+      "strategy": "cheap",
+      "costMicros": 2119,
+      "normalizedMicros": 2119,
+      "elapsedMs": 18071.615959000017,
+      "publicPassed": false,
+      "fullValid": true,
+      "fullPassed": false,
+      "passed": false,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-2bc04d019f14",
+      "strategy": "cheap",
+      "costMicros": 915,
+      "normalizedMicros": 915,
+      "elapsedMs": 4315.706790999975,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-2bc04d019f14",
+      "strategy": "cascade",
+      "costMicros": 973,
+      "normalizedMicros": 973,
+      "elapsedMs": 5105.288750000007,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-2bc04d019f14",
+      "strategy": "strong",
+      "costMicros": 9072,
+      "normalizedMicros": 9072,
+      "elapsedMs": 5099.805417000025,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-6933139baebc",
+      "strategy": "cheap",
+      "costMicros": 723,
+      "normalizedMicros": 723,
+      "elapsedMs": 15859.73858299997,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-6933139baebc",
+      "strategy": "strong",
+      "costMicros": 7056,
+      "normalizedMicros": 7056,
+      "elapsedMs": 4242.632209000003,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-6933139baebc",
+      "strategy": "cascade",
+      "costMicros": 723,
+      "normalizedMicros": 723,
+      "elapsedMs": 9634.921708999958,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-65fd635cc9bb",
+      "strategy": "strong",
+      "costMicros": 11927,
+      "normalizedMicros": 11927,
+      "elapsedMs": 13203.871792,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-65fd635cc9bb",
+      "strategy": "cascade",
+      "costMicros": 1170,
+      "normalizedMicros": 1170,
+      "elapsedMs": 9318.068,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-65fd635cc9bb",
+      "strategy": "cheap",
+      "costMicros": 1019,
+      "normalizedMicros": 1019,
+      "elapsedMs": 7494.6339590000025,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-bee01389d78a",
+      "strategy": "strong",
+      "costMicros": 20491,
+      "normalizedMicros": 20492,
+      "elapsedMs": 42078.482875,
+      "publicPassed": false,
+      "fullValid": true,
+      "fullPassed": false,
+      "passed": false,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-bee01389d78a",
+      "strategy": "cascade",
+      "costMicros": 19724,
+      "normalizedMicros": 19724,
+      "elapsedMs": 51366.22820900001,
+      "publicPassed": false,
+      "fullValid": true,
+      "fullPassed": false,
+      "passed": false,
+      "attempts": 3,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-bee01389d78a",
+      "strategy": "cheap",
+      "costMicros": 1836,
+      "normalizedMicros": 1836,
+      "elapsedMs": 21488.093042000008,
+      "publicPassed": false,
+      "fullValid": true,
+      "fullPassed": false,
+      "passed": false,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-b73952a4f74e",
+      "strategy": "cascade",
+      "costMicros": 431,
+      "normalizedMicros": 431,
+      "elapsedMs": 2798.2593329999945,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-b73952a4f74e",
+      "strategy": "strong",
+      "costMicros": 4602,
+      "normalizedMicros": 4602,
+      "elapsedMs": 4598.864084000001,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-b73952a4f74e",
+      "strategy": "cheap",
+      "costMicros": 430,
+      "normalizedMicros": 430,
+      "elapsedMs": 2711.8714169999876,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-0160a719063f",
+      "strategy": "cheap",
+      "costMicros": 2125,
+      "normalizedMicros": 2125,
+      "elapsedMs": 30280.407583000022,
+      "publicPassed": false,
+      "fullValid": true,
+      "fullPassed": false,
+      "passed": false,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-0160a719063f",
+      "strategy": "strong",
+      "costMicros": 13365,
+      "normalizedMicros": 13365,
+      "elapsedMs": 31617.475999999995,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-0160a719063f",
+      "strategy": "cascade",
+      "costMicros": 32581,
+      "normalizedMicros": 32581,
+      "elapsedMs": 71102.39204099998,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 3,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-8f5868fbdbc8",
+      "strategy": "cheap",
+      "costMicros": 1432,
+      "normalizedMicros": 1432,
+      "elapsedMs": 10928.433124999981,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-8f5868fbdbc8",
+      "strategy": "cascade",
+      "costMicros": 766,
+      "normalizedMicros": 766,
+      "elapsedMs": 6673.674291000003,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-8f5868fbdbc8",
+      "strategy": "strong",
+      "costMicros": 7017,
+      "normalizedMicros": 7017,
+      "elapsedMs": 8464.378208000038,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-ee5e88705110",
+      "strategy": "cascade",
+      "costMicros": 1311,
+      "normalizedMicros": 1311,
+      "elapsedMs": 10061.50533299998,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-ee5e88705110",
+      "strategy": "cheap",
+      "costMicros": 1281,
+      "normalizedMicros": 1281,
+      "elapsedMs": 11937.261042000027,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-ee5e88705110",
+      "strategy": "strong",
+      "costMicros": 12592,
+      "normalizedMicros": 12592,
+      "elapsedMs": 13757.789875000017,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-d43e421f839a",
+      "strategy": "cheap",
+      "costMicros": 698,
+      "normalizedMicros": 698,
+      "elapsedMs": 4663.367792000005,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-d43e421f839a",
+      "strategy": "cascade",
+      "costMicros": 8826,
+      "normalizedMicros": 8827,
+      "elapsedMs": 14744.653374999994,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-d43e421f839a",
+      "strategy": "strong",
+      "costMicros": 9995,
+      "normalizedMicros": 9995,
+      "elapsedMs": 14081.116207999992,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-3e622dc7947b",
+      "strategy": "cheap",
+      "costMicros": 494,
+      "normalizedMicros": 494,
+      "elapsedMs": 3114.7844160000095,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-3e622dc7947b",
+      "strategy": "cascade",
+      "costMicros": 549,
+      "normalizedMicros": 549,
+      "elapsedMs": 3707.5635839999886,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-3e622dc7947b",
+      "strategy": "strong",
+      "costMicros": 5276,
+      "normalizedMicros": 5276,
+      "elapsedMs": 5301.090582999983,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-6de6e9a14a1d",
+      "strategy": "cheap",
+      "costMicros": 1526,
+      "normalizedMicros": 1526,
+      "elapsedMs": 4522.494208000018,
+      "publicPassed": false,
+      "fullValid": false,
+      "fullPassed": false,
+      "passed": false,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-6de6e9a14a1d",
+      "strategy": "strong",
+      "costMicros": 7737,
+      "normalizedMicros": 7737,
+      "elapsedMs": 5269.254249999998,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-6de6e9a14a1d",
+      "strategy": "cascade",
+      "costMicros": 8419,
+      "normalizedMicros": 8419,
+      "elapsedMs": 6725.649582999991,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-f387057bd1e0",
+      "strategy": "cascade",
+      "costMicros": 687,
+      "normalizedMicros": 687,
+      "elapsedMs": 9558.12395899999,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-f387057bd1e0",
+      "strategy": "cheap",
+      "costMicros": 864,
+      "normalizedMicros": 864,
+      "elapsedMs": 12315.070917000005,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-f387057bd1e0",
+      "strategy": "strong",
+      "costMicros": 9641,
+      "normalizedMicros": 9641,
+      "elapsedMs": 20764.362957999983,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-f2e02f69a3c1",
+      "strategy": "cheap",
+      "costMicros": 714,
+      "normalizedMicros": 714,
+      "elapsedMs": 19541.003834000003,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-f2e02f69a3c1",
+      "strategy": "cascade",
+      "costMicros": 720,
+      "normalizedMicros": 720,
+      "elapsedMs": 19003.025749999997,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-f2e02f69a3c1",
+      "strategy": "strong",
+      "costMicros": 6695,
+      "normalizedMicros": 6695,
+      "elapsedMs": 19918.895708000004,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-7f50f74d02c2",
+      "strategy": "cheap",
+      "costMicros": 1452,
+      "normalizedMicros": 1452,
+      "elapsedMs": 10415.373583,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-7f50f74d02c2",
+      "strategy": "strong",
+      "costMicros": 12592,
+      "normalizedMicros": 12592,
+      "elapsedMs": 9567.596583000006,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-7f50f74d02c2",
+      "strategy": "cascade",
+      "costMicros": 1263,
+      "normalizedMicros": 1263,
+      "elapsedMs": 7174.635750000001,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-b111adbb675e",
+      "strategy": "cascade",
+      "costMicros": 20198,
+      "normalizedMicros": 20198,
+      "elapsedMs": 32172.687000000005,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-b111adbb675e",
+      "strategy": "strong",
+      "costMicros": 18175,
+      "normalizedMicros": 18175,
+      "elapsedMs": 21692.845125000007,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-b111adbb675e",
+      "strategy": "cheap",
+      "costMicros": 3213,
+      "normalizedMicros": 3214,
+      "elapsedMs": 17984.41504199998,
+      "publicPassed": false,
+      "fullValid": true,
+      "fullPassed": false,
+      "passed": false,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-a18ef2d05af4",
+      "strategy": "cascade",
+      "costMicros": 11504,
+      "normalizedMicros": 11504,
+      "elapsedMs": 10704.677832999994,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-a18ef2d05af4",
+      "strategy": "strong",
+      "costMicros": 9960,
+      "normalizedMicros": 9960,
+      "elapsedMs": 5484.795624999999,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-a18ef2d05af4",
+      "strategy": "cheap",
+      "costMicros": 1230,
+      "normalizedMicros": 1231,
+      "elapsedMs": 6724.150082999986,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-471d4257259e",
+      "strategy": "cheap",
+      "costMicros": 364,
+      "normalizedMicros": 364,
+      "elapsedMs": 7790.965041999996,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-471d4257259e",
+      "strategy": "cascade",
+      "costMicros": 364,
+      "normalizedMicros": 364,
+      "elapsedMs": 7763.904750000016,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-471d4257259e",
+      "strategy": "strong",
+      "costMicros": 3522,
+      "normalizedMicros": 3522,
+      "elapsedMs": 8668.795915999974,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-57f50a278b86",
+      "strategy": "cheap",
+      "costMicros": 1640,
+      "normalizedMicros": 1640,
+      "elapsedMs": 8654.309749999986,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-57f50a278b86",
+      "strategy": "cascade",
+      "costMicros": 9160,
+      "normalizedMicros": 9160,
+      "elapsedMs": 12494.889166000008,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-57f50a278b86",
+      "strategy": "strong",
+      "costMicros": 8256,
+      "normalizedMicros": 8256,
+      "elapsedMs": 7590.810874999996,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-7d3cf924c262",
+      "strategy": "strong",
+      "costMicros": 20657,
+      "normalizedMicros": 20657,
+      "elapsedMs": 14038.479332999996,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-7d3cf924c262",
+      "strategy": "cascade",
+      "costMicros": 22729,
+      "normalizedMicros": 22729,
+      "elapsedMs": 19365.170291999966,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-7d3cf924c262",
+      "strategy": "cheap",
+      "costMicros": 5610,
+      "normalizedMicros": 5610,
+      "elapsedMs": 17193.555333000026,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-4fe5bc5fefe5",
+      "strategy": "cheap",
+      "costMicros": 1276,
+      "normalizedMicros": 1276,
+      "elapsedMs": 12098.510124999972,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-4fe5bc5fefe5",
+      "strategy": "strong",
+      "costMicros": 11992,
+      "normalizedMicros": 11992,
+      "elapsedMs": 13727.049333000032,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-4fe5bc5fefe5",
+      "strategy": "cascade",
+      "costMicros": 1163,
+      "normalizedMicros": 1163,
+      "elapsedMs": 9300.587625000044,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-a0922b0b6b5d",
+      "strategy": "cascade",
+      "costMicros": 4246,
+      "normalizedMicros": 4246,
+      "elapsedMs": 18537.69541699998,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-a0922b0b6b5d",
+      "strategy": "cheap",
+      "costMicros": 329,
+      "normalizedMicros": 329,
+      "elapsedMs": 5089.749458000006,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-a0922b0b6b5d",
+      "strategy": "strong",
+      "costMicros": 3695,
+      "normalizedMicros": 3696,
+      "elapsedMs": 10391.221166000003,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-f36ea9cab02a",
+      "strategy": "cascade",
+      "costMicros": 6852,
+      "normalizedMicros": 6853,
+      "elapsedMs": 12663.197708000022,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 2,
+      "escalated": true
+    },
+    {
+      "caseId": "undici-f36ea9cab02a",
+      "strategy": "strong",
+      "costMicros": 6084,
+      "normalizedMicros": 6084,
+      "elapsedMs": 7526.179833000002,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    },
+    {
+      "caseId": "undici-f36ea9cab02a",
+      "strategy": "cheap",
+      "costMicros": 614,
+      "normalizedMicros": 614,
+      "elapsedMs": 4959.641874999972,
+      "publicPassed": true,
+      "fullValid": true,
+      "fullPassed": true,
+      "passed": true,
+      "attempts": 1,
+      "escalated": false
+    }
+  ],
+  "calls": [
+    {
+      "batch": 1,
+      "stage": "case-0/strong/control",
+      "number": 1,
+      "id": "undici-a490364ec273/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 28709,
+      "normalizedMicros": 28709,
+      "usage": {
+        "uncachedInputTokens": 22049,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1332
+      },
+      "disposition": "complete",
+      "elapsedMs": 18430.68475
+    },
+    {
+      "batch": 1,
+      "stage": "case-0/cascade/draft",
+      "number": 1,
+      "id": "undici-a490364ec273/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2702,
+      "normalizedMicros": 2702,
+      "usage": {
+        "uncachedInputTokens": 22049,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 993
+      },
+      "disposition": "complete",
+      "elapsedMs": 7465.950417
+    },
+    {
+      "batch": 1,
+      "stage": "case-0/cheap/cheap",
+      "number": 1,
+      "id": "undici-a490364ec273/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2381,
+      "normalizedMicros": 2381,
+      "usage": {
+        "uncachedInputTokens": 22049,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 352
+      },
+      "disposition": "complete",
+      "elapsedMs": 3472.7739169999986
+    },
+    {
+      "batch": 1,
+      "stage": "case-0/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-a490364ec273/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2647,
+      "normalizedMicros": 2647,
+      "usage": {
+        "uncachedInputTokens": 22698,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 754
+      },
+      "disposition": "complete",
+      "elapsedMs": 5339.868915999999
+    },
+    {
+      "batch": 1,
+      "stage": "case-1/cascade/draft",
+      "number": 1,
+      "id": "undici-a287effccc5e/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2286,
+      "normalizedMicros": 2286,
+      "usage": {
+        "uncachedInputTokens": 21296,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 311
+      },
+      "disposition": "complete",
+      "elapsedMs": 2864.286791999999
+    },
+    {
+      "batch": 1,
+      "stage": "case-1/cheap/cheap",
+      "number": 1,
+      "id": "undici-a287effccc5e/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2622,
+      "normalizedMicros": 2622,
+      "usage": {
+        "uncachedInputTokens": 21296,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 983
+      },
+      "disposition": "complete",
+      "elapsedMs": 7865.251583999998
+    },
+    {
+      "batch": 1,
+      "stage": "case-1/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-a287effccc5e/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2728,
+      "normalizedMicros": 2729,
+      "usage": {
+        "uncachedInputTokens": 23585,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 739
+      },
+      "disposition": "complete",
+      "elapsedMs": 7003.484541999991
+    },
+    {
+      "batch": 1,
+      "stage": "case-1/strong/control",
+      "number": 1,
+      "id": "undici-a287effccc5e/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 23971,
+      "normalizedMicros": 23971,
+      "usage": {
+        "uncachedInputTokens": 21296,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 535
+      },
+      "disposition": "complete",
+      "elapsedMs": 10247.621083000005
+    },
+    {
+      "batch": 1,
+      "stage": "case-2/strong/control",
+      "number": 1,
+      "id": "undici-c5b3a6e478d1/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 10702,
+      "normalizedMicros": 10702,
+      "usage": {
+        "uncachedInputTokens": 8372,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 466
+      },
+      "disposition": "complete",
+      "elapsedMs": 7423.522292000009
+    },
+    {
+      "batch": 1,
+      "stage": "case-2/cheap/cheap",
+      "number": 1,
+      "id": "undici-c5b3a6e478d1/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1073,
+      "normalizedMicros": 1073,
+      "usage": {
+        "uncachedInputTokens": 8372,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 470
+      },
+      "disposition": "complete",
+      "elapsedMs": 4850.321207999994
+    },
+    {
+      "batch": 1,
+      "stage": "case-2/cascade/draft",
+      "number": 1,
+      "id": "undici-c5b3a6e478d1/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1086,
+      "normalizedMicros": 1086,
+      "usage": {
+        "uncachedInputTokens": 8372,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 496
+      },
+      "disposition": "complete",
+      "elapsedMs": 4603.850875000004
+    },
+    {
+      "batch": 1,
+      "stage": "case-3/cascade/draft",
+      "number": 1,
+      "id": "undici-d983b4f9ac1a/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 400,
+      "normalizedMicros": 400,
+      "usage": {
+        "uncachedInputTokens": 3437,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 112
+      },
+      "disposition": "complete",
+      "elapsedMs": 1603.3126249999914
+    },
+    {
+      "batch": 1,
+      "stage": "case-3/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-d983b4f9ac1a/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 4717,
+      "normalizedMicros": 4717,
+      "usage": {
+        "uncachedInputTokens": 3437,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 256
+      },
+      "disposition": "complete",
+      "elapsedMs": 3971.265416999988
+    },
+    {
+      "batch": 1,
+      "stage": "case-3/strong/control",
+      "number": 1,
+      "id": "undici-d983b4f9ac1a/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 4757,
+      "normalizedMicros": 4757,
+      "usage": {
+        "uncachedInputTokens": 3437,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 264
+      },
+      "disposition": "complete",
+      "elapsedMs": 4903.888624999992
+    },
+    {
+      "batch": 1,
+      "stage": "case-3/cheap/cheap",
+      "number": 1,
+      "id": "undici-d983b4f9ac1a/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 425,
+      "normalizedMicros": 425,
+      "usage": {
+        "uncachedInputTokens": 3437,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 162
+      },
+      "disposition": "complete",
+      "elapsedMs": 2265.331999999995
+    },
+    {
+      "batch": 1,
+      "stage": "case-3/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-d983b4f9ac1a/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 845,
+      "normalizedMicros": 845,
+      "usage": {
+        "uncachedInputTokens": 3855,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 919
+      },
+      "disposition": "complete",
+      "elapsedMs": 7183.234292000008
+    },
+    {
+      "batch": 1,
+      "stage": "case-4/cheap/cheap",
+      "number": 1,
+      "id": "undici-5e6e0e96e86f/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 606,
+      "normalizedMicros": 606,
+      "usage": {
+        "uncachedInputTokens": 2167,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 777
+      },
+      "disposition": "complete",
+      "elapsedMs": 5849.98550000001
+    },
+    {
+      "batch": 1,
+      "stage": "case-4/strong/control",
+      "number": 1,
+      "id": "undici-5e6e0e96e86f/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 5277,
+      "normalizedMicros": 5277,
+      "usage": {
+        "uncachedInputTokens": 2167,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 622
+      },
+      "disposition": "complete",
+      "elapsedMs": 10412.230416999984
+    },
+    {
+      "batch": 1,
+      "stage": "case-4/cascade/draft",
+      "number": 1,
+      "id": "undici-5e6e0e96e86f/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 645,
+      "normalizedMicros": 645,
+      "usage": {
+        "uncachedInputTokens": 2167,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 856
+      },
+      "disposition": "complete",
+      "elapsedMs": 6189.616624999995
+    },
+    {
+      "batch": 1,
+      "stage": "case-5/cheap/cheap",
+      "number": 1,
+      "id": "undici-762f3b5a743a/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 978,
+      "normalizedMicros": 978,
+      "usage": {
+        "uncachedInputTokens": 9243,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 106
+      },
+      "disposition": "complete",
+      "elapsedMs": 1629.7319169999973
+    },
+    {
+      "batch": 1,
+      "stage": "case-5/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-762f3b5a743a/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1137,
+      "normalizedMicros": 1137,
+      "usage": {
+        "uncachedInputTokens": 9539,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 365
+      },
+      "disposition": "complete",
+      "elapsedMs": 3808.516917000001
+    },
+    {
+      "batch": 1,
+      "stage": "case-5/strong/control",
+      "number": 1,
+      "id": "undici-762f3b5a743a/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 10128,
+      "normalizedMicros": 10128,
+      "usage": {
+        "uncachedInputTokens": 9243,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 177
+      },
+      "disposition": "complete",
+      "elapsedMs": 3971.9215830000176
+    },
+    {
+      "batch": 1,
+      "stage": "case-5/cascade/draft",
+      "number": 1,
+      "id": "undici-762f3b5a743a/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1112,
+      "normalizedMicros": 1112,
+      "usage": {
+        "uncachedInputTokens": 9243,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 375
+      },
+      "disposition": "complete",
+      "elapsedMs": 3687.2143750000105
+    },
+    {
+      "batch": 1,
+      "stage": "case-6/strong/control",
+      "number": 1,
+      "id": "undici-b8b2ae8f199e/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 10643,
+      "normalizedMicros": 10643,
+      "usage": {
+        "uncachedInputTokens": 8773,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 374
+      },
+      "disposition": "complete",
+      "elapsedMs": 7440.260332999984
+    },
+    {
+      "batch": 1,
+      "stage": "case-6/cascade/draft",
+      "number": 1,
+      "id": "undici-b8b2ae8f199e/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1131,
+      "normalizedMicros": 1131,
+      "usage": {
+        "uncachedInputTokens": 8773,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 507
+      },
+      "disposition": "complete",
+      "elapsedMs": 4661.75358400002
+    },
+    {
+      "batch": 1,
+      "stage": "case-6/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-b8b2ae8f199e/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 9903,
+      "normalizedMicros": 9903,
+      "usage": {
+        "uncachedInputTokens": 8773,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 226
+      },
+      "disposition": "complete",
+      "elapsedMs": 5262.450582999969
+    },
+    {
+      "batch": 1,
+      "stage": "case-6/cheap/cheap",
+      "number": 1,
+      "id": "undici-b8b2ae8f199e/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1127,
+      "normalizedMicros": 1127,
+      "usage": {
+        "uncachedInputTokens": 8773,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 499
+      },
+      "disposition": "complete",
+      "elapsedMs": 4525.010833000008
+    },
+    {
+      "batch": 1,
+      "stage": "case-7/cascade/draft",
+      "number": 1,
+      "id": "undici-47c2493a992e/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1104,
+      "normalizedMicros": 1104,
+      "usage": {
+        "uncachedInputTokens": 4595,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1288
+      },
+      "disposition": "complete",
+      "elapsedMs": 8313.644250000012
+    },
+    {
+      "batch": 1,
+      "stage": "case-7/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-47c2493a992e/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 9355,
+      "normalizedMicros": 9355,
+      "usage": {
+        "uncachedInputTokens": 4595,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 952
+      },
+      "disposition": "complete",
+      "elapsedMs": 11894.484832999995
+    },
+    {
+      "batch": 1,
+      "stage": "case-7/strong/control",
+      "number": 1,
+      "id": "undici-47c2493a992e/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 8985,
+      "normalizedMicros": 8985,
+      "usage": {
+        "uncachedInputTokens": 4595,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 878
+      },
+      "disposition": "complete",
+      "elapsedMs": 11578.974583000003
+    },
+    {
+      "batch": 1,
+      "stage": "case-7/cheap/cheap",
+      "number": 1,
+      "id": "undici-47c2493a992e/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 947,
+      "normalizedMicros": 947,
+      "usage": {
+        "uncachedInputTokens": 4595,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 974
+      },
+      "disposition": "complete",
+      "elapsedMs": 6719.826249999984
+    },
+    {
+      "batch": 1,
+      "stage": "case-7/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-47c2493a992e/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1172,
+      "normalizedMicros": 1172,
+      "usage": {
+        "uncachedInputTokens": 6567,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1030
+      },
+      "disposition": "complete",
+      "elapsedMs": 7038.822500000009
+    },
+    {
+      "batch": 1,
+      "stage": "case-8/cheap/cheap",
+      "number": 1,
+      "id": "undici-2bc04d019f14/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 915,
+      "normalizedMicros": 915,
+      "usage": {
+        "uncachedInputTokens": 8637,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 101
+      },
+      "disposition": "complete",
+      "elapsedMs": 1516.5451660000253
+    },
+    {
+      "batch": 1,
+      "stage": "case-8/cascade/draft",
+      "number": 1,
+      "id": "undici-2bc04d019f14/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 973,
+      "normalizedMicros": 973,
+      "usage": {
+        "uncachedInputTokens": 8637,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 218
+      },
+      "disposition": "complete",
+      "elapsedMs": 2148.489666999958
+    },
+    {
+      "batch": 1,
+      "stage": "case-8/strong/control",
+      "number": 1,
+      "id": "undici-2bc04d019f14/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 9072,
+      "normalizedMicros": 9072,
+      "usage": {
+        "uncachedInputTokens": 8637,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 87
+      },
+      "disposition": "complete",
+      "elapsedMs": 2406.5320830000564
+    },
+    {
+      "batch": 1,
+      "stage": "case-9/cheap/cheap",
+      "number": 1,
+      "id": "undici-6933139baebc/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 723,
+      "normalizedMicros": 723,
+      "usage": {
+        "uncachedInputTokens": 6641,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 117
+      },
+      "disposition": "complete",
+      "elapsedMs": 14095.367625000014
+    },
+    {
+      "batch": 1,
+      "stage": "case-9/strong/control",
+      "number": 1,
+      "id": "undici-6933139baebc/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 7056,
+      "normalizedMicros": 7056,
+      "usage": {
+        "uncachedInputTokens": 6641,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 83
+      },
+      "disposition": "complete",
+      "elapsedMs": 2581.0046250000014
+    },
+    {
+      "batch": 1,
+      "stage": "case-9/cascade/draft",
+      "number": 1,
+      "id": "undici-6933139baebc/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 723,
+      "normalizedMicros": 723,
+      "usage": {
+        "uncachedInputTokens": 6641,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 117
+      },
+      "disposition": "complete",
+      "elapsedMs": 7916.972167
+    },
+    {
+      "batch": 2,
+      "stage": "case-0/strong/control",
+      "number": 1,
+      "id": "undici-65fd635cc9bb/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 11927,
+      "normalizedMicros": 11927,
+      "usage": {
+        "uncachedInputTokens": 9827,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 420
+      },
+      "disposition": "complete",
+      "elapsedMs": 7068.310082999999
+    },
+    {
+      "batch": 2,
+      "stage": "case-0/cascade/draft",
+      "number": 1,
+      "id": "undici-65fd635cc9bb/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1170,
+      "normalizedMicros": 1170,
+      "usage": {
+        "uncachedInputTokens": 9827,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 373
+      },
+      "disposition": "complete",
+      "elapsedMs": 3272.5637499999993
+    },
+    {
+      "batch": 2,
+      "stage": "case-0/cheap/cheap",
+      "number": 1,
+      "id": "undici-65fd635cc9bb/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1019,
+      "normalizedMicros": 1019,
+      "usage": {
+        "uncachedInputTokens": 9827,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 71
+      },
+      "disposition": "complete",
+      "elapsedMs": 1343.9619590000002
+    },
+    {
+      "batch": 2,
+      "stage": "case-1/strong/control",
+      "number": 1,
+      "id": "undici-bee01389d78a/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 9854,
+      "normalizedMicros": 9855,
+      "usage": {
+        "uncachedInputTokens": 5294,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 912
+      },
+      "disposition": "complete",
+      "elapsedMs": 15492.499292
+    },
+    {
+      "batch": 2,
+      "stage": "case-1/strong/control-repair",
+      "number": 1,
+      "id": "undici-bee01389d78a/control-repair",
+      "arm": "control-repair",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 10637,
+      "normalizedMicros": 10637,
+      "usage": {
+        "uncachedInputTokens": 6347,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 858
+      },
+      "disposition": "complete",
+      "elapsedMs": 12809.167000000009
+    },
+    {
+      "batch": 2,
+      "stage": "case-1/cascade/draft",
+      "number": 1,
+      "id": "undici-bee01389d78a/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 956,
+      "normalizedMicros": 956,
+      "usage": {
+        "uncachedInputTokens": 5294,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 853
+      },
+      "disposition": "complete",
+      "elapsedMs": 7232.846665999998
+    },
+    {
+      "batch": 2,
+      "stage": "case-1/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-bee01389d78a/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 8014,
+      "normalizedMicros": 8014,
+      "usage": {
+        "uncachedInputTokens": 5294,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 544
+      },
+      "disposition": "complete",
+      "elapsedMs": 8694.010333999991
+    },
+    {
+      "batch": 2,
+      "stage": "case-1/cascade/fallback-repair",
+      "number": 1,
+      "id": "undici-bee01389d78a/fallback-repair",
+      "arm": "fallback-repair",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 10754,
+      "normalizedMicros": 10754,
+      "usage": {
+        "uncachedInputTokens": 6289,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 893
+      },
+      "disposition": "complete",
+      "elapsedMs": 14944.993374999991
+    },
+    {
+      "batch": 2,
+      "stage": "case-1/cheap/cheap",
+      "number": 1,
+      "id": "undici-bee01389d78a/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 919,
+      "normalizedMicros": 919,
+      "usage": {
+        "uncachedInputTokens": 5294,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 779
+      },
+      "disposition": "complete",
+      "elapsedMs": 7156.554375000007
+    },
+    {
+      "batch": 2,
+      "stage": "case-1/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-bee01389d78a/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 917,
+      "normalizedMicros": 917,
+      "usage": {
+        "uncachedInputTokens": 5837,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 666
+      },
+      "disposition": "complete",
+      "elapsedMs": 5930.925917000015
+    },
+    {
+      "batch": 2,
+      "stage": "case-2/cascade/draft",
+      "number": 1,
+      "id": "undici-b73952a4f74e/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 431,
+      "normalizedMicros": 431,
+      "usage": {
+        "uncachedInputTokens": 4042,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 52
+      },
+      "disposition": "complete",
+      "elapsedMs": 1166.1058330000087
+    },
+    {
+      "batch": 2,
+      "stage": "case-2/strong/control",
+      "number": 1,
+      "id": "undici-b73952a4f74e/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 4602,
+      "normalizedMicros": 4602,
+      "usage": {
+        "uncachedInputTokens": 4042,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 112
+      },
+      "disposition": "complete",
+      "elapsedMs": 2700.665166999999
+    },
+    {
+      "batch": 2,
+      "stage": "case-2/cheap/cheap",
+      "number": 1,
+      "id": "undici-b73952a4f74e/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 430,
+      "normalizedMicros": 430,
+      "usage": {
+        "uncachedInputTokens": 4042,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 50
+      },
+      "disposition": "complete",
+      "elapsedMs": 1145.7768339999893
+    },
+    {
+      "batch": 2,
+      "stage": "case-3/cheap/cheap",
+      "number": 1,
+      "id": "undici-0160a719063f/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1039,
+      "normalizedMicros": 1039,
+      "usage": {
+        "uncachedInputTokens": 7560,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 566
+      },
+      "disposition": "complete",
+      "elapsedMs": 4721.381625000009
+    },
+    {
+      "batch": 2,
+      "stage": "case-3/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-0160a719063f/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1086,
+      "normalizedMicros": 1086,
+      "usage": {
+        "uncachedInputTokens": 8525,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 466
+      },
+      "disposition": "complete",
+      "elapsedMs": 3959.910125000024
+    },
+    {
+      "batch": 2,
+      "stage": "case-3/strong/control",
+      "number": 1,
+      "id": "undici-0160a719063f/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 13365,
+      "normalizedMicros": 13365,
+      "usage": {
+        "uncachedInputTokens": 7560,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1161
+      },
+      "disposition": "complete",
+      "elapsedMs": 17159.573374999978
+    },
+    {
+      "batch": 2,
+      "stage": "case-3/cascade/draft",
+      "number": 1,
+      "id": "undici-0160a719063f/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 983,
+      "normalizedMicros": 983,
+      "usage": {
+        "uncachedInputTokens": 7560,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 453
+      },
+      "disposition": "complete",
+      "elapsedMs": 4950.709208000015
+    },
+    {
+      "batch": 2,
+      "stage": "case-3/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-0160a719063f/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 12685,
+      "normalizedMicros": 12685,
+      "usage": {
+        "uncachedInputTokens": 7560,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1025
+      },
+      "disposition": "complete",
+      "elapsedMs": 15360.516499999998
+    },
+    {
+      "batch": 2,
+      "stage": "case-3/cascade/fallback-repair",
+      "number": 1,
+      "id": "undici-0160a719063f/fallback-repair",
+      "arm": "fallback-repair",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 18913,
+      "normalizedMicros": 18913,
+      "usage": {
+        "uncachedInputTokens": 12703,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1242
+      },
+      "disposition": "complete",
+      "elapsedMs": 15065.468458999996
+    },
+    {
+      "batch": 2,
+      "stage": "case-4/cheap/cheap",
+      "number": 1,
+      "id": "undici-8f5868fbdbc8/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 609,
+      "normalizedMicros": 609,
+      "usage": {
+        "uncachedInputTokens": 5762,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 65
+      },
+      "disposition": "complete",
+      "elapsedMs": 1611.6645830000052
+    },
+    {
+      "batch": 2,
+      "stage": "case-4/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-8f5868fbdbc8/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 823,
+      "normalizedMicros": 823,
+      "usage": {
+        "uncachedInputTokens": 6169,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 412
+      },
+      "disposition": "complete",
+      "elapsedMs": 3774.5908329999656
+    },
+    {
+      "batch": 2,
+      "stage": "case-4/cascade/draft",
+      "number": 1,
+      "id": "undici-8f5868fbdbc8/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 766,
+      "normalizedMicros": 766,
+      "usage": {
+        "uncachedInputTokens": 5762,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 379
+      },
+      "disposition": "complete",
+      "elapsedMs": 3989.445458000002
+    },
+    {
+      "batch": 2,
+      "stage": "case-4/strong/control",
+      "number": 1,
+      "id": "undici-8f5868fbdbc8/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 7017,
+      "normalizedMicros": 7017,
+      "usage": {
+        "uncachedInputTokens": 5762,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 251
+      },
+      "disposition": "complete",
+      "elapsedMs": 5767.138166999968
+    },
+    {
+      "batch": 2,
+      "stage": "case-5/cascade/draft",
+      "number": 1,
+      "id": "undici-ee5e88705110/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1311,
+      "normalizedMicros": 1311,
+      "usage": {
+        "uncachedInputTokens": 10597,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 501
+      },
+      "disposition": "complete",
+      "elapsedMs": 4066.1491249999963
+    },
+    {
+      "batch": 2,
+      "stage": "case-5/cheap/cheap",
+      "number": 1,
+      "id": "undici-ee5e88705110/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1281,
+      "normalizedMicros": 1281,
+      "usage": {
+        "uncachedInputTokens": 10597,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 442
+      },
+      "disposition": "complete",
+      "elapsedMs": 5847.63949999999
+    },
+    {
+      "batch": 2,
+      "stage": "case-5/strong/control",
+      "number": 1,
+      "id": "undici-ee5e88705110/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 12592,
+      "normalizedMicros": 12592,
+      "usage": {
+        "uncachedInputTokens": 10597,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 399
+      },
+      "disposition": "complete",
+      "elapsedMs": 7613.347167
+    },
+    {
+      "batch": 2,
+      "stage": "case-6/cheap/cheap",
+      "number": 1,
+      "id": "undici-d43e421f839a/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 698,
+      "normalizedMicros": 698,
+      "usage": {
+        "uncachedInputTokens": 5340,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 328
+      },
+      "disposition": "complete",
+      "elapsedMs": 2845.9346249999944
+    },
+    {
+      "batch": 2,
+      "stage": "case-6/cascade/draft",
+      "number": 1,
+      "id": "undici-d43e421f839a/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 761,
+      "normalizedMicros": 761,
+      "usage": {
+        "uncachedInputTokens": 5340,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 453
+      },
+      "disposition": "complete",
+      "elapsedMs": 4012.4889579999726
+    },
+    {
+      "batch": 2,
+      "stage": "case-6/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-d43e421f839a/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 8065,
+      "normalizedMicros": 8066,
+      "usage": {
+        "uncachedInputTokens": 5340,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 545
+      },
+      "disposition": "complete",
+      "elapsedMs": 8060.012416000012
+    },
+    {
+      "batch": 2,
+      "stage": "case-6/strong/control",
+      "number": 1,
+      "id": "undici-d43e421f839a/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 9995,
+      "normalizedMicros": 9995,
+      "usage": {
+        "uncachedInputTokens": 5340,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 931
+      },
+      "disposition": "complete",
+      "elapsedMs": 12125.352458000008
+    },
+    {
+      "batch": 2,
+      "stage": "case-7/cheap/cheap",
+      "number": 1,
+      "id": "undici-3e622dc7947b/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 494,
+      "normalizedMicros": 494,
+      "usage": {
+        "uncachedInputTokens": 4556,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 76
+      },
+      "disposition": "complete",
+      "elapsedMs": 1372.076000000001
+    },
+    {
+      "batch": 2,
+      "stage": "case-7/cascade/draft",
+      "number": 1,
+      "id": "undici-3e622dc7947b/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 549,
+      "normalizedMicros": 549,
+      "usage": {
+        "uncachedInputTokens": 4556,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 185
+      },
+      "disposition": "complete",
+      "elapsedMs": 2082.2991250000196
+    },
+    {
+      "batch": 2,
+      "stage": "case-7/strong/control",
+      "number": 1,
+      "id": "undici-3e622dc7947b/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 5276,
+      "normalizedMicros": 5276,
+      "usage": {
+        "uncachedInputTokens": 4556,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 144
+      },
+      "disposition": "complete",
+      "elapsedMs": 3567.6822500000126
+    },
+    {
+      "batch": 2,
+      "stage": "case-8/cheap/cheap",
+      "number": 1,
+      "id": "undici-6de6e9a14a1d/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 742,
+      "normalizedMicros": 742,
+      "usage": {
+        "uncachedInputTokens": 7082,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 66
+      },
+      "disposition": "complete",
+      "elapsedMs": 1344.2340419999673
+    },
+    {
+      "batch": 2,
+      "stage": "case-8/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-6de6e9a14a1d/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 784,
+      "normalizedMicros": 784,
+      "usage": {
+        "uncachedInputTokens": 7282,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 110
+      },
+      "disposition": "complete",
+      "elapsedMs": 1502.0250000000233
+    },
+    {
+      "batch": 2,
+      "stage": "case-8/strong/control",
+      "number": 1,
+      "id": "undici-6de6e9a14a1d/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 7737,
+      "normalizedMicros": 7737,
+      "usage": {
+        "uncachedInputTokens": 7082,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 131
+      },
+      "disposition": "complete",
+      "elapsedMs": 3637.562333000009
+    },
+    {
+      "batch": 2,
+      "stage": "case-8/cascade/draft",
+      "number": 1,
+      "id": "undici-6de6e9a14a1d/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 742,
+      "normalizedMicros": 742,
+      "usage": {
+        "uncachedInputTokens": 7082,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 66
+      },
+      "disposition": "complete",
+      "elapsedMs": 1294.7942909999983
+    },
+    {
+      "batch": 2,
+      "stage": "case-8/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-6de6e9a14a1d/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 7677,
+      "normalizedMicros": 7677,
+      "usage": {
+        "uncachedInputTokens": 7082,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 119
+      },
+      "disposition": "complete",
+      "elapsedMs": 2914.525624999951
+    },
+    {
+      "batch": 2,
+      "stage": "case-9/cascade/draft",
+      "number": 1,
+      "id": "undici-f387057bd1e0/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 687,
+      "normalizedMicros": 687,
+      "usage": {
+        "uncachedInputTokens": 5251,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 323
+      },
+      "disposition": "complete",
+      "elapsedMs": 2512.597374999954
+    },
+    {
+      "batch": 2,
+      "stage": "case-9/cheap/cheap",
+      "number": 1,
+      "id": "undici-f387057bd1e0/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 864,
+      "normalizedMicros": 864,
+      "usage": {
+        "uncachedInputTokens": 5251,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 676
+      },
+      "disposition": "complete",
+      "elapsedMs": 5283.809000000008
+    },
+    {
+      "batch": 2,
+      "stage": "case-9/strong/control",
+      "number": 1,
+      "id": "undici-f387057bd1e0/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 9641,
+      "normalizedMicros": 9641,
+      "usage": {
+        "uncachedInputTokens": 5251,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 878
+      },
+      "disposition": "complete",
+      "elapsedMs": 13836.870125000016
+    },
+    {
+      "batch": 3,
+      "stage": "case-0/cheap/cheap",
+      "number": 1,
+      "id": "undici-f2e02f69a3c1/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 714,
+      "normalizedMicros": 714,
+      "usage": {
+        "uncachedInputTokens": 6140,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 199
+      },
+      "disposition": "complete",
+      "elapsedMs": 2163.1175000000003
+    },
+    {
+      "batch": 3,
+      "stage": "case-0/cascade/draft",
+      "number": 1,
+      "id": "undici-f2e02f69a3c1/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 720,
+      "normalizedMicros": 720,
+      "usage": {
+        "uncachedInputTokens": 6140,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 212
+      },
+      "disposition": "complete",
+      "elapsedMs": 2173.0509999999995
+    },
+    {
+      "batch": 3,
+      "stage": "case-0/strong/control",
+      "number": 1,
+      "id": "undici-f2e02f69a3c1/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 6695,
+      "normalizedMicros": 6695,
+      "usage": {
+        "uncachedInputTokens": 6140,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 111
+      },
+      "disposition": "complete",
+      "elapsedMs": 3005.982833000002
+    },
+    {
+      "batch": 3,
+      "stage": "case-1/cheap/cheap",
+      "number": 1,
+      "id": "undici-7f50f74d02c2/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1452,
+      "normalizedMicros": 1452,
+      "usage": {
+        "uncachedInputTokens": 9792,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 945
+      },
+      "disposition": "complete",
+      "elapsedMs": 8119.317249999993
+    },
+    {
+      "batch": 3,
+      "stage": "case-1/strong/control",
+      "number": 1,
+      "id": "undici-7f50f74d02c2/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 12592,
+      "normalizedMicros": 12592,
+      "usage": {
+        "uncachedInputTokens": 9792,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 560
+      },
+      "disposition": "complete",
+      "elapsedMs": 7799.912292000008
+    },
+    {
+      "batch": 3,
+      "stage": "case-1/cascade/draft",
+      "number": 1,
+      "id": "undici-7f50f74d02c2/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1263,
+      "normalizedMicros": 1263,
+      "usage": {
+        "uncachedInputTokens": 9792,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 566
+      },
+      "disposition": "complete",
+      "elapsedMs": 5072.938750000001
+    },
+    {
+      "batch": 3,
+      "stage": "case-2/cascade/draft",
+      "number": 1,
+      "id": "undici-b111adbb675e/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1578,
+      "normalizedMicros": 1578,
+      "usage": {
+        "uncachedInputTokens": 11610,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 833
+      },
+      "disposition": "complete",
+      "elapsedMs": 6453.975166999997
+    },
+    {
+      "batch": 3,
+      "stage": "case-2/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-b111adbb675e/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 18620,
+      "normalizedMicros": 18620,
+      "usage": {
+        "uncachedInputTokens": 11610,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1402
+      },
+      "disposition": "complete",
+      "elapsedMs": 18517.947958999997
+    },
+    {
+      "batch": 3,
+      "stage": "case-2/strong/control",
+      "number": 1,
+      "id": "undici-b111adbb675e/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 18175,
+      "normalizedMicros": 18175,
+      "usage": {
+        "uncachedInputTokens": 11610,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1313
+      },
+      "disposition": "complete",
+      "elapsedMs": 16134.682708000008
+    },
+    {
+      "batch": 3,
+      "stage": "case-2/cheap/cheap",
+      "number": 1,
+      "id": "undici-b111adbb675e/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1606,
+      "normalizedMicros": 1607,
+      "usage": {
+        "uncachedInputTokens": 11610,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 890
+      },
+      "disposition": "complete",
+      "elapsedMs": 8978.564833000011
+    },
+    {
+      "batch": 3,
+      "stage": "case-2/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-b111adbb675e/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1607,
+      "normalizedMicros": 1607,
+      "usage": {
+        "uncachedInputTokens": 12618,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 690
+      },
+      "disposition": "complete",
+      "elapsedMs": 5199.88725
+    },
+    {
+      "batch": 3,
+      "stage": "case-3/cascade/draft",
+      "number": 1,
+      "id": "undici-a18ef2d05af4/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1139,
+      "normalizedMicros": 1139,
+      "usage": {
+        "uncachedInputTokens": 9220,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 433
+      },
+      "disposition": "complete",
+      "elapsedMs": 4160.718374999997
+    },
+    {
+      "batch": 3,
+      "stage": "case-3/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-a18ef2d05af4/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 10365,
+      "normalizedMicros": 10365,
+      "usage": {
+        "uncachedInputTokens": 9220,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 229
+      },
+      "disposition": "complete",
+      "elapsedMs": 3955.276291999995
+    },
+    {
+      "batch": 3,
+      "stage": "case-3/strong/control",
+      "number": 1,
+      "id": "undici-a18ef2d05af4/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 9960,
+      "normalizedMicros": 9960,
+      "usage": {
+        "uncachedInputTokens": 9220,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 148
+      },
+      "disposition": "complete",
+      "elapsedMs": 3713.2866670000076
+    },
+    {
+      "batch": 3,
+      "stage": "case-3/cheap/cheap",
+      "number": 1,
+      "id": "undici-a18ef2d05af4/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1230,
+      "normalizedMicros": 1231,
+      "usage": {
+        "uncachedInputTokens": 9220,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 616
+      },
+      "disposition": "complete",
+      "elapsedMs": 4985.989417000004
+    },
+    {
+      "batch": 3,
+      "stage": "case-4/cheap/cheap",
+      "number": 1,
+      "id": "undici-471d4257259e/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 364,
+      "normalizedMicros": 364,
+      "usage": {
+        "uncachedInputTokens": 3162,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 94
+      },
+      "disposition": "complete",
+      "elapsedMs": 1645.7137499999953
+    },
+    {
+      "batch": 3,
+      "stage": "case-4/cascade/draft",
+      "number": 1,
+      "id": "undici-471d4257259e/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 364,
+      "normalizedMicros": 364,
+      "usage": {
+        "uncachedInputTokens": 3162,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 94
+      },
+      "disposition": "complete",
+      "elapsedMs": 1571.10166700001
+    },
+    {
+      "batch": 3,
+      "stage": "case-4/strong/control",
+      "number": 1,
+      "id": "undici-471d4257259e/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 3522,
+      "normalizedMicros": 3522,
+      "usage": {
+        "uncachedInputTokens": 3162,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 72
+      },
+      "disposition": "complete",
+      "elapsedMs": 2577.1236250000075
+    },
+    {
+      "batch": 3,
+      "stage": "case-5/cheap/cheap",
+      "number": 1,
+      "id": "undici-57f50a278b86/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 760,
+      "normalizedMicros": 760,
+      "usage": {
+        "uncachedInputTokens": 6951,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 128
+      },
+      "disposition": "complete",
+      "elapsedMs": 1959.8001670000085
+    },
+    {
+      "batch": 3,
+      "stage": "case-5/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-57f50a278b86/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 880,
+      "normalizedMicros": 880,
+      "usage": {
+        "uncachedInputTokens": 7841,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 191
+      },
+      "disposition": "complete",
+      "elapsedMs": 3232.971042000019
+    },
+    {
+      "batch": 3,
+      "stage": "case-5/cascade/draft",
+      "number": 1,
+      "id": "undici-57f50a278b86/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 779,
+      "normalizedMicros": 779,
+      "usage": {
+        "uncachedInputTokens": 6951,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 167
+      },
+      "disposition": "complete",
+      "elapsedMs": 2319.900250000006
+    },
+    {
+      "batch": 3,
+      "stage": "case-5/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-57f50a278b86/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 8381,
+      "normalizedMicros": 8381,
+      "usage": {
+        "uncachedInputTokens": 6951,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 286
+      },
+      "disposition": "complete",
+      "elapsedMs": 6758.645791999996
+    },
+    {
+      "batch": 3,
+      "stage": "case-5/strong/control",
+      "number": 1,
+      "id": "undici-57f50a278b86/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 8256,
+      "normalizedMicros": 8256,
+      "usage": {
+        "uncachedInputTokens": 6951,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 261
+      },
+      "disposition": "complete",
+      "elapsedMs": 5753.531167000008
+    },
+    {
+      "batch": 3,
+      "stage": "case-6/strong/control",
+      "number": 1,
+      "id": "undici-7d3cf924c262/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 20657,
+      "normalizedMicros": 20657,
+      "usage": {
+        "uncachedInputTokens": 18542,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 423
+      },
+      "disposition": "complete",
+      "elapsedMs": 8256.951292000012
+    },
+    {
+      "batch": 3,
+      "stage": "case-6/cascade/draft",
+      "number": 1,
+      "id": "undici-7d3cf924c262/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2072,
+      "normalizedMicros": 2072,
+      "usage": {
+        "uncachedInputTokens": 18542,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 434
+      },
+      "disposition": "complete",
+      "elapsedMs": 3946.3877079999947
+    },
+    {
+      "batch": 3,
+      "stage": "case-6/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-7d3cf924c262/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 20657,
+      "normalizedMicros": 20657,
+      "usage": {
+        "uncachedInputTokens": 18542,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 423
+      },
+      "disposition": "complete",
+      "elapsedMs": 7505.037667000026
+    },
+    {
+      "batch": 3,
+      "stage": "case-6/cheap/cheap",
+      "number": 1,
+      "id": "undici-7d3cf924c262/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2176,
+      "normalizedMicros": 2176,
+      "usage": {
+        "uncachedInputTokens": 18542,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 643
+      },
+      "disposition": "complete",
+      "elapsedMs": 5815.954084000026
+    },
+    {
+      "batch": 3,
+      "stage": "case-6/cheap/cheap-repair",
+      "number": 1,
+      "id": "undici-7d3cf924c262/cheap-repair",
+      "arm": "cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 3434,
+      "normalizedMicros": 3434,
+      "usage": {
+        "uncachedInputTokens": 32614,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 345
+      },
+      "disposition": "complete",
+      "elapsedMs": 3726.4965840000077
+    },
+    {
+      "batch": 3,
+      "stage": "case-7/cheap/cheap",
+      "number": 1,
+      "id": "undici-4fe5bc5fefe5/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1276,
+      "normalizedMicros": 1276,
+      "usage": {
+        "uncachedInputTokens": 9562,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 638
+      },
+      "disposition": "complete",
+      "elapsedMs": 6432.925166999979
+    },
+    {
+      "batch": 3,
+      "stage": "case-7/strong/control",
+      "number": 1,
+      "id": "undici-4fe5bc5fefe5/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 11992,
+      "normalizedMicros": 11992,
+      "usage": {
+        "uncachedInputTokens": 9562,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 486
+      },
+      "disposition": "complete",
+      "elapsedMs": 8273.695499999973
+    },
+    {
+      "batch": 3,
+      "stage": "case-7/cascade/draft",
+      "number": 1,
+      "id": "undici-4fe5bc5fefe5/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1163,
+      "normalizedMicros": 1163,
+      "usage": {
+        "uncachedInputTokens": 9562,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 413
+      },
+      "disposition": "complete",
+      "elapsedMs": 3761.504459000018
+    },
+    {
+      "batch": 3,
+      "stage": "case-8/cascade/draft",
+      "number": 1,
+      "id": "undici-a0922b0b6b5d/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 321,
+      "normalizedMicros": 321,
+      "usage": {
+        "uncachedInputTokens": 1235,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 394
+      },
+      "disposition": "complete",
+      "elapsedMs": 3673.1225829999894
+    },
+    {
+      "batch": 3,
+      "stage": "case-8/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-a0922b0b6b5d/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 3925,
+      "normalizedMicros": 3925,
+      "usage": {
+        "uncachedInputTokens": 1235,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 538
+      },
+      "disposition": "complete",
+      "elapsedMs": 11401.227459000016
+    },
+    {
+      "batch": 3,
+      "stage": "case-8/cheap/cheap",
+      "number": 1,
+      "id": "undici-a0922b0b6b5d/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 329,
+      "normalizedMicros": 329,
+      "usage": {
+        "uncachedInputTokens": 1235,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 411
+      },
+      "disposition": "complete",
+      "elapsedMs": 3065.6499170000316
+    },
+    {
+      "batch": 3,
+      "stage": "case-8/strong/control",
+      "number": 1,
+      "id": "undici-a0922b0b6b5d/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 3695,
+      "normalizedMicros": 3696,
+      "usage": {
+        "uncachedInputTokens": 1235,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 492
+      },
+      "disposition": "complete",
+      "elapsedMs": 8621.532374999952
+    },
+    {
+      "batch": 3,
+      "stage": "case-9/cascade/draft",
+      "number": 1,
+      "id": "undici-f36ea9cab02a/draft",
+      "arm": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 653,
+      "normalizedMicros": 653,
+      "usage": {
+        "uncachedInputTokens": 4399,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 425
+      },
+      "disposition": "complete",
+      "elapsedMs": 3316.4672920000157
+    },
+    {
+      "batch": 3,
+      "stage": "case-9/cascade/fallback-fresh",
+      "number": 1,
+      "id": "undici-f36ea9cab02a/fallback-fresh",
+      "arm": "fallback-fresh",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 6199,
+      "normalizedMicros": 6200,
+      "usage": {
+        "uncachedInputTokens": 4399,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 360
+      },
+      "disposition": "complete",
+      "elapsedMs": 5663.062540999963
+    },
+    {
+      "batch": 3,
+      "stage": "case-9/strong/control",
+      "number": 1,
+      "id": "undici-f36ea9cab02a/control",
+      "arm": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 6084,
+      "normalizedMicros": 6084,
+      "usage": {
+        "uncachedInputTokens": 4399,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 337
+      },
+      "disposition": "complete",
+      "elapsedMs": 5712.571042000025
+    },
+    {
+      "batch": 3,
+      "stage": "case-9/cheap/cheap",
+      "number": 1,
+      "id": "undici-f36ea9cab02a/cheap",
+      "arm": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 614,
+      "normalizedMicros": 614,
+      "usage": {
+        "uncachedInputTokens": 4399,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 348
+      },
+      "disposition": "complete",
+      "elapsedMs": 3224.09024999995
+    }
+  ],
+  "summary": {
+    "uniqueTasks": 30,
+    "drawsPerTask": 1,
+    "pairedSamples": 30,
+    "outcomes": 90,
+    "costBasis": "invoice-and-cache-neutral-v1",
+    "aggregate": {
+      "strong": {
+        "passed": 29,
+        "costMicros": 323571,
+        "normalizedMicros": 323573,
+        "elapsedMs": 389221.9982870001
+      },
+      "cascade": {
+        "passed": 29,
+        "costMicros": 188800,
+        "normalizedMicros": 188802,
+        "elapsedMs": 443583.04837699997
+      },
+      "cheap": {
+        "passed": 23,
+        "costMicros": 48473,
+        "normalizedMicros": 48476,
+        "elapsedMs": 378434.1007079999
+      },
+      "costRatio": 0.5834886315522714,
+      "normalizedCostRatio": 0.5834912060029731,
+      "elapsedRatio": 1.1396659241493223,
+      "falseAccepts": 0,
+      "strongLosses": 0,
+      "efficiencyGate": false
+    },
+    "transferLead": false,
+    "qualifiedProductionGain": false
+  },
+  "accounting": {
+    "initialSpentMicros": 323700844,
+    "newCostMicros": 560844,
+    "spentOrReservedMicros": 324261688,
+    "remainingMicros": 75738312,
+    "campaignBudgetMicros": 400000000,
+    "studyCapMicros": 30000000
+  }
+}

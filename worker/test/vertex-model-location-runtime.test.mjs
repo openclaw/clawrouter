@@ -5,7 +5,7 @@ import { configureVertex, vertexAuthorization, vertexBody, vertexJson, vertexMod
 const { snapshot } = await import("../provider-catalog.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { inspectGrantCredentials } = await import("../grant-credentials.ts");
-const { grantSupports } = await import("../provider-auth.ts");
+const { grantSupports } = await import("../grant-compatibility.ts");
 const { bodyBudgetCharged } = await import("../body-budget.ts");
 const native = "/v1/native/anthropic-vertex/v1/messages", manifest = "/v1/proxy/anthropic-vertex/messages";
 const unsupportedModel = "claude-opus-4-6", unsupportedId = "anthropic-vertex/" + unsupportedModel;

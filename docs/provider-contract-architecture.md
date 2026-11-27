@@ -52,8 +52,9 @@ The current implementation already has strong foundations:
 - `scripts/provider-compiler.mjs` validates and compiles parsed declarations.
   `scripts/compile-providers.mjs` owns CLI file input/output and preserves its
   original `compileProviderSnapshot` export for existing importers.
-- `worker/provider-auth.ts` checks operation/grant compatibility, including
-  HTTP versus WebSocket and lifecycle requirements.
+- `worker/grant-compatibility.ts` owns operation/grant compatibility, including
+  HTTP versus WebSocket and lifecycle requirements. `worker/provider-auth.ts`
+  consumes that verdict before preparing credentials and transport configuration.
 - `worker/discovery.ts` builds credential-scoped offers. A public model list is
   not treated as proof that a caller can execute a request.
 - Credential ownership, admission projections, reservations, and settlement

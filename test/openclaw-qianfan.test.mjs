@@ -32,7 +32,7 @@ assert.ok(observerStart >= 0 && observerEnd > observerStart);
 const observerCode = stripTypeScriptTypes(sdkText.slice(observerStart, observerEnd));
 // The test bundle alone observes the original handler boundary. Exact source
 // pins and single anchors prevent an overlay from silently following new code.
-const workerOutcomePins = {"proxy.ts": "e7996f77dd28d60d6636597da4aaa85bc1f9e0578c8601585ffef7553971337f", "proxy-response.ts": "da7664084749cff3c5bb9f9d6b82053e6d04438fc7fdcca1dd9d3025e175e8f3", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+const workerOutcomePins = {"proxy.ts": "1608b90d04b72ba59e06ca59e6e344b90d27c2c211313488e9f60c54f53ec5da", "proxy-response.ts": "da7664084749cff3c5bb9f9d6b82053e6d04438fc7fdcca1dd9d3025e175e8f3", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
 const { workerOutcomeOverlay, bundleWorkerOutcome: bundleQianfanOutcome } = createWorkerOutcomeFixture(workerOutcomePins);
 
 registerQianfanMemoryTests({ source, sourceHead, observerCode, bundleOutcome: bundleQianfanOutcome });

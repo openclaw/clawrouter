@@ -2,14 +2,17 @@
 import assert from 'node:assert/strict';
 
 export function replacementPaths(task) {
+  const limit = task?.maxReplacementBytes === undefined ? 65536 : task.maxReplacementBytes;
+  assert.ok(Number.isSafeInteger(limit) && limit > 0 && limit <= 262144, 'invalid_replacement_byte_limit');
   const policy = task?.sourcePathPolicy ?? 'worker-v1';
-  assert.ok(['worker-v1', 'node-library-v1'].includes(policy), 'invalid_source_path_policy');
+  assert.ok(['worker-v1', 'node-library-v1', 'node-package-root-v1'].includes(policy), 'invalid_source_path_policy');
   const paths = task?.editPaths;
   assert.ok(Array.isArray(paths) && paths.length > 0 && paths.length <= 4
     && new Set(paths).size === paths.length, 'invalid_replacement_paths');
   for (const path of paths) assert.ok(typeof path === 'string'
     && (/^(worker|shared|scripts)\/[A-Za-z0-9_./-]+\.(ts|mjs)$/.test(path)
-      || policy === 'node-library-v1' && /^lib\/[A-Za-z0-9_./-]+\.(js|cjs|mjs)$/.test(path))
+      || policy === 'node-library-v1' && /^lib\/[A-Za-z0-9_./-]+\.(js|cjs|mjs)$/.test(path)
+      || policy === 'node-package-root-v1' && /^(?:index|default)\.js$/.test(path))
     && !path.split('/').some(p => !p || p === '.' || p === '..' || /^(?:tests?|__tests__)$/i.test(p))
     && !/\.(?:test|spec)\./i.test(path), 'invalid_replacement_path');
   return [...paths];
@@ -17,6 +20,7 @@ export function replacementPaths(task) {
 
 export function normalizeReplacements(task, files) {
   const paths = replacementPaths(task);
+  const limit = task.maxReplacementBytes ?? 65536;
   assert.ok(Array.isArray(files) && files.length === paths.length, 'incomplete_replacements');
   const byPath = new Map(); let bytes = 0;
   for (const file of files) {
@@ -25,7 +29,7 @@ export function normalizeReplacements(task, files) {
     assert.ok(paths.includes(file.path) && !byPath.has(file.path), 'unexpected_replacement_path');
     assert.equal(typeof file.content, 'string');
     bytes += Buffer.byteLength(file.content);
-    assert.ok(bytes <= 65536, 'replacement_bytes');
+    assert.ok(bytes <= limit, 'replacement_bytes');
     byPath.set(file.path, { path: file.path, content: file.content });
   }
   return paths.map(path => byPath.get(path));

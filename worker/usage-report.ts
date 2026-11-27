@@ -1,4 +1,4 @@
-import { emptyUsageMetrics, usageMetricKeys, usageTokenFields } from "../shared/usage-report.ts";
+import { emptyUsageMetrics, usageMetricKeys } from "../shared/usage-report.ts";
 import type { PersonalUsageEvents, PersonalUsageReport, PersonalUsageEvent, UsageCostSummary, UsageGroupBy, UsageMetrics, UsageReportGroup } from "../shared/usage-report.ts";
 import { usageStub } from "./usage-ledger-client.ts";
 import type { Env } from "./types.ts";
@@ -128,7 +128,7 @@ import type { AccessSession } from './types.ts';
 import type { CompleteUsageQuery, CompleteUsageReport, CompleteUsageEvents, CompleteUsageEvent, CompleteUsageOutcome, UsageAdditives, CompleteUsageGroup, UsageGroupIdentity, UsageCoverage } from '../shared/usage-report.ts';
 import type { UsageVisibilityCut } from './usage-report-protocol.ts';
 import { UsageVisibilityError } from './usage-report-protocol.ts';
-import { completeUsageLimits as limits, completeUsageBuckets, validateCompleteUsageQuery, usageJsonBytes, type UsageShardInput, type UsageShardResult, type UsageCandidateSize, type UsageGroupPage, type CompleteAggregateRow } from './usage-report-protocol.ts';
+import { completeUsageLimits as limits, reportCellSlotMs, completeUsageBuckets, validateCompleteUsageQuery, usageJsonBytes, type UsageShardInput, type UsageShardResult, type UsageCandidateSize, type UsageGroupPage, type CompleteAggregateRow } from './usage-report-protocol.ts';
 import { sha256Hex } from './utils.ts';
 interface VerifiedUsageCaller { session: AccessSession; actor: string; sessionBinding: string; audience: 'admin' | 'personal' }
 type UsageVerifier = () => Promise<VerifiedUsageCaller | null>;
@@ -180,7 +180,7 @@ class CompleteOperation {
   close(){clearTimeout(this.timer);}
   check(){if(performance.now()>=this.deadline)this.controller.abort();if(this.stopped||this.signal.aborted)failComplete('unavailable','cancelled');}
   charge(count=1){this.check();this.calls+=count;if(this.calls>limits.calls)failComplete('unavailable','capacity');}
-  work(size:UsageCandidateSize){this.check();nonnegative(size.rows);nonnegative(size.bytes);this.visits=safeSum(this.visits,size.rows);this.bytes=safeSum(this.bytes,size.bytes);if(this.visits>limits.visits||this.bytes>limits.classifiedBytes)failComplete('unavailable','capacity');}
+  work(size:UsageCandidateSize){this.check();nonnegative(size.rows);nonnegative(size.bytes);nonnegative(size.cellRows??0);this.visits=safeSum(this.visits,safeSum(size.rows,size.cellRows??0));this.bytes=safeSum(this.bytes,size.bytes);if(this.visits>limits.visits||this.bytes>limits.classifiedBytes)failComplete('unavailable','capacity');}
   async call<T>(stub:DurableObjectStub,path:string,input:unknown):Promise<T>{
     this.charge();
     if(usageJsonBytes(input)>limits.pageBytes)failComplete('unavailable','capacity');
@@ -229,9 +229,20 @@ async function shardCall<T>(env:Env,op:CompleteOperation,p:Policy,input:Omit<Usa
   if(r?.kind==='restart'||r?.kind==='unavailable')failComplete(r.kind,r.reason);
   if(r?.kind!=='complete')failComplete('unavailable','source');return r.value as T;
 }
+const fitsShard=(size:UsageCandidateSize)=>size.rows<=limits.candidateRows&&size.bytes<=limits.inputBytes&&(size.cellRows??0)<=limits.cellRows;
 function checkSize(sizes:UsageCandidateSize[]):void{
-  let rows=0,bytes=0;for(const size of sizes){nonnegative(size.rows);nonnegative(size.bytes);if(size.rows>limits.candidateRows)failComplete('unavailable','capacity');rows=safeSum(rows,size.rows);bytes=safeSum(bytes,size.bytes);}
+  let rows=0,bytes=0;for(const size of sizes){nonnegative(size.rows);nonnegative(size.bytes);nonnegative(size.cellRows??0);if(!fitsShard(size))failComplete('unavailable','capacity');rows=safeSum(rows,size.rows);bytes=safeSum(bytes,size.bytes);}
   if(rows>limits.totalRows||bytes>limits.inputBytes)failComplete('unavailable','capacity');
+}
+const negotiate={rows:0,bytes:0,plan:'report' as const};
+/** Negotiated allowances get headroom from the unused shared budget for rows that arrive (or one
+ * fold batch that lands) between measurement and execution; legacy sizes are passed through. */
+function allowances(sizes:UsageCandidateSize[]):UsageCandidateSize[]{
+  checkSize(sizes);let rows=0,bytes=0;for(const size of sizes){rows+=size.rows;bytes+=size.bytes;}
+  const share=(spare:number)=>Math.floor(spare/Math.max(1,sizes.length));
+  return sizes.map(({probe:_,...size})=>{if(size.plan!=='cells'&&size.plan!=='raw'&&size.plan!=='events'){if(size.plan!==undefined)failComplete('unavailable','source');return size;}
+    return {...size,rows:size.rows+Math.min(limits.lateRows,share(limits.totalRows-rows),limits.candidateRows-size.rows),
+      bytes:size.bytes+Math.min(limits.lateBytes,share(limits.inputBytes-bytes),limits.inputBytes-size.bytes),...(size.plan==='cells'?{cellRows:Math.min(limits.cellRows,(size.cellRows??0)+limits.lateCells)}:{})};});
 }
 async function finalValidation(env:Env,verify:UsageVerifier,op:CompleteOperation,resolved:ResolvedUsage,capture:PrivateCapture,query:CompleteUsageQuery){
   await op.map(capture.vector,p=>shardCall<{valid:true}>(env,op,p,{action:'validate',query,cut:p.cut}).then(r=>{if(r.valid!==true)failComplete('unavailable','source');}));
@@ -245,14 +256,18 @@ function coverageFor(r:ResolvedUsage,c:PrivateCapture,base:CompleteUsageQuery):U
     historicalLocations:'not_exhaustively_assessed',formerLocationLateWrites:'not_bounded',captureAudit:r.inventory.captureAudit,
     effectiveFrom:c.effectiveFrom,clippedFrom:c.effectiveFrom>requestedFrom?requestedFrom:null,capturedBetween:c.capturedBetween};
 }
-async function completeGroups(env:Env,op:CompleteOperation,capture:PrivateCapture,query:CompleteUsageQuery,sizes:UsageCandidateSize[]):Promise<Omit<CompleteUsageReport,'cut'|'coverage'>>{
-  checkSize(sizes);const total=emptyAdditives(),groups=new Map<string,CompleteUsageGroup>();let groupBytes=0;
+async function completeGroups(env:Env,op:CompleteOperation,capture:PrivateCapture,query:CompleteUsageQuery,measured:UsageCandidateSize[]):Promise<Omit<CompleteUsageReport,'cut'|'coverage'>>{
+  const sizes=allowances(measured);const total=emptyAdditives(),groups=new Map<string,CompleteUsageGroup>();let groupBytes=0;
+  // Each page measures its plan again and then aggregates it: charge the measured work before the page, then the page's
+  // aggregation and any growth its measurement saw. The allowance's headroom bounds execution, not budget.
+  const grown=(a:UsageCandidateSize,b:UsageCandidateSize):UsageCandidateSize=>({rows:Math.max(0,a.rows-b.rows),bytes:Math.max(0,a.bytes-b.bytes),cellRows:Math.max(0,(a.cellRows??0)-(b.cellRows??0))});
   const buckets=completeUsageBuckets(query).map(b=>({...b,...emptyAdditives()}));
   await op.map(capture.vector,async(p,i)=>{
     let after:UsageGroupIdentity|undefined;
     do{
-      op.work(sizes[i]);const page=await shardCall<UsageGroupPage>(env,op,p,{action:'groups',query,cut:p.cut,after,allowance:sizes[i]});
-      if(!Array.isArray(page.rows)||!page.work||page.work.rows>sizes[i].rows||page.work.bytes>sizes[i].bytes)failComplete('unavailable','source');
+      op.work(measured[i]);const page=await shardCall<UsageGroupPage>(env,op,p,{action:'groups',query,cut:p.cut,after,allowance:sizes[i]});
+      if(!Array.isArray(page.rows)||!page.work||page.work.plan!==sizes[i].plan||page.work.rows>sizes[i].rows||page.work.bytes>sizes[i].bytes||(page.work.cellRows??0)>(sizes[i].cellRows??0))failComplete('unavailable','source');
+      op.work(page.work);op.work(grown(page.work,measured[i]));
       for(const row of page.rows){const values=rowAdditives(row);
         if(row.dimension==='total'){if(after)failComplete('unavailable','source');addAdditives(total,values);}
         else if(row.dimension==='bucket'){const bucket=buckets[Number(row.value)];if(after||!bucket)failComplete('unavailable','source');addAdditives(bucket,values);}
@@ -289,6 +304,8 @@ export async function readCompleteUsage(env:Env,verify:UsageVerifier,input:Compl
     // prefix. It never authorizes reads; all actual queries remain <= 30*24h.
     if(input.requestedFrom!==undefined&&(!Number.isSafeInteger(input.requestedFrom)||input.requestedFrom<0||input.kind!=='report'||input.cut||input.query.from!==input.query.to-30*86400000||input.requestedFrom>=input.query.from||input.query.to-input.requestedFrom>31*86400000))invalid('invalid requested range provenance');
     const intent=input.intent??'summary';
+    // Negotiated measurements scan rows and cells themselves, including rejected plans; charge each one.
+    const probed=<T extends UsageCandidateSize|undefined>(size:T):T=>{if(size?.plan!==undefined)op.work(size.probe??size);return size;};
     for(const handle of [input.cut,input.cursor])if(handle!==undefined&&(typeof handle!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(handle)))invalid('invalid opaque capability');
     if(!['summary','browse','export'].includes(intent)||input.kind==='report'&&(intent==='summary'&&(input.cut!==undefined||input.cursor!==undefined)||intent==='export'&&input.cut!==undefined||input.cursor!==undefined)
       ||input.kind!=='report'&&(!input.cut||input.intent!==undefined)||input.kind!=='events'&&(input.cursor!==undefined||input.pageSize!==undefined))invalid('invalid intent or continuation');
@@ -303,22 +320,42 @@ export async function readCompleteUsage(env:Env,verify:UsageVerifier,input:Compl
       const root=await registry<{purpose:'browse'|'export';base:CompleteUsageQuery;capture:PrivateCapture}>('read',{binding,cut:input.cut,query});
       capture=root.capture;base=root.base;purpose=root.purpose;
       if(!capture||!Array.isArray(capture.vector)||stable(capture.vector.map(({tenantId,policyId})=>({tenantId,policyId})))!==stable(resolved.addresses))failComplete('restart','authority');
-      sizes=input.kind==='validate'?[]:await op.map(capture.vector,p=>shardCall<UsageCandidateSize>(env,op,p,{action:'preflight',query,cut:p.cut}));
+      sizes=input.kind!=='report'?[]:await op.map(capture.vector,p=>shardCall<UsageCandidateSize>(env,op,p,{action:'preflight',query,cut:p.cut,allowance:negotiate}).then(probed));
     }else{
       if(intent!=='summary'){const reserved=await registry<{operation:string}>('reserve',{binding,purpose:intent,base:query});operation=reserved.operation;}
       const from=Date.now();
-      const cuts=await op.map(resolved.addresses,p=>shardCall<{cut:UsageVisibilityCut;work:UsageCandidateSize}>(env,op,p,{action:'capture',query}));
-      sizes=cuts.map(c=>c.work);checkSize(sizes);
+      const cuts=await op.map(resolved.addresses,p=>shardCall<{cut:UsageVisibilityCut;work:UsageCandidateSize}>(env,op,p,{action:'capture',query,allowance:negotiate}).then(c=>{probed(c?.work);return c;}));
       capture={...(input.requestedFrom!==undefined?{requestedFrom:input.requestedFrom}:{}),vector:resolved.addresses.map((p,i)=>({...p,cut:cuts[i].cut})),effectiveFrom:Math.max(query.from,...cuts.map(c=>c.cut.floor)),capturedBetween:{from,to:Math.max(from,Date.now())}};
       if(capture.effectiveFrom>=query.to)return {kind:'outside_retained_range',effectiveFrom:capture.effectiveFrom,requestedTo:query.to};
       query={...query,from:capture.effectiveFrom};
+      // A shard measured from its own earlier floor is remeasured at the common start when that
+      // start moves into another cell slot (the cell/raw split changes) or when it was over a limit.
+      const start=capture.effectiveFrom,slot=(at:number)=>Math.ceil(at/reportCellSlotMs);
+      sizes=await op.map(capture.vector,async(p,i)=>{const work=cuts[i].work,measuredFrom=Math.min(query.to,p.cut.floor);
+        const remeasure=work?.plan!==undefined&&measuredFrom!==start&&(work.plan==='cells'&&slot(measuredFrom)!==slot(start)||!fitsShard(work));
+        return remeasure?shardCall<UsageCandidateSize>(env,op,p,{action:'preflight',query,cut:p.cut,allowance:negotiate}).then(probed):work;});
     }
     let value:CompleteUsageReport|CompleteUsageEvents|{valid:true};const coverage=coverageFor(resolved,capture,base);
     if(input.kind==='validate')value={valid:true};
     else if(input.kind==='events'){
-      const limit=input.pageSize??25;if(!Number.isInteger(limit)||limit<1||limit>100)invalid('page size must be 1..100');checkSize(sizes);
+      const limit=input.pageSize??25;if(!Number.isInteger(limit)||limit<1||limit>100)invalid('page size must be 1..100');
       const before=input.cursor?await registry<{at:number;id:string;shard:number}>('cursor',{binding,cut:input.cut,query,pageSize:limit,cursor:input.cursor}):undefined;
-      const pages=await op.map(capture.vector,async(p,i)=>{op.work(sizes[i]);return shardCall<{events:CompleteUsageEvent[];hasMore:boolean}>(env,op,p,{action:'events',query,cut:p.cut,limit,before:before?{at:before.at,id:before.id}:undefined,includeEqualId:before?i<before.shard:false,allowance:sizes[i]});});
+      // Measure the exact keyset page, not the complete range. Older shards ignore
+      // the page fields in preflight and retain their full-range allowance.
+      const pageArgs=(i:number)=>({limit,before:before?{at:before.at,id:before.id}:undefined,includeEqualId:before?i<before.shard:false});
+      const measure=(p:PrivateCapture['vector'][number],i:number,allowance?:UsageCandidateSize)=>shardCall<UsageCandidateSize>(env,op,p,{action:'preflight',query,cut:p.cut,...pageArgs(i),allowance}).then(probed);
+      if(Object.keys(query.filters).some(key=>key!=='user')){
+        // Filtering retained metadata classifies JSON during measurement. Hand the
+        // remaining shared budget to each shard before it can do that work.
+        sizes=[];let rows:number=limits.totalRows,bytes:number=limits.inputBytes;
+        for(const [i,p] of capture.vector.entries()){
+          const size=await measure(p,i,{rows:Math.min(rows,limits.candidateRows),bytes});checkSize([size]);
+          rows-=size.rows;bytes-=size.bytes;if(rows<0||bytes<0)failComplete('unavailable','capacity');sizes.push(size);
+        }
+      }else sizes=await op.map(capture.vector,(p,i)=>measure(p,i));
+      const permitted=allowances(sizes);
+      const pages=await op.map(capture.vector,async(p,i)=>{op.work(permitted[i]);const page=await shardCall<{events:CompleteUsageEvent[];hasMore:boolean;work:UsageCandidateSize}>(env,op,p,{action:'events',query,cut:p.cut,...pageArgs(i),allowance:permitted[i]});
+        if(page.work?.plan!==sizes[i].plan)failComplete('unavailable','source');return page;});
       const ordered=pages.flatMap((p,shard)=>{if(!Array.isArray(p.events)||p.events.length>limit||typeof p.hasMore!=='boolean')failComplete('unavailable','source');return p.events.map(event=>({event,shard}));}).sort(eventOrder);
       for(let i=0;i<ordered.length;i++){const row=ordered[i];nonnegative(row.event.occurredAt);if(typeof row.event.id!=='string'||row.event.occurredAt<query.from||row.event.occurredAt>=query.to||i&&eventOrder(ordered[i-1],row)>=0||before&&eventOrder({event:{occurredAt:before.at,id:before.id} as CompleteUsageEvent,shard:before.shard},row)>=0)failComplete('unavailable','source');}
       const selected=ordered.slice(0,limit),last=selected.at(-1),more=ordered.length>limit||pages.some(p=>p.hasMore);
@@ -358,52 +395,4 @@ export async function readCompleteUsage(env:Env,verify:UsageVerifier,input:Compl
       const cleanup=new CompleteOperation();try{await cleanup.call(authorityStub(env),'/usage-cuts/release',{binding,operation});}catch{}finally{cleanup.close();}
     }
   }
-}
-
-function eventAdditives(event: CompleteUsageEvent): UsageAdditives {
-  const result=emptyAdditives(),m=result.metrics;m.calls=1;
-  if(!['generation','utility'].includes(event.callKind)||typeof event.status!=='string'||!lanes.has(event.lane)||!classes.has(event.costClass))failComplete('unavailable','source');
-  m.generationCalls=Number(event.callKind==='generation');m.utilityCalls=Number(event.callKind==='utility');
-  m.successfulCalls=Number(event.status==='success');m.deniedCalls=Number(event.status==='denied');m.errorCalls=Number(event.status!=='success'&&event.status!=='denied');
-  for(const [field,present] of usageTokenFields){
-    const v=event[field];if(v!==null){nonnegative(v);m[field]=v;m[present]=1;}
-  }
-  if(event.recordedChargeMicros!==null){nonnegative(event.recordedChargeMicros);result.recordedChargeMicros=event.recordedChargeMicros;result.chargeReportedCalls=1;}
-  if(event.reportingCostMicros!==null)nonnegative(event.reportingCostMicros);
-  if(event.costClass==='unknown'&&event.reportingCostMicros!==null||event.costClass!=='unknown'&&event.reportingCostMicros===null)failComplete('unavailable','source');
-  result.costs=[{lane:event.lane,costClass:event.costClass,calls:1,amountMicros:event.reportingCostMicros??0}];return result;
-}
-/** Private mechanics only; CSV/JSON download adapters and UI remain Unit4. A new
- * export always captures independently using the selected ABSOLUTE refinement.
- * No file/result escapes until every additive and final vector check passes. */
-export async function exportCompleteUsage(env:Env,verify:UsageVerifier,query:CompleteUsageQuery,signal?:AbortSignal):Promise<CompleteUsageOutcome<{report:CompleteUsageReport;events:CompleteUsageEvent[]}>>{
-  let report:CompleteUsageReport|undefined;
-  try{
-    const opened=await readCompleteUsage(env,verify,{kind:'report',intent:'export',query},signal);
-    if(opened.kind!=='complete')return opened;
-    report=opened.value as CompleteUsageReport;if(!report.cut||report.metrics.calls>50000)failComplete('unavailable','capacity');
-    const events:CompleteUsageEvent[]=[],seen=new Set<string>(),total=emptyAdditives();let cursor:string|undefined,bytes=usageJsonBytes(report)+32,last:CompleteUsageEvent|undefined;
-    do{
-      if(signal?.aborted)failComplete('unavailable','cancelled');
-      const read=await readCompleteUsage(env,verify,{kind:'events',cut:report.cut,query:report.query,pageSize:100,cursor},signal);
-      if(read.kind!=='complete')return read;
-      const page=read.value as CompleteUsageEvents;
-      if(page.nextCursor&&(seen.has(page.nextCursor)||!page.events.length))failComplete('unavailable','source');
-      for(const event of page.events){
-        if(last&&(event.occurredAt>last.occurredAt||event.occurredAt===last.occurredAt&&compareUsageIds(event.id,last.id)>0))failComplete('unavailable','source');
-        // Equal ID/time on different shards is deliberately NOT deduplicated.
-        addAdditives(total,eventAdditives(event));bytes+=usageJsonBytes(event)+1;
-        if(events.length>=50000||bytes>16*1024*1024)failComplete('unavailable','capacity');
-        events.push(event);last=event;
-      }
-      cursor=page.nextCursor??undefined;if(cursor)seen.add(cursor);
-    }while(cursor);
-    const expected:UsageAdditives={metrics:report.metrics,recordedChargeMicros:report.recordedChargeMicros,chargeReportedCalls:report.chargeReportedCalls,costs:report.costs};
-    if(!equalAdditives(total,expected))failComplete('unavailable','source');
-    const final=await readCompleteUsage(env,verify,{kind:'validate',cut:report.cut,query:report.query},signal);
-    if(final.kind!=='complete')return final;
-    if(signal?.aborted)failComplete('unavailable','cancelled');
-    return {kind:'complete',value:{report,events}};
-  }catch(error){if(error instanceof CompleteFailure)return error.outcome;if(error instanceof HttpError&&error.status===422)return {kind:'unavailable',reason:'capacity'};if(signal?.aborted)return {kind:'unavailable',reason:'cancelled'};return {kind:'unavailable',reason:'source'};}
-  finally{if(report?.cut)await readCompleteUsage(env,verify,{kind:'release',cut:report.cut,query:report.query}).catch(()=>undefined);}
 }

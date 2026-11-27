@@ -50,7 +50,8 @@ export function useUsageReport({request,scope,active,full}:UsageHookOptions,audi
     }).catch(error=>{if(publish())setReport(old=>({key:queryKey,value:old.key===queryKey&&old.value?old.value:lastReport.current,loading:false,error:error instanceof Error?error.message:String(error)}));});},150);
     return ()=>{current=false;clearTimeout(timer);controller.abort();};
   },[active,queryKey,rangeError]);
-  const eventKey=queryKey+':'+(visible.value?.cut??'')+':'+(page.cursor??'');
+  const firstEventKey=queryKey+':'+(visible.value?.cut??'')+':';
+  const eventKey=firstEventKey+(page.cursor??'');
   useEffect(()=>{
     if(!active||!full||!eventsShown||visible.error||!visible.value?.cut)return;
     const cached=pages.current.get(eventKey);if(cached){setEvents({key:eventKey,value:cached,loading:false,error:''});return;}
@@ -90,13 +91,41 @@ export function useUsageReport({request,scope,active,full}:UsageHookOptions,audi
   const shownEvents=events.key===eventKey&&scope.isCurrent()?events:{key:eventKey,loading:active&&eventsShown,error:''};
   const shownExport:typeof exportState=active&&scope.isCurrent()&&exportState.key===scopeKey?exportState:{key:scopeKey,busy:false,message:''};
   async function startExport(format:'csv'|'json'){
-    if(!visible.value||!selectedQuery||visible.error||exportController.current)return;const controller=new AbortController(),generation=lifetime.current;const current=()=>generation===lifetime.current&&scope.isCurrent();exportController.current=controller;setExportState({key:scopeKey,busy:true,message:'Capturing refreshed snapshot…'});
-    try{const file=await exportRefreshedUsage({request,origin:scope.origin,audience,query:selectedQuery,rangeInput:selection.rangeInput,signal:controller.signal,isCurrent:current,onReport:value=>{if(current()&&!controller.signal.aborted)setExportState({key:scopeKey,busy:true,message:'Reconciling refreshed snapshot; totals may differ from the displayed report.',report:value});}},format);
-      if(current()&&!controller.signal.aborted){downloadUsageFile(file);setExportState(s=>({...s,busy:false,message:'Refreshed snapshot downloaded.'}));}
-    }catch(error){if(current())setExportState(s=>({...s,busy:false,message:error instanceof Error?error.message:String(error)}));}
-    finally{if(exportController.current===controller)exportController.current=null;}
+    if (!visible.value || !selectedQuery || visible.error || exportController.current) return;
+    const controller = new AbortController(), generation = lifetime.current;
+    const current = () => generation === lifetime.current && scope.isCurrent();
+    const previous = shownExport.report;
+    let captured: CompleteUsageReport | undefined;
+    const publish = (busy: boolean, message: string, report = previous) => {
+      if (current()) setExportState({key: scopeKey, busy, message, report});
+    };
+    exportController.current = controller;
+    publish(true, 'Capturing refreshed snapshot…');
+    try {
+      const file = await exportRefreshedUsage({request, origin: scope.origin, audience, query: selectedQuery,
+        rangeInput: selection.rangeInput, signal: controller.signal, isCurrent: current, onReport: value => {
+          // A capture is not a receipt: reconciliation and final validation still have to succeed.
+          captured = value;
+          if (!controller.signal.aborted) publish(true, 'Checking the captured events before download…');
+        }}, format);
+      if (!current()) return;
+      controller.signal.throwIfAborted();
+      downloadUsageFile(file);
+      publish(false, 'Refreshed snapshot downloaded.', captured);
+    } catch (error) {
+      publish(false, controller.signal.aborted ? 'Export cancelled. No file was downloaded.'
+        : 'No file was downloaded. ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      if (exportController.current === controller) exportController.current = null;
+    }
   }
   return {audience,report:visible,events:shownEvents,query:visible.value?.query,requestedQuery:selection.query,queryTemplate:selection.presetQuery,rangeInput:selection.rangeInput,selectedQuery,customRange,refine,reload,showEvents,eventsShown,page:page.number,
+    // Only the cursor trail is exhausted. Page one needs the same cut and query, not a new report.
+    firstEventPage: audience === 'admin' && page.number > 1 && !page.previous.length && shownEvents.value && !visible.error
+      ? () => {
+        pages.current.delete(firstEventKey);
+        setPage({cursor: null, previous: [], number: 1});
+      } : undefined,
     retryEvents:()=>{pages.current.delete(eventKey);setEventsRevision(r=>r+1);},
     rollingDays:selection.query?undefined:selection.days,
     preset:(days:7|30,template?:UsageQueryTemplate)=>{setRangeError('');cache.current.clear();const q=template??visible.value?.query;setSelection({days,presetQuery:q?{...q,grain:'day',rankOffset:0}:undefined});setRevision(r=>r+1);},

@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
 import { validateVydraJobId } from "./vydra-jobs.ts";
 

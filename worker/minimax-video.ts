@@ -1,7 +1,7 @@
 import type { ManagedObservation, ManagedReadContext } from "./managed-lifecycle-types.ts";
 import { readVideoJson, readVideoFileBytes } from "./minimax-video-operation.ts";
 import type { InputRetirement } from "./input-retirement.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const miniMaxVideoProtocol = "minimax.video";
 export const miniMaxVideoModels = ["MiniMax-Hailuo-2.3", "MiniMax-Hailuo-2.3-Fast", "MiniMax-Hailuo-02", "I2V-01-Director", "I2V-01-live", "I2V-01"] as const;

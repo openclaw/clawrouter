@@ -1,5 +1,6 @@
 import type { ManagedLifecycleAdapter, ManagedObservation, ManagedReadContext } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
+import { readMediaJson } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./media-wire.ts";
 
 export const togetherVideoModels = ["Wan-AI/wan2.7-t2v", "Wan-AI/wan2.7-i2v", "minimax/hailuo-02"] as const;
 const models: ReadonlySet<string> = new Set(togetherVideoModels);

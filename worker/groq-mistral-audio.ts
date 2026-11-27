@@ -1,5 +1,5 @@
 import { inputRetirement } from "./input-retirement.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import type { TranscriptionUpload } from "./transcription-body.ts";
 
 export const groqMistralAudio = {

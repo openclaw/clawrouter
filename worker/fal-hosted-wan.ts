@@ -1,4 +1,4 @@
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 
 export const falHostedWanModels = ["fal-ai/wan/v2.2-a14b/text-to-video", "fal-ai/wan/v2.2-a14b/image-to-video"] as const;
 export const falRetiredKlingModel = "fal-ai/kling-video/v2.1/master/text-to-video";

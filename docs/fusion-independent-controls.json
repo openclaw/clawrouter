@@ -1,0 +1,1183 @@
+{
+  "schema": "fusion-flat-independent-controls-v1",
+  "date": "2026-11-27",
+  "scope": "Seven fixed qualifying repairs/features in two small public JavaScript repositories, from eight prospectively selected candidates. One draw per independent arm. Development evidence, not production qualification or training-data decontamination.",
+  "policy": {
+    "models": [
+      "openai/gpt-6-luna",
+      "openai/gpt-6.1-terra"
+    ],
+    "reasoningEffort": "medium",
+    "maxOutputTokens": 8192,
+    "requestTimeoutMs": 180000,
+    "artifactFormat": "anchored-edits",
+    "fallback": "one fresh strong call after public rejection",
+    "cheapControl": "one independent call with exactly the cascade draft settings",
+    "orderSeed": "flat-confirmation-three-arm-v1",
+    "maximumCalls": 28,
+    "maximumPlannedCostMicros": 1094028,
+    "stageBudgetMicros": 4000000,
+    "armCapMicros": 500000,
+    "fullLabelsUsedForRouting": false
+  },
+  "exposure": {
+    "protocols": 856,
+    "journals": 170,
+    "bytes": 936503907,
+    "selectedIdsAndRevisionsAbsent": true
+  },
+  "candidates": [
+    {
+      "id": "rfdc-8c6bfec5610a",
+      "repository": "rfdc",
+      "base": "578c71ed2683f24ff2762220ad6b7466148aa5e6",
+      "oracle": "8c6bfec5610aa47eee23f624db692c751a56268f",
+      "instruction": "\u2728 Add `constructorHandlers` option (#40)",
+      "qualified": true,
+      "exclusion": null,
+      "expectedTests": {
+        "public": 294,
+        "full": 299
+      },
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 299
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 299
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 294
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 294
+        }
+      }
+    },
+    {
+      "id": "rfdc-1f1ff561895d",
+      "repository": "rfdc",
+      "base": "56db370b698be713af71882ddcd548d53e1e0e08",
+      "oracle": "1f1ff561895d8454041fac1ac55d35f57818e675",
+      "instruction": "fix: support cloning complex ArrayBuffers",
+      "qualified": true,
+      "exclusion": null,
+      "expectedTests": {
+        "public": 261,
+        "full": 262
+      },
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 262
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 262
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 261
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 261
+        }
+      }
+    },
+    {
+      "id": "rfdc-56db370b698b",
+      "repository": "rfdc",
+      "base": "de4fe446886d31e8921b6f253cdb3babc36e029b",
+      "oracle": "56db370b698be713af71882ddcd548d53e1e0e08",
+      "instruction": "feat: support cloning TypedArrays",
+      "qualified": true,
+      "exclusion": null,
+      "expectedTests": {
+        "public": 225,
+        "full": 226
+      },
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 226
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 226
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 225
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 225
+        }
+      }
+    },
+    {
+      "id": "fast-safe-stringify-ce7db512c3b3",
+      "repository": "fast-safe-stringify",
+      "base": "377166e552eb1be251eddc7f1793df84747468ab",
+      "oracle": "ce7db512c3b3286877a992ab493c8fe8c0fed5e9",
+      "instruction": "fix: add max depth limit and max edges limit (#56)",
+      "qualified": true,
+      "exclusion": null,
+      "expectedTests": {
+        "public": 54,
+        "full": 56
+      },
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 56
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 56
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 54
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 54
+        }
+      }
+    },
+    {
+      "id": "fast-safe-stringify-a255cd19fd3a",
+      "repository": "fast-safe-stringify",
+      "base": "0e011f068962e8f8974133a47afcabfc003f2183",
+      "oracle": "a255cd19fd3acd979677d06eaa5c87b0573af030",
+      "instruction": "Make sure we leave objects in good standing if there is an error (#52)",
+      "qualified": true,
+      "exclusion": null,
+      "expectedTests": {
+        "public": 50,
+        "full": 52
+      },
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 52
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 52
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 50
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 50
+        }
+      }
+    },
+    {
+      "id": "fast-safe-stringify-235008507e30",
+      "repository": "fast-safe-stringify",
+      "base": "a8e1073e2213ff74d5457674a053b46da0c9c6e4",
+      "oracle": "235008507e3061559d55e1eba8acab7748ae13fe",
+      "instruction": "Support circular child values from getters",
+      "qualified": false,
+      "exclusion": "Unchanged baseline already passes both public and full tests.",
+      "expectedTests": {
+        "public": 43,
+        "full": 50
+      },
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 50
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 50
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 43
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 43
+        }
+      }
+    },
+    {
+      "id": "fast-safe-stringify-42a3416c8f0e",
+      "repository": "fast-safe-stringify",
+      "base": "af200135e2fdb39caea27143b2ae227909b86661",
+      "oracle": "42a3416c8f0e5dd5927745f26ab386f1b6ca1842",
+      "instruction": "Handle simple non-configurable, circular getters",
+      "qualified": true,
+      "exclusion": null,
+      "expectedTests": {
+        "public": 45,
+        "full": 48
+      },
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 48
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 48
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 45
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 45
+        }
+      }
+    },
+    {
+      "id": "fast-safe-stringify-af200135e2fd",
+      "repository": "fast-safe-stringify",
+      "base": "5b4bbf48f01c42fcee3101266ec9045361df4b95",
+      "oracle": "af200135e2fdb39caea27143b2ae227909b86661",
+      "instruction": "Restore getters after stringification",
+      "qualified": true,
+      "exclusion": null,
+      "expectedTests": {
+        "public": 44,
+        "full": 46
+      },
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 46
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 46
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 44
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 44
+        }
+      }
+    }
+  ],
+  "records": [
+    {
+      "caseId": "rfdc-8c6bfec5610a",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "costMicros": 22929,
+      "normalizedMicros": 20984,
+      "elapsedMs": 54814.264792,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 299,
+        "expectedTests": 299
+      }
+    },
+    {
+      "caseId": "rfdc-8c6bfec5610a",
+      "strategy": "cheap",
+      "publicPassed": false,
+      "passed": false,
+      "escalated": false,
+      "costMicros": 899,
+      "normalizedMicros": 1536,
+      "elapsedMs": 13056.801166999998,
+      "full": {
+        "valid": false,
+        "passed": false
+      }
+    },
+    {
+      "caseId": "rfdc-8c6bfec5610a",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 18702,
+      "normalizedMicros": 25422,
+      "elapsedMs": 47326.383334,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 299,
+        "expectedTests": 299
+      }
+    },
+    {
+      "caseId": "rfdc-1f1ff561895d",
+      "strategy": "cheap",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1048,
+      "normalizedMicros": 894,
+      "elapsedMs": 10032.046084000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 262,
+        "expectedTests": 262
+      }
+    },
+    {
+      "caseId": "rfdc-1f1ff561895d",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 493,
+      "normalizedMicros": 1046,
+      "elapsedMs": 11743.664041000011,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 262,
+        "expectedTests": 262
+      }
+    },
+    {
+      "caseId": "rfdc-1f1ff561895d",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 13332,
+      "normalizedMicros": 11794,
+      "elapsedMs": 18184.279916,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 262,
+        "expectedTests": 262
+      }
+    },
+    {
+      "caseId": "rfdc-56db370b698b",
+      "strategy": "cheap",
+      "publicPassed": false,
+      "passed": false,
+      "escalated": false,
+      "costMicros": 1380,
+      "normalizedMicros": 1237,
+      "elapsedMs": 11861.905041999999,
+      "full": {
+        "valid": false,
+        "passed": false
+      }
+    },
+    {
+      "caseId": "rfdc-56db370b698b",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 686,
+      "normalizedMicros": 1198,
+      "elapsedMs": 13644.788625000016,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 226,
+        "expectedTests": 226
+      }
+    },
+    {
+      "caseId": "rfdc-56db370b698b",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 12477,
+      "normalizedMicros": 11053,
+      "elapsedMs": 17660.410291999986,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 226,
+        "expectedTests": 226
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-ce7db512c3b3",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 25443,
+      "normalizedMicros": 23306,
+      "elapsedMs": 38556.102625,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 56,
+        "expectedTests": 56
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-ce7db512c3b3",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "costMicros": 20906,
+      "normalizedMicros": 28812,
+      "elapsedMs": 74098.09054199999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 56,
+        "expectedTests": 56
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-ce7db512c3b3",
+      "strategy": "cheap",
+      "publicPassed": false,
+      "passed": false,
+      "escalated": false,
+      "costMicros": 1322,
+      "normalizedMicros": 2092,
+      "elapsedMs": 21994.074083000014,
+      "full": {
+        "valid": false,
+        "passed": false,
+        "tests": 52,
+        "expectedTests": 56
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-a255cd19fd3a",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 20632,
+      "normalizedMicros": 18757,
+      "elapsedMs": 29715.151375000016,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 52,
+        "expectedTests": 52
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-a255cd19fd3a",
+      "strategy": "cheap",
+      "publicPassed": false,
+      "passed": false,
+      "escalated": false,
+      "costMicros": 1878,
+      "normalizedMicros": 1690,
+      "elapsedMs": 15129.459792000009,
+      "full": {
+        "valid": false,
+        "passed": false
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-a255cd19fd3a",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 795,
+      "normalizedMicros": 1470,
+      "elapsedMs": 15925.097416999983,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 52,
+        "expectedTests": 52
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-42a3416c8f0e",
+      "strategy": "cheap",
+      "publicPassed": false,
+      "passed": false,
+      "escalated": false,
+      "costMicros": 2828,
+      "normalizedMicros": 2668,
+      "elapsedMs": 30051.907084000006,
+      "full": {
+        "valid": false,
+        "passed": false
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-42a3416c8f0e",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 29347,
+      "normalizedMicros": 27741,
+      "elapsedMs": 54799.36108299997,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 48,
+        "expectedTests": 48
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-42a3416c8f0e",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "costMicros": 20985,
+      "normalizedMicros": 27664,
+      "elapsedMs": 68910.75033399998,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 48,
+        "expectedTests": 48
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-af200135e2fd",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1568,
+      "normalizedMicros": 1413,
+      "elapsedMs": 15146.412708999938,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 46,
+        "expectedTests": 46
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-af200135e2fd",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 20537,
+      "normalizedMicros": 18993,
+      "elapsedMs": 33675.25358300004,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 46,
+        "expectedTests": 46
+      }
+    },
+    {
+      "caseId": "fast-safe-stringify-af200135e2fd",
+      "strategy": "cheap",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 642,
+      "normalizedMicros": 1198,
+      "elapsedMs": 11622.31408400007,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 46,
+        "expectedTests": 46
+      }
+    }
+  ],
+  "calls": [
+    {
+      "caseId": "rfdc-8c6bfec5610a",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1973,
+      "normalizedMicros": 1796,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 7074,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2175
+      },
+      "disposition": "complete",
+      "elapsedMs": 15563.170583000001,
+      "protocolSha256": "dc6241c9880acd1558028a25a07fe70a92f9972019b7beb1ae5f68720c2fb5b9",
+      "journalSha256": "9c2db2464266cff52f6866060176fd21ffd4d15429276afde27f31335cdb1686"
+    },
+    {
+      "caseId": "rfdc-8c6bfec5610a",
+      "strategy": "cascade",
+      "role": "fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 20956,
+      "normalizedMicros": 19188,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 7074,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2422
+      },
+      "disposition": "complete",
+      "elapsedMs": 33778.573292,
+      "protocolSha256": "82cdc685bb21d050c0871ef5ae69c36cce9b1a9a23a099d9da6e46d49cf02787",
+      "journalSha256": "a7b435976d115a8535d0140c42b8de79c0554d9ade2a1e189c1b2d3381681181"
+    },
+    {
+      "caseId": "rfdc-8c6bfec5610a",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 899,
+      "normalizedMicros": 1536,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 7074,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1655
+      },
+      "disposition": "complete",
+      "elapsedMs": 11449.773416999997,
+      "protocolSha256": "ad441d681f284e447b459d042341e2afa9734f0e746b72a0be5252b54e72f27b",
+      "journalSha256": "b3ee29434b859b968b8ecacb8a56663344871a44f4e52e4304525a4772f73df9"
+    },
+    {
+      "caseId": "rfdc-8c6bfec5610a",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 18702,
+      "normalizedMicros": 25422,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 7074,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 3669
+      },
+      "disposition": "complete",
+      "elapsedMs": 41520.872166999994,
+      "protocolSha256": "28b8d5710da8b5db075474bc6521a5145adeb7c4a886d74a41ff2d2ed336763b",
+      "journalSha256": "20ae9f75fe4b7a38353d41cf1cc6f50ae88b7f90b96db4032a7799126060f40f"
+    },
+    {
+      "caseId": "rfdc-1f1ff561895d",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1048,
+      "normalizedMicros": 894,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 6151,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 557
+      },
+      "disposition": "complete",
+      "elapsedMs": 5231.369707999998,
+      "protocolSha256": "d1a024cd06e0299c75c41df94b4a6ca38eb42de2b226a9dce58a52985b6a873b",
+      "journalSha256": "18bf9b7cc0bb62c376ed996333d0f69e35ea36c428e8fc7605e413d1404ff762"
+    },
+    {
+      "caseId": "rfdc-1f1ff561895d",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 493,
+      "normalizedMicros": 1046,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 6151,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 861
+      },
+      "disposition": "complete",
+      "elapsedMs": 6949.645209000009,
+      "protocolSha256": "c5f4f5bd5539b4a950500be15677770eb4fc5dbd867a534976dd2ee3cc218cbd",
+      "journalSha256": "f108d50c2c15e3a12ef9f13fe2863aaf73ad688e7059bb45a3ce47dc154c05b0"
+    },
+    {
+      "caseId": "rfdc-1f1ff561895d",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 13332,
+      "normalizedMicros": 11794,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 6151,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1128
+      },
+      "disposition": "complete",
+      "elapsedMs": 13786.711666999996,
+      "protocolSha256": "daf69955f99218f4ae3cad237cb54f9244f64d2c269c69daac9b4493bcf72bfb",
+      "journalSha256": "f540d0bf44d20d5050cc02564a5f0fe3fd8c4c3c41b7e087c6371395244d3953"
+    },
+    {
+      "caseId": "rfdc-56db370b698b",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1380,
+      "normalizedMicros": 1237,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 5695,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1334
+      },
+      "disposition": "complete",
+      "elapsedMs": 10394.054667000019,
+      "protocolSha256": "f028e0adae57370c6d5061e611213e8d42060bc4ad540f53e506671e667d3d6f",
+      "journalSha256": "5e284684253921aa14dcfd7894461656ffe62d6bcd9cc535b6d23b272ff472fd"
+    },
+    {
+      "caseId": "rfdc-56db370b698b",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 686,
+      "normalizedMicros": 1198,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 5695,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1256
+      },
+      "disposition": "complete",
+      "elapsedMs": 8622.834374999977,
+      "protocolSha256": "ee806e859c2429b768f3c639b6b722c6e0bdba89de61d739ab5e18a949e40ca0",
+      "journalSha256": "5ea5ea8d1fa2792c3103d2c2c1581289138c808b66c3d5e70ac93aacfa49cd00"
+    },
+    {
+      "caseId": "rfdc-56db370b698b",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 12477,
+      "normalizedMicros": 11053,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 5695,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1071
+      },
+      "disposition": "complete",
+      "elapsedMs": 13115.417167000007,
+      "protocolSha256": "1ba42d08d9e0276f40af093d6a6bdd685ba38cb4b025c2a19b1d9b1379b196af",
+      "journalSha256": "8bd3d08086c0068c6d894afc0489be202401208e2542dfdd6b43b4179f5fbfde"
+    },
+    {
+      "caseId": "fast-safe-stringify-ce7db512c3b3",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 25443,
+      "normalizedMicros": 23306,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 8548,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2951
+      },
+      "disposition": "complete",
+      "elapsedMs": 34107.753916999995,
+      "protocolSha256": "00af01b1f834d4763f47fc531a2986809afe9a7b5a2c6b8f27f1e6610919445e",
+      "journalSha256": "216f22f1473923a44317a0a8920efac251b85ec3f4c0eed0c4768b02946f3636"
+    },
+    {
+      "caseId": "fast-safe-stringify-ce7db512c3b3",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2800,
+      "normalizedMicros": 2586,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 8548,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 3461
+      },
+      "disposition": "complete",
+      "elapsedMs": 22315.31354199999,
+      "protocolSha256": "f5cf4c3933fbf3a0f1fa2428c1880ce509316a305029de049a8fb29c6e3642ad",
+      "journalSha256": "1f29916b33e93e4a3d1c38f59d149abee8f20192993af4acfa8856cbd5c6527d"
+    },
+    {
+      "caseId": "fast-safe-stringify-ce7db512c3b3",
+      "strategy": "cascade",
+      "role": "fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 18106,
+      "normalizedMicros": 26226,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 8548,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 3535
+      },
+      "disposition": "complete",
+      "elapsedMs": 40241.82329100004,
+      "protocolSha256": "145f22404f02c5af4845e13a06b4e049e7114aba3b5d4daa671840d548b035d3",
+      "journalSha256": "ddba7b948e7429414b1fd3e101d9ec3831c54db9cf7bf9f4a4c3fb08a61ee133"
+    },
+    {
+      "caseId": "fast-safe-stringify-ce7db512c3b3",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1322,
+      "normalizedMicros": 2092,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 8548,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2472
+      },
+      "disposition": "complete",
+      "elapsedMs": 18383.38837500004,
+      "protocolSha256": "4966c2743371f8d76b54b0ade80911b3e71d39a91da01713d225c90ee4c146a3",
+      "journalSha256": "e9b822d18764ec9bea2cda115254ccc85b11e32b22326bb093e5393e39164d38"
+    },
+    {
+      "caseId": "fast-safe-stringify-a255cd19fd3a",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 20632,
+      "normalizedMicros": 18757,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 7503,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2250
+      },
+      "disposition": "complete",
+      "elapsedMs": 25835.945000000007,
+      "protocolSha256": "ca6d51a56fed3411a48a8563d7be8b8fdbc1128d1ada9b23c8736c8a3d4b9547",
+      "journalSha256": "5b9229f0441ebeaca803b57e7e07b4d54d51936b969b17bb8fa2f3d19c114d57"
+    },
+    {
+      "caseId": "fast-safe-stringify-a255cd19fd3a",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1878,
+      "normalizedMicros": 1690,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 7503,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1878
+      },
+      "disposition": "complete",
+      "elapsedMs": 13579.498917000019,
+      "protocolSha256": "ec6e6df00b14a0bb5d50c6712d9a9104c6f53718c77734b6dbe95c25ec7aa96d",
+      "journalSha256": "cbf0c194e26ba8fc2d541eae526b398debbfbb73cb5e308712ad94e03c74e462"
+    },
+    {
+      "caseId": "fast-safe-stringify-a255cd19fd3a",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 795,
+      "normalizedMicros": 1470,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 7503,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1438
+      },
+      "disposition": "complete",
+      "elapsedMs": 10147.099500000011,
+      "protocolSha256": "5f676b75af67bbade6bcf86b94e3713d7839bb74fd62e2e82479e5cd1cdd0e51",
+      "journalSha256": "31abe2bc6edf20cc89ad962ec7e496c03dbf3a0fff9732a1d4d210241868cf3e"
+    },
+    {
+      "caseId": "fast-safe-stringify-42a3416c8f0e",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2828,
+      "normalizedMicros": 2668,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 6423,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 4049
+      },
+      "disposition": "complete",
+      "elapsedMs": 28388.400332999998,
+      "protocolSha256": "b3db4d80b0eb25e22bb6076df766e016c0d9e64b15243ebcdfede90f9479ac45",
+      "journalSha256": "7c03dead501330f9dee1311b9469274a6c1d73183293fdef484402efe2a25942"
+    },
+    {
+      "caseId": "fast-safe-stringify-42a3416c8f0e",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 29347,
+      "normalizedMicros": 27741,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 6423,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 4263
+      },
+      "disposition": "complete",
+      "elapsedMs": 49651.790708000015,
+      "protocolSha256": "3d39990e4915236760b19501530a690f34a44a86df20a474c1dce8fcdef05e4d",
+      "journalSha256": "755e1d928f04bc19baef960dcf1f8800a7fc62ba1133e3db35ee5033267c524f"
+    },
+    {
+      "caseId": "fast-safe-stringify-42a3416c8f0e",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1365,
+      "normalizedMicros": 1943,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 6423,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2600
+      },
+      "disposition": "complete",
+      "elapsedMs": 18414.022916999995,
+      "protocolSha256": "ca6ef237422787265a10dad5ad249a8b052dfce35086ec906c635d033d5ae2b7",
+      "journalSha256": "b4708bea6b17e1767d68bb45c2b481583fc014785f87256dab7f96431fa457b4"
+    },
+    {
+      "caseId": "fast-safe-stringify-42a3416c8f0e",
+      "strategy": "cascade",
+      "role": "fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 19620,
+      "normalizedMicros": 25721,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 6423,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 3859
+      },
+      "disposition": "complete",
+      "elapsedMs": 44871.84095900005,
+      "protocolSha256": "13c22db5f8996b4d61634ec3827ee21c7d8095ae81385311798a5b6398e3fb97",
+      "journalSha256": "0b110d8071ccc5b05cf561cc84208072d71f9570160842d3a44c4b341672682b"
+    },
+    {
+      "caseId": "fast-safe-stringify-af200135e2fd",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1568,
+      "normalizedMicros": 1413,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 6179,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1589
+      },
+      "disposition": "complete",
+      "elapsedMs": 11302.921500000055,
+      "protocolSha256": "1c087028a11332130c854997779b2c4594c824a13044d3c8518b2fbaa4ad3335",
+      "journalSha256": "b7142b035c15431935b75518ff3d75abf0c0c775aba160843c0ce804fef86e6a"
+    },
+    {
+      "caseId": "fast-safe-stringify-af200135e2fd",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 20537,
+      "normalizedMicros": 18993,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 6179,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2562
+      },
+      "disposition": "complete",
+      "elapsedMs": 29661.5082080001,
+      "protocolSha256": "71eb39aa51b44e88833777cd43bf13167fd5c8c347b9b3027dd019d8016ee2c2",
+      "journalSha256": "b59075817ee5ef5dfd5bee23caa133d3cfff88091d689ec244a23e483763c342"
+    },
+    {
+      "caseId": "fast-safe-stringify-af200135e2fd",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 642,
+      "normalizedMicros": 1198,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 6179,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1158
+      },
+      "disposition": "complete",
+      "elapsedMs": 8259.762791999965,
+      "protocolSha256": "e9be1d02b7946e9e4d21d76d9f615d33f5d298f147822ac60ef4da60036c4ce7",
+      "journalSha256": "70b6f6dcd66581aa479166f418c769515d8de8b37b5b1ccc8a3366148678cc9d"
+    }
+  ],
+  "summary": {
+    "strong": {
+      "passed": 7,
+      "costMicros": 140470,
+      "elapsedMs": 239916.942208
+    },
+    "cascade": {
+      "passed": 7,
+      "costMicros": 68362,
+      "elapsedMs": 254283.06845999992
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 3,
+    "escalations": 3,
+    "costRatio": 0.48666619206948103,
+    "elapsedRatio": 1.0598795821578326,
+    "costComparison": {
+      "costBasis": "invoice-and-cache-neutral-v1",
+      "strong": {
+        "costMicros": 140470,
+        "normalizedMicros": 137066
+      },
+      "cascade": {
+        "costMicros": 68362,
+        "normalizedMicros": 82587
+      },
+      "costRatio": 0.48666619206948103,
+      "normalizedCostRatio": 0.6025345454014854,
+      "invoiceCostScreen": true,
+      "normalizedCostScreen": true,
+      "costScreen": true
+    },
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": true,
+    "qualifiedProductionGain": false,
+    "cheap": {
+      "passed": 2,
+      "costMicros": 9997,
+      "elapsedMs": 113748.5073360001
+    },
+    "summaryPolicy": "routing-three-arm-v1",
+    "routingLead": true
+  },
+  "actualExperimentCostMicros": 218829,
+  "evidence": {
+    "protocolSha256": "c424e8ced62eb60aa62bf5c5bb84b06f5b2bda66bd45e879dbe38361a35cc510",
+    "resultSha256": "929f9297bdaf0657ebb8a6706cd6cb13ee3dee54711d764b7be10447b79a6cbf",
+    "terminalAuditSha256": "b6e4e90da5b64c009e62aa3942c0afa9fe0c80f36b3dff459d8fc54046f2b283",
+    "screenProtocolSha256": "2b879930e387e5ea74f485abd207e6d65edf743c2a983ed92a8c6c2e0cefd6ad",
+    "screenQualificationSha256": "a19db4e3f0d5af7424f3e13e2036eb1a979edff61a32ae21bd757b56e1935326",
+    "sourceSha": "d8225b013ca97278b1f1dc6c2f97f91023b3d66e",
+    "audited": true,
+    "rawEvidencePrivate": true,
+    "reproductionLimit": "Sanitized arithmetic and outcome recomputation only. Raw responses, source context and private harness are not bundled."
+  },
+  "tariffs": {
+    "openai/gpt-6-luna": {
+      "provider": "openai",
+      "upstream": "gpt-6-luna",
+      "price": {
+        "input": 1.0000000000000001e-07,
+        "cached": 1e-08,
+        "write": 1.25e-07,
+        "output": 5e-07,
+        "request": 0,
+        "tiers": []
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna"
+    },
+    "openai/gpt-6.1-terra": {
+      "provider": "openai",
+      "upstream": "gpt-6.1-terra",
+      "price": {
+        "input": 1e-06,
+        "cached": 5e-08,
+        "write": 1.25e-06,
+        "output": 5e-06,
+        "request": 0,
+        "tiers": []
+      },
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+    }
+  }
+}

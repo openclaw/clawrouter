@@ -1,0 +1,571 @@
+{
+  "schema": "fusion-parser-feedback-pilot.v1",
+  "task": {
+    "repository": "fastify/fast-content-type-parse",
+    "base": "b70aa8e7f113fc3228dd7271734380c6c75eceb4",
+    "reference": "3bd7cfe2bf1efcd4a466270878e05c22ff685706",
+    "publicLeafTests": 48,
+    "fullLeafTests": 96,
+    "independentTasks": 1,
+    "repetitions": 3,
+    "holdout": "safeParse API group; shares input tables with public parse group"
+  },
+  "models": [
+    "openai/gpt-6-luna",
+    "openai/gpt-6.1-terra"
+  ],
+  "reasoning": "low",
+  "maximumOutputTokens": {
+    "luna": 4096,
+    "terra": 8192
+  },
+  "costBasis": "observed token usage with frozen study tariffs; not an invoice",
+  "studies": {
+    "policy": {
+      "protocolSha256": "6cc2c26d19b3a6c5274106364ffb3f85e6bec475a67184b888aa8c63ca7d7a9f",
+      "resultSha256": "632b89f6a4b5fa8bdfcef72fa032b317a907507950d27b2fd2b95d27401a9d4a",
+      "auditSha256": "1a157069c85ddbe5167be9a4a2f5a07fe483ed8feed618dda827f98a7092ac8d",
+      "productionQualified": false,
+      "summary": {
+        "feedback": {
+          "passed": 3,
+          "falseAccepts": 0,
+          "cheapRepairAccepts": 0,
+          "strongFallbacks": 3,
+          "costMicros": 38797,
+          "meanWorkflowMs": 31759.082110999996
+        },
+        "retry": {
+          "passed": 3,
+          "falseAccepts": 0,
+          "cheapRepairAccepts": 0,
+          "strongFallbacks": 3,
+          "costMicros": 37482,
+          "meanWorkflowMs": 30028.244513666654
+        },
+        "strong": {
+          "passed": 3,
+          "falseAccepts": 0,
+          "cheapRepairAccepts": 0,
+          "strongFallbacks": 0,
+          "costMicros": 31714,
+          "meanWorkflowMs": 14142.192041999995
+        }
+      },
+      "rows": [
+        {
+          "repeat": 0,
+          "strategy": "feedback",
+          "publicPassed": true,
+          "fullPassed": true,
+          "costMicros": 13382,
+          "workflowMs": 33168.261166,
+          "calls": [
+            {
+              "directory": "r0/feedback/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1014,
+              "elapsedMs": 6280.016874999999,
+              "publicPassed": false,
+              "validArtifact": true
+            },
+            {
+              "directory": "r0/feedback/repair",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1110,
+              "elapsedMs": 6118.285666999998,
+              "publicPassed": false,
+              "validArtifact": true
+            },
+            {
+              "directory": "r0/feedback/fallback",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 11258,
+              "elapsedMs": 15111.6735,
+              "publicPassed": true,
+              "validArtifact": true
+            }
+          ]
+        },
+        {
+          "repeat": 0,
+          "strategy": "retry",
+          "publicPassed": true,
+          "fullPassed": true,
+          "costMicros": 12441,
+          "workflowMs": 27378.729457999994,
+          "calls": [
+            {
+              "directory": "r0/retry/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 962,
+              "elapsedMs": 5168.127957999997,
+              "publicPassed": false,
+              "validArtifact": false
+            },
+            {
+              "directory": "r0/retry/repair",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 931,
+              "elapsedMs": 5370.020083000003,
+              "publicPassed": false,
+              "validArtifact": true
+            },
+            {
+              "directory": "r0/retry/fallback",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 10548,
+              "elapsedMs": 12823.634208000003,
+              "publicPassed": true,
+              "validArtifact": true
+            }
+          ]
+        },
+        {
+          "repeat": 0,
+          "strategy": "strong",
+          "publicPassed": true,
+          "fullPassed": true,
+          "costMicros": 10823,
+          "workflowMs": 14784.395250000001,
+          "calls": [
+            {
+              "directory": "r0/strong/initial",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 10823,
+              "elapsedMs": 12764.131124999993,
+              "publicPassed": true,
+              "validArtifact": true
+            }
+          ]
+        },
+        {
+          "repeat": 1,
+          "strategy": "retry",
+          "publicPassed": true,
+          "fullPassed": true,
+          "costMicros": 12484,
+          "workflowMs": 33307.493208,
+          "calls": [
+            {
+              "directory": "r1/retry/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 985,
+              "elapsedMs": 5866.614625000002,
+              "publicPassed": false,
+              "validArtifact": true
+            },
+            {
+              "directory": "r1/retry/repair",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 921,
+              "elapsedMs": 4646.934582999995,
+              "publicPassed": false,
+              "validArtifact": false
+            },
+            {
+              "directory": "r1/retry/fallback",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 10578,
+              "elapsedMs": 12544.881374999997,
+              "publicPassed": true,
+              "validArtifact": true
+            }
+          ]
+        },
+        {
+          "repeat": 1,
+          "strategy": "strong",
+          "publicPassed": true,
+          "fullPassed": true,
+          "costMicros": 10433,
+          "workflowMs": 13568.096959000002,
+          "calls": [
+            {
+              "directory": "r1/strong/initial",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 10433,
+              "elapsedMs": 11807.513208999997,
+              "publicPassed": true,
+              "validArtifact": true
+            }
+          ]
+        },
+        {
+          "repeat": 1,
+          "strategy": "feedback",
+          "publicPassed": true,
+          "fullPassed": true,
+          "costMicros": 12851,
+          "workflowMs": 33963.93887500001,
+          "calls": [
+            {
+              "directory": "r1/feedback/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1058,
+              "elapsedMs": 7387.696083000003,
+              "publicPassed": false,
+              "validArtifact": true
+            },
+            {
+              "directory": "r1/feedback/repair",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1140,
+              "elapsedMs": 7193.114000000001,
+              "publicPassed": false,
+              "validArtifact": true
+            },
+            {
+              "directory": "r1/feedback/fallback",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 10653,
+              "elapsedMs": 12923.515709,
+              "publicPassed": true,
+              "validArtifact": true
+            }
+          ]
+        },
+        {
+          "repeat": 2,
+          "strategy": "strong",
+          "publicPassed": true,
+          "fullPassed": true,
+          "costMicros": 10458,
+          "workflowMs": 14074.083916999982,
+          "calls": [
+            {
+              "directory": "r2/strong/initial",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 10458,
+              "elapsedMs": 12236.179541999998,
+              "publicPassed": true,
+              "validArtifact": true
+            }
+          ]
+        },
+        {
+          "repeat": 2,
+          "strategy": "feedback",
+          "publicPassed": true,
+          "fullPassed": true,
+          "costMicros": 12564,
+          "workflowMs": 28145.046291999985,
+          "calls": [
+            {
+              "directory": "r2/feedback/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 838,
+              "elapsedMs": 4052.529500000004,
+              "publicPassed": false,
+              "validArtifact": false
+            },
+            {
+              "directory": "r2/feedback/repair",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1073,
+              "elapsedMs": 7315.9065420000115,
+              "publicPassed": false,
+              "validArtifact": true
+            },
+            {
+              "directory": "r2/feedback/fallback",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 10653,
+              "elapsedMs": 12527.022707999975,
+              "publicPassed": true,
+              "validArtifact": true
+            }
+          ]
+        },
+        {
+          "repeat": 2,
+          "strategy": "retry",
+          "publicPassed": true,
+          "fullPassed": true,
+          "costMicros": 12557,
+          "workflowMs": 29398.510874999978,
+          "calls": [
+            {
+              "directory": "r2/retry/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 989,
+              "elapsedMs": 6013.390667,
+              "publicPassed": false,
+              "validArtifact": false
+            },
+            {
+              "directory": "r2/retry/repair",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1075,
+              "elapsedMs": 7823.416875000024,
+              "publicPassed": false,
+              "validArtifact": true
+            },
+            {
+              "directory": "r2/retry/fallback",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 10493,
+              "elapsedMs": 11882.622124999994,
+              "publicPassed": true,
+              "validArtifact": true
+            }
+          ]
+        }
+      ],
+      "calls": 21,
+      "costMicros": 107993,
+      "timing": "workflow including public verification; excludes admission and final grading"
+    },
+    "diagnostics": {
+      "protocolSha256": "4bb4b05482bf1fe5237a545772b1af6c7e94ecf3feac59bc264986087750464c",
+      "resultSha256": "e4f8fa8808d963f79aec231376cd87cb60239b1510889b898ec14bd38b793397",
+      "auditSha256": "b3db55bb76096d6bf5b06b9486bddc4359781172aee87fd52c7a4cdd6cbea7b2",
+      "productionQualified": false,
+      "summary": {
+        "label": {
+          "passed": 1,
+          "validArtifacts": 3,
+          "falseAccepts": 0,
+          "costMicros": 3318,
+          "meanApiMs": 6503.891416666666
+        },
+        "detail": {
+          "passed": 0,
+          "validArtifacts": 2,
+          "falseAccepts": 0,
+          "costMicros": 3239,
+          "meanApiMs": 5655.638083333334
+        },
+        "all": {
+          "passed": 1,
+          "validArtifacts": 2,
+          "falseAccepts": 0,
+          "costMicros": 3112,
+          "meanApiMs": 4737.946777666664
+        }
+      },
+      "rows": [
+        {
+          "initialIndex": 0,
+          "initialDirectory": "r0/feedback/initial",
+          "arm": "label",
+          "costMicros": 1127,
+          "apiMs": 6968.046167,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 0,
+          "initialDirectory": "r0/feedback/initial",
+          "arm": "detail",
+          "costMicros": 1138,
+          "apiMs": 6762.551125,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 0,
+          "initialDirectory": "r0/feedback/initial",
+          "arm": "all",
+          "costMicros": 1005,
+          "apiMs": 4140.253124999999,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 1,
+          "initialDirectory": "r1/retry/initial",
+          "arm": "detail",
+          "costMicros": 1020,
+          "apiMs": 4736.626,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": false
+        },
+        {
+          "initialIndex": 1,
+          "initialDirectory": "r1/retry/initial",
+          "arm": "all",
+          "costMicros": 1051,
+          "apiMs": 5209.326499999999,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 1,
+          "initialDirectory": "r1/retry/initial",
+          "arm": "label",
+          "costMicros": 1110,
+          "apiMs": 6509.348957999999,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 2,
+          "initialDirectory": "r1/feedback/initial",
+          "arm": "all",
+          "costMicros": 1056,
+          "apiMs": 4864.260707999994,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": false
+        },
+        {
+          "initialIndex": 2,
+          "initialDirectory": "r1/feedback/initial",
+          "arm": "label",
+          "costMicros": 1081,
+          "apiMs": 6034.279125000001,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 2,
+          "initialDirectory": "r1/feedback/initial",
+          "arm": "detail",
+          "costMicros": 1081,
+          "apiMs": 5467.737125,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true
+        }
+      ],
+      "calls": 9,
+      "costMicros": 9669,
+      "timing": "API only; excludes verification"
+    },
+    "anchors": {
+      "protocolSha256": "9865aebceb9b4077248eb5152ddbeee77005f6ffd5107e06f7258fa524a595a8",
+      "resultSha256": "1801053677ce6ce4ece17eea420d6eca13a44486149babead79cadbd6420e0b2",
+      "auditSha256": "015ee7a13d634aacc19689a7864d310133ae2531489d498a6ba97a069fbbb2f8",
+      "productionQualified": false,
+      "summary": {
+        "fresh": {
+          "passed": 0,
+          "validArtifacts": 1,
+          "falseAccepts": 0,
+          "costMicros": 3008,
+          "meanApiMs": 6049.683611000003
+        },
+        "generic": {
+          "passed": 0,
+          "validArtifacts": 3,
+          "falseAccepts": 0,
+          "costMicros": 3516,
+          "meanApiMs": 7285.488388666668
+        },
+        "detail": {
+          "passed": 1,
+          "validArtifacts": 3,
+          "falseAccepts": 0,
+          "costMicros": 3254,
+          "meanApiMs": 6151.723611333332
+        }
+      },
+      "rows": [
+        {
+          "initialIndex": 0,
+          "initialDirectory": "r0/retry/initial",
+          "arm": "fresh",
+          "costMicros": 892,
+          "apiMs": 4100.087666,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": false
+        },
+        {
+          "initialIndex": 0,
+          "initialDirectory": "r0/retry/initial",
+          "arm": "generic",
+          "costMicros": 1213,
+          "apiMs": 7593.025375,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 0,
+          "initialDirectory": "r0/retry/initial",
+          "arm": "detail",
+          "costMicros": 1265,
+          "apiMs": 8219.465999999999,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 1,
+          "initialDirectory": "r2/feedback/initial",
+          "arm": "generic",
+          "costMicros": 1176,
+          "apiMs": 7648.801291,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 1,
+          "initialDirectory": "r2/feedback/initial",
+          "arm": "detail",
+          "costMicros": 1005,
+          "apiMs": 5714.316959,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 1,
+          "initialDirectory": "r2/feedback/initial",
+          "arm": "fresh",
+          "costMicros": 1031,
+          "apiMs": 6908.518625000004,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 2,
+          "initialDirectory": "r2/retry/initial",
+          "arm": "detail",
+          "costMicros": 984,
+          "apiMs": 4521.387875,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true
+        },
+        {
+          "initialIndex": 2,
+          "initialDirectory": "r2/retry/initial",
+          "arm": "fresh",
+          "costMicros": 1085,
+          "apiMs": 7140.444542000005,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": false
+        },
+        {
+          "initialIndex": 2,
+          "initialDirectory": "r2/retry/initial",
+          "arm": "generic",
+          "costMicros": 1127,
+          "apiMs": 6614.638500000001,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true
+        }
+      ],
+      "calls": 9,
+      "costMicros": 9778,
+      "timing": "API only; excludes verification"
+    }
+  },
+  "totalCalls": 39,
+  "totalCostMicros": 127440,
+  "productionQualified": false
+}

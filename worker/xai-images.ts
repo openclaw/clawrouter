@@ -1,5 +1,5 @@
 import { readNativeJson } from "./native-json.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const xaiImageModels = ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-quality"] as const;
 export const xaiImageAliasEffectiveAt = "2026-11-02";

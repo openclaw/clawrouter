@@ -4,7 +4,7 @@ import { reportRetentionMs } from "./usage-report-range.ts";
 import { searchJsonBytes } from "./minimax-search-operation.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
-import { ensureUsageReportSchema, insertUsageReportEvent, withUsageReportPair, queryUsageReport, queryUsageEvents, migrateUsageReport } from "./usage-report-store.ts";
+import { ensureUsageReportSchema, insertUsageReportEvent, withUsageReportPair, queryUsageReport, queryUsageEvents, migrateUsageReport, usageReportProjectionLive, usageReportProjectionReclaimDue, reclaimUsageReportProjection } from "./usage-report-store.ts";
 import { type UsageReportMigrationOptions, type UsageReportQuery, type UsageEventPosition } from "./usage-report-protocol.ts";
 import { nextDailyReset, nextWeeklyReset } from "./policy-limits.ts";
 import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../shared/contracts";
@@ -14,6 +14,7 @@ import { mergePrincipalUsage, usageCutoffs, usageDayMs, usageShardName, type Pri
 import { errorResponse, json, normalizeEmail, readJson } from "./utils.ts";
 import { dispatchCompleteUsageShard } from "./usage-report-store.ts";
 import { backfillUsageRollups, ensureUsageRollups, rollupOwnerCondition, rollupSummaryColumns, rollupTotalColumns, usageRollupAlarmMs, usageRollupProgress } from "./usage-rollups.ts";
+import { ensureUsageReportCells, maintainUsageReportCells, usageReportCellsDue } from "./usage-report-cells.ts";
 
 export interface UsageIngestReceipt {
   eventId: string;
@@ -185,14 +186,21 @@ export class UsageLedgerObject implements DurableObject {
         ? await readCoverControlRequest(request) as UsageEvent : await request.json<UsageEvent>();
       if (typeof event?.id !== "string" || !event.id.length || !Number.isSafeInteger(event.occurred_at_ms) || event.occurred_at_ms < 0) return errorResponse("invalid_usage_event", "id must be a nonempty string and occurred_at_ms must be a nonnegative safe integer", 400);
       const now = Date.now(), receipt = this.ingest(event, now);
-      await this.scheduleUsageAlarm(now);
+      // Drain the report arrival log at the rate it fills. Best effort: the canonical write has
+      // committed, so a maintenance failure must not withhold its receipt.
+      try { this.state.storage.transactionSync(() => maintainUsageVisibility(this.sql, now)); }
+      catch { console.log(JSON.stringify({ event: "usage_visibility_maintenance_failed" })); }
+      await this.scheduleUsageAlarm(now, true);
       return json(receipt);
     }
     // Internal DO transport only; never forwarded from a public mutation route.
     if (request.method === "POST" && url.pathname === "/complete-usage") {
       try {
         const input = await readJson<unknown>(request, undefined, 1024 * 1024);
-        return json(this.state.storage.transactionSync(() => dispatchCompleteUsageShard(this.sql, input)));
+        const result = this.state.storage.transactionSync(() => dispatchCompleteUsageShard(this.sql, input));
+        // A report read wakes an idle or newly upgraded shard so its cells catch up.
+        await this.scheduleUsageAlarm(Date.now(), true).catch(() => undefined);
+        return json(result);
       } catch {
         return json({ kind: "unavailable", reason: "source" });
       }
@@ -237,15 +245,30 @@ export class UsageLedgerObject implements DurableObject {
       await this.state.storage.setAlarm(Date.now() + usageRollupAlarmMs);
       return;
     }
+    // Report cells fold only after attribution, so its backfill UPDATEs never reset them.
+    // Derived cells never stop the existing maintenance cadence.
+    const now = Date.now();
+    // An unread projection is reclaimed first: it can hold a third of the shard and keep cells storage-paused.
+    let reclaim: ReturnType<typeof reclaimUsageReportProjection> = "idle";
+    try { reclaim = this.state.storage.transactionSync(() => reclaimUsageReportProjection(this.sql)); }
+    catch { console.log(JSON.stringify({ event: "usage_report_projection_reclaim_failed" })); }
+    if (reclaim === "done") console.log(JSON.stringify({ event: "usage_report_projection_reclaimed", databaseSize: this.sql.databaseSize }));
+    let cells: number | null = null;
+    try { cells = this.state.storage.transactionSync(() => maintainUsageReportCells(this.sql, now)); }
+    catch { console.log(JSON.stringify({ event: "usage_report_cells_failed" })); }
+    if (reclaim === "more" || cells !== null && cells <= now) { await this.state.storage.setAlarm(now + usageRollupAlarmMs); return; }
     const count = first<{ row_count: number }>(this.sql.exec("SELECT COUNT(*) AS row_count FROM usage_events"))!.row_count;
     console.log(JSON.stringify({ event: "usage_rollup_maintenance", rowCount: count, databaseSize: this.sql.databaseSize, ...progress }));
-    if (count) await this.state.storage.setAlarm(Date.now() + 86_400_000);
+    if (count) await this.state.storage.setAlarm(Math.min(now + 86_400_000, cells ?? Infinity));
   }
 
-  private async scheduleUsageAlarm(now = Date.now()): Promise<void> {
+  /** `cells`: also wake the report-cell fold (ingest and complete reads; legacy snapshots do not). */
+  private async scheduleUsageAlarm(now = Date.now(), cells = false): Promise<void> {
     const progress = usageRollupProgress(this.sql);
     const attribution = first<{ complete: number }>(this.sql.exec("SELECT complete FROM usage_attribution_migration WHERE id = 1"))!;
-    const next = now + (!progress.complete || !attribution.complete ? usageRollupAlarmMs : 86_400_000);
+    const due = !cells ? null : usageReportProjectionReclaimDue(this.sql) ? 0
+      : usageReportCellsDue(this.sql, Number(first<{ max: number }>(this.sql.exec("SELECT COALESCE(MAX(rowid), 0) AS max FROM usage_events"))!.max));
+    const next = Math.min(now + (!progress.complete || !attribution.complete ? usageRollupAlarmMs : 86_400_000), due === null ? Infinity : Math.max(due, now + usageRollupAlarmMs));
     const alarm = await this.state.storage.getAlarm();
     if (alarm === null || alarm > next) await this.state.storage.setAlarm(next);
   }
@@ -259,6 +282,8 @@ export class UsageLedgerObject implements DurableObject {
     if (event.occurred_at_ms < cutoff) return { eventId: event.id, outcome: "expired_by_retention" };
     event.policy_id ||= event.key_id;
     this.state.storage.transactionSync(() => withUsageReportPair(this.sql, () => {
+      // Decided before the canonical insert advances the coverage generation. An unread projection is not extended.
+      const projected = usageReportProjectionLive(this.sql);
       const inserted = first<{ id: string }>(this.sql.exec(
         "INSERT INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json, grant_key, grant_lane, principal_id, principal_key, credential_id, cost_basis, principal_nontext) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING RETURNING id",
         event.id, event.occurred_at_ms, event.tenant_id, event.policy_id, event.provider, event.status, event.status_code,
@@ -266,7 +291,7 @@ export class UsageLedgerObject implements DurableObject {
         ...usageAttribution(event),
       ));
       if (inserted?.id !== event.id) throw new Error("usage ledger did not confirm insertion");
-      if (!insertUsageReportEvent(this.sql, event)) throw new Error("usage ledger did not confirm reporting projection");
+      if (projected && !insertUsageReportEvent(this.sql, event)) throw new Error("usage ledger did not confirm reporting projection");
     }));
     return { eventId: event.id, outcome: "stored" };
   }
@@ -455,6 +480,7 @@ export class UsageLedgerObject implements DurableObject {
     });
     this.state.storage.transactionSync(() => ensureUsageReportSchema(this.sql));
     this.state.storage.transactionSync(() => ensureUsageRollups(this.sql));
+    this.state.storage.transactionSync(() => ensureUsageReportCells(this.sql));
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_occurred_at ON usage_events (occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy ON usage_events (policy_id, occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy_principal ON usage_events (policy_id, principal_key, occurred_at_ms DESC)");

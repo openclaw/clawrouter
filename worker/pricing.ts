@@ -1,5 +1,5 @@
 import { hostedToolPricingGap, claudeSearchTypes } from "./hosted-tool-pricing.ts";
-import type { DeepSeekSearchRequestPricing } from "../shared/request-pricing.ts";
+import type { DeepSeekSearchRequestPricing, ImageRequestPricing, OutcomeRequestPricing } from "../shared/request-pricing.ts";
 import type { ValidatedNativeUsage } from "./native-response.ts";
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
@@ -56,15 +56,7 @@ export function hostedSearchCost(price: HostedSearchPrice | undefined, count: nu
 
 // Source-qualified request component. Shared admission must freeze it alongside
 // the inference bound; declaring it alone does not clear requestPricingGap.
-export interface OutcomeRequestPricing {
-  unit: "request";
-  version: string;
-  effectiveAt: string;
-  source: "https://docs.x.ai/developers/pricing#usage-guidelines-violation-fee";
-  outcome: "xai.responses_violation";
-  maximumAdditionalMicros: 50000;
-  receipt: "xai.usage.cost_in_usd_ticks";
-}
+export type { ImageRequestPricing, OutcomeRequestPricing } from "../shared/request-pricing.ts";
 
 export interface RequestCostReceipt {
   costMicros: number;
@@ -96,17 +88,6 @@ export function deepSeekSearchCost(pricing: Readonly<DeepSeekSearchRequestPricin
     basis: "manifest_request", pricingVersion: pricing.version };
 }
 
-export interface ImageRequestPricing {
-  unit: "image"; protocol: "xai.images"; version: string; effectiveAt: string;
-  source: "https://docs.x.ai/developers/pricing";
-  receipt: "xai.usage.cost_in_usd_ticks";
-  alias: { selectedModel: "grok-imagine-image-quality"; servingModel: "grok-imagine-image-2.0"; quality: "low";
-    effectiveAt: "2026-11-02"; source: "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2" };
-  rates: {
-    "grok-imagine-image": { inputMicrosPerImage: number; outputMicrosPerImage: Record<"1k" | "2k", number> };
-    "grok-imagine-image-2.0": { inputMicrosPerImage: number; outputMicrosPerImage: Record<"low" | "medium", Record<"1k" | "2k", number>> };
-  };
-}
 // Freeze this projection only after prepareXaiImage validates the native body.
 // It carries no prompt, image reference, credential or raw output bytes.
 export type ImageRequestSelection = Pick<XaiImageRequest, "model" | "servingModel" | "mode" | "count" | "inputImages" | "resolution" | "quality" | "qualityBasis">;

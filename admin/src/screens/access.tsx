@@ -1,4 +1,5 @@
 import { GrantRefreshHealth } from "../grant-health";
+import { isBindingDisableOnly } from "../hooks/access/use-principal-admin";
 import { fusionAdviserModels, fusionStrategy } from "../../../shared/fusion-strategy";
 import { GrantExpiry } from "../grant-expiry";
 import { credentialExpiryLabel, KeyTierControls } from "../member-key-controls";
@@ -8,6 +9,7 @@ import { bindingKey, kindLabel, type CatalogModel } from "../domain";
 import { EntityTable, Metric, EntityName, InlineError, InlineNote, InspectorHeader, Status } from "../components";
 import { CredentialNotice, type CredentialFeedback } from "../credential-notice";
 import { rolePresets } from "../ui-config";
+import { parsePolicyBudget, type PolicyBudgetPeriod } from "../request-price-input";
 import { credentialOutcome, groupedProviders } from "../ui-helpers";
 import { formatMicros, presentCost } from "../cost-presentation";
 import type {
@@ -476,16 +478,23 @@ export function BindingPanel({ policies, bindings, selected, form, setForm, erro
   onNew: () => void;
   busy: boolean;
 }) {
+  const policiesById = new Map(policies.map((policy) => [policy.policyId, policy]));
+  const target = policiesById.get(form.policyId);
+  const canSave = Boolean(target) || isBindingDisableOnly(form, selected);
   return (
     <div className="entityLayout">
       <section className="mainPane">
         <div className="overviewStrip">
-          <Metric label="active bindings" value={String(bindings.filter((binding) => binding.enabled).length)} meta={`${bindings.length} total`} />
+          <Metric label="enabled bindings" value={String(bindings.filter((binding) => binding.enabled).length)} meta={`${bindings.length} total`} />
           <Metric label="users" value={String(new Set(bindings.filter((binding) => binding.principalType === "user").map((binding) => binding.principalId)).size)} meta="direct principals" />
           <Metric label="groups" value={String(new Set(bindings.filter((binding) => binding.principalType === "group").map((binding) => binding.principalId)).size)} meta="inherited principals" />
         </div>
         <div className="tableSectionHeader"><div><strong>Principal bindings</strong><span>Explicit policy assignment and priority</span></div><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New binding</span></button></div>
-        <EntityTable columns={["principal", "type", "policy", "priority", "state"]} columnTemplate="minmax(220px, 1.4fr) 90px minmax(170px, 1fr) 80px 100px" rows={bindings.map((binding) => ({ id: bindingKey(binding), active: selected ? bindingKey(selected) === bindingKey(binding) : false, onClick: () => onEdit(binding), cells: [<EntityName icon={Users} title={binding.principalId} subtitle={binding.principalType === "group" ? "inherited by group members" : "direct identity binding"} />, binding.principalType, binding.policyId, binding.priority, <Status label={binding.enabled ? "active" : "disabled"} tone={binding.enabled ? "active" : "revoked"} />] }))} />
+        <EntityTable columns={["principal", "type", "policy", "priority", "state"]} columnTemplate="minmax(220px, 1.4fr) 90px minmax(170px, 1fr) 80px 120px" rows={bindings.map((binding) => {
+          const policy = policiesById.get(binding.policyId);
+          const state = !binding.enabled ? "disabled" : !policy ? "unavailable" : !policy.enabled ? "policy disabled" : "enabled";
+          return { id: bindingKey(binding), active: selected ? bindingKey(selected) === bindingKey(binding) : false, onClick: () => onEdit(binding), cells: [<EntityName icon={Users} title={binding.principalId} subtitle={binding.principalType === "group" ? "inherited by group members" : "direct identity binding"} />, binding.principalType, binding.policyId, binding.priority, <Status label={state} tone={state === "enabled" ? "active" : state === "disabled" ? "revoked" : "neutral"} />] };
+        })} />
       </section>
       <aside className="inspector">
         <form onSubmit={onSave}>
@@ -495,10 +504,14 @@ export function BindingPanel({ policies, bindings, selected, form, setForm, erro
             <label><span>principal type</span><select value={form.principalType} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, principalType: event.target.value as BindingForm["principalType"] })}><option value="group">group</option><option value="user">user</option></select></label>
             <label><span>priority</span><input inputMode="numeric" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })} /></label>
             <label className="full"><span>principal</span><input value={form.principalId} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, principalId: event.target.value })} placeholder={form.principalType === "group" ? "maintainers" : "user@example.com"} /></label>
-            <label className="full"><span>policy</span><select value={form.policyId} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, policyId: event.target.value })}>{policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}</option>)}</select></label>
+            <label className="full"><span>policy</span><select value={form.policyId} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, policyId: event.target.value })}>
+              {!target ? <option value={form.policyId} disabled>{form.policyId ? `${form.policyId} · unavailable` : policies.length ? "Select a policy" : "No policies available"}</option> : null}
+              {policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}{policy.enabled ? "" : " · disabled"}</option>)}
+            </select></label>
             <label className="full"><span>state</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
           </div>
-          <div className="inspectorActions"><button type="submit" disabled={busy || !form.policyId || !form.principalId.trim()}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save binding</span></button></div>
+          {form.policyId && !target ? <InlineNote>{!selected ? "Choose an available policy to save this binding." : selected.enabled ? `This policy isn’t listed. To ask the server to disable the binding, keep priority at ${selected.priority}.` : "This binding is disabled. Its policy must be available before you can change it."}</InlineNote> : null}
+          <div className="inspectorActions"><button type="submit" disabled={busy || !canSave || !form.principalId.trim()}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save binding</span></button></div>
         </form>
       </aside>
     </div>
@@ -568,17 +581,17 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
           <div className="editorSectionHeader"><strong>Policy template</strong><span>Apply a starting scope</span></div>
           <div className="presetRow" aria-label="policy templates">{Object.keys(rolePresets).map((role) => <button key={role} type="button" className="buttonSecondary" onClick={() => onPreset(role as keyof typeof rolePresets)}>{role}</button>)}</div>
           <div className="editorSectionHeader"><strong>Policy details</strong><span>Tenant, role, and limits</span></div>
-          <div className="formGrid compact">
+          <div className="formGrid compact" style={{ alignItems: "start" }}>
             <label><span>policy id</span><input value={form.policyId} readOnly={Boolean(selected) || missing} onChange={(event) => setForm({ policyId: event.target.value })} /></label>
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ tenantId: event.target.value })} /></label>
             <label><span>role</span><input value={form.tokenRole} onChange={(event) => setForm({ tokenRole: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "active" : "disabled"} onChange={(event) => setForm({ enabled: event.target.value === "active" })}><option value="active">active</option><option value="disabled">disabled</option></select></label>
-            <label><span>daily budget ($, UTC)</span><input inputMode="decimal" value={form.dailyBudgetMicros} onChange={event => setForm({ dailyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
-            <label><span>weekly budget ($, Monday UTC)</span><input inputMode="decimal" value={form.weeklyBudgetMicros} onChange={event => setForm({ weeklyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
+            <PolicyBudgetField period="Daily" label="daily budget ($, UTC)" value={form.dailyBudgetMicros} onChange={value => setForm({ dailyBudgetMicros: value })} />
+            <PolicyBudgetField period="Weekly" label="weekly budget ($, Monday UTC)" value={form.weeklyBudgetMicros} onChange={value => setForm({ weeklyBudgetMicros: value })} />
             <label className="full"><span>Allowed service tiers · comma separated</span><input value={form.serviceTierAllowed} onChange={event => setForm({ serviceTierAllowed: event.target.value })} /></label>
             <label className="full"><span>Per-model service tiers · JSON object</span><textarea value={form.serviceTierModels} onChange={event => setForm({ serviceTierModels: event.target.value })} placeholder='{"openai/gpt-6.1-sol":["default","flex","priority","ultrafast"]}' /></label>
             <label className="full"><span>Limit hint</span><textarea maxLength={300} value={form.limitHint} onChange={event => setForm({ limitHint: event.target.value })} /></label>
-            <label><span>monthly budget ($)</span><input inputMode="decimal" value={form.monthlyBudgetMicros} onChange={(event) => setForm({ monthlyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
+            <PolicyBudgetField period="Monthly" label="monthly budget ($)" value={form.monthlyBudgetMicros} onChange={value => setForm({ monthlyBudgetMicros: value })} />
             <label><span>Fixed request cost ($)</span><input inputMode="decimal" value={form.requestCostDollars} onChange={(event) => setForm({ requestCostDollars: event.target.value })} placeholder="blank = manifest-priced routes only" title="Price in US dollars, using up to six decimal places. Required for any budgeted route without manifest pricing; blank uses versioned list pricing where available." /></label>
             <label className="full"><span>Price per request by capability ($) · JSON object</span><textarea value={form.requestCostsDollars} onChange={(event) => setForm({ requestCostsDollars: event.target.value })} placeholder={'{"search.web":0.001}'} title="Enter a JSON object with prices in US dollars, using up to six decimal places. Overrides the fixed request cost for each listed capability. Blank uses the policy-wide cost or manifest pricing." /></label>
             <label className="full"><span>model access</span><select value={form.allModels ? "all" : "selected"} onChange={event => setForm({ allModels: event.target.value === "all" })}><option value="all">all models of allowed services</option><option value="selected">selected catalog models only</option></select></label>
@@ -598,8 +611,8 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
             <label><span>same-provider failover</span><select value={form.grantFailover ? "enabled" : "disabled"} onChange={(event) => setForm({ grantFailover: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
             <label><span>stale quota state</span><select value={form.grantStaleState} onChange={(event) => setForm({ grantStaleState: event.target.value as PolicyForm["grantStaleState"] })}><option value="allow">fail open · allow stale</option><option value="deny">fail closed · require fresh</option></select></label>
             <label><span>fresh for (seconds)</span><input inputMode="numeric" min="30" max="86400" value={form.grantStaleAfterSeconds} onChange={(event) => setForm({ grantStaleAfterSeconds: event.target.value })} /></label>
-            <label><span>switch at used (%)</span><input inputMode="decimal" min="0" max="100" value={form.grantSwitchAtUsedPercent} disabled={form.grantStrategy !== "threshold"} onChange={(event) => setForm({ grantSwitchAtUsedPercent: event.target.value })} /></label>
-            <label><span>switch margin (%)</span><input inputMode="decimal" min="0" max="100" value={form.grantHysteresisPercent} disabled={form.grantStrategy !== "threshold"} onChange={(event) => setForm({ grantHysteresisPercent: event.target.value })} /></label>
+            <label><span>switch at used (%)</span><input type="number" inputMode="decimal" min="0" max="100" step="any" value={form.grantSwitchAtUsedPercent} disabled={form.grantStrategy !== "threshold"} onChange={(event) => setForm({ grantSwitchAtUsedPercent: event.target.value })} /></label>
+            <label><span>switch margin (%)</span><input type="number" inputMode="decimal" min="0" max="100" step="any" value={form.grantHysteresisPercent} disabled={form.grantStrategy !== "threshold"} onChange={(event) => setForm({ grantHysteresisPercent: event.target.value })} /></label>
             <label className="full"><span>eligible grants · optional JSON map</span><textarea value={form.eligibleGrants} onChange={(event) => setForm({ eligibleGrants: event.target.value })} placeholder={'{"openai":["team-a","team,b"],"anthropic":["production"]}'} /></label>
           </div>
           <InlineNote>Priority always defines fallback tiers; the selection mode applies within the lowest available tier. An empty provider allowlist denies every grant for that provider. Fail-closed stale state requires a fresh response-header or provider-probe observation.</InlineNote>
@@ -628,6 +641,29 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
       </aside>
     </div>
   );
+}
+
+function PolicyBudgetField({ period, label, value, onChange }: {
+  period: PolicyBudgetPeriod; label: string; value: string; onChange: (value: string) => void;
+}) {
+  const id = useId();
+  const [reported, setReported] = useState(false);
+  const result = parsePolicyBudget(value, period);
+  const message = "error" in result ? result.error : "";
+  const showError = reported && Boolean(message);
+  return <label>
+    <span id={id}>{label}</span>
+    <input inputMode="decimal" value={value} placeholder="unlimited" aria-labelledby={id}
+      aria-invalid={showError || undefined} aria-describedby={showError ? id + "-error" : undefined}
+      ref={input => { input?.setCustomValidity(message); }}
+      onInvalid={event => {
+        event.preventDefault(); // Explain the error next to the field instead of showing a transient popup.
+        setReported(true);
+        if (event.currentTarget === event.currentTarget.form?.querySelector("input:invalid, select:invalid, textarea:invalid")) event.currentTarget.focus();
+      }}
+      onChange={event => { setReported(false); onChange(event.target.value); }} />
+    {showError ? <small className="inlineError" id={id + "-error"} role="alert">{message}</small> : null}
+  </label>;
 }
 
 function CredentialExpiryEditor({ credential, busy, onSave }: { credential: ProxyCredential; busy: boolean; onSave: (credential: ProxyCredential, expiresAt: string) => Promise<void> }) {

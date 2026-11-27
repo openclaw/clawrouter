@@ -1,7 +1,7 @@
 import type { PreparationAdmission } from "./provider-templates.ts";
 import { minimaxMusicBinding, minimaxSpeechBinding, readNativeMediaBinding, type NativeMediaBinding } from "../shared/native-media-binding.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
-import type { GrantRequirement } from "./provider-auth.ts";
+import type { GrantRequirement } from "./grant-compatibility.ts";
 import type { CompiledProvider, Env, UpstreamGrant } from "./types.ts";
 import { sha256Hex } from "./utils.ts";
 import { HttpError } from "./http-error.ts";

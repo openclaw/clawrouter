@@ -1,4 +1,5 @@
-import { mediaObject, readMediaJson } from "./managed-media-json.ts";
+import { readMediaJson } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 // Evidence for the native public Search API, never Chat or a hosted tool call.
 // Runtime must pin the qualified endpoint/credential and pricing witness.

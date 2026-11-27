@@ -1,7 +1,8 @@
-import { parseVydraCancelAcknowledgement, parseVydraJob, parseVydraSubmission, prepareVydraJob,
+import { observeVydraCancelAcknowledgement, observeVydraJob, observeVydraSubmission, prepareVydraJob,
   validateVydraJobId, vydraJobPath } from "./vydra-jobs.ts";
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
+import { readMediaJson } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, noMediaQuery } from "./media-wire.ts";
 
 export const vydraManagedAdapter: ManagedLifecycleAdapter = {
   protocol: "vydra.jobs", requestFormats: ["vydra.job_create"], supportsResult: false, supportsCancel: true,
@@ -25,19 +26,19 @@ export const vydraManagedAdapter: ManagedLifecycleAdapter = {
   },
   async read(response, context) {
     if (context.action === "result") throw new Error("unsupported_vydra_control");
-    const { text, body } = await readMediaJson(response);
+    const { body } = await readMediaJson(response);
     if (context.action !== "cancel" && ["workflow", "workflowSlug"].some(key =>
       body[key] !== undefined && body[key] !== context.requestedVersion)) throw new Error("vydra_job_workflow_mismatch");
     if (context.action === "create") {
-      const result = parseVydraSubmission(text, response.status);
+      const result = observeVydraSubmission(body);
       return { id: result.observation.id, nativeStatus: result.observation.status, terminal: null, body, followUp: "retrieve" };
     }
     const id = validateVydraJobId(context.expectedId);
     if (context.action === "cancel") {
-      parseVydraCancelAcknowledgement(text, response.status);
+      observeVydraCancelAcknowledgement(body);
       return { id, nativeStatus: null, terminal: null, body, followUp: "retrieve" };
     }
-    const observation = parseVydraJob(text, response.status, id);
+    const observation = observeVydraJob(body, id);
     return { id, nativeStatus: observation.status, terminal: observation.status === "completed" ? "succeeded"
       : observation.status === "failed" ? "failed" : observation.status === "cancelled" ? "canceled" : null, body };
   },

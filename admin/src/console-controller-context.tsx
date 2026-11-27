@@ -1,11 +1,12 @@
 import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from "react";
+import { ConsoleRetryContext } from "./console-retry-button";
 import { authenticationRequired, request, type ConsoleRequest } from "./dashboard-fetch";
 import { errorMessage } from "./domain";
 import { useCredentialOperations, type CredentialOperations } from "./hooks/use-credential-operations";
 import { useSession } from "./hooks/use-session";
 import { LoginScreen } from "./screens/login";
 import { browserSession, type CapturedSessionScope } from "./session-scope";
-import { demo } from "./ui-config";
+import { demo, initialViewFromPath } from "./ui-config";
 import { localDemoRole } from "./ui-helpers";
 import type { SessionResponse } from "./ui-types";
 import { type ConsoleController, useConsoleController } from "./use-console-controller";
@@ -24,7 +25,11 @@ export function ConsoleControllerProvider({ children }: { children: ReactNode })
   const credentialOwner = useCredentialOperations(session.captureScope, requestForScope, session.setStatus, (ownsScope) => credentialRefresh.current(ownsScope));
 
   function accept(value: SessionResponse, demoMode = false) {
-    if (session.accept(value, demoMode)) credentialOwner.clearScope();
+    if (session.accept(value, demoMode)) {
+      credentialOwner.clearScope();
+      // History can move while signed out. Start the verified data lifetime on its current page.
+      if (!demoMode) session.setView(initialViewFromPath());
+    }
     setAuthenticationError("");
     setChecking(false);
   }
@@ -146,7 +151,11 @@ function ConsoleDataProvider({ session, credentialOwner, requestForScope, probe,
     credentialRefresh.current = refresh;
     return () => { if (credentialRefresh.current === refresh) credentialRefresh.current = async () => undefined; };
   }, [controller.refreshMetadataAfterMutation, credentialRefresh]);
-  return <ConsoleControllerContext.Provider value={controller}>{children}</ConsoleControllerContext.Provider>;
+  return <ConsoleControllerContext.Provider value={controller}>
+    <ConsoleRetryContext.Provider value={{ busy: controller.session.busy, pending: controller.retryPending, retry: controller.retryRefresh }}>
+      {children}
+    </ConsoleRetryContext.Provider>
+  </ConsoleControllerContext.Provider>;
 }
 
 export function useConsole() {

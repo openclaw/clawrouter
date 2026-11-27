@@ -1,0 +1,779 @@
+{
+  "version": 1,
+  "status": "audited-development",
+  "qualifiedProductionGain": false,
+  "originalStudy": {
+    "file": "fusion-final-confirmation-study.json",
+    "sha256": "d73f506ddd4368c792e3188fc7b38d5127259b39cde72ad6f7a4e5efdc958c64",
+    "protocolSha256": "580b20b10145cff0f4cddc8c5fa6ee62d3e6f0cc6f11f994f51e63e4b0accf3e"
+  },
+  "feedbackSmoke": {
+    "protocolSha256": "519fc794828a99a5b0097e18a8d55be7cc89d4987dad00515dca8c3624374ecf",
+    "resultSha256": "6bb3fb42e4a309f6119408352d28a4ff84dba4a0fd11aba49b519ea444343500",
+    "auditSha256": "7408e94aa346b25b05f0cd695b7124fe2c7c731f92372082809feb3c1a9033ff",
+    "sourceSha": "8cb9555d7ae037d537b8150f97ff497274c0ffc7",
+    "scope": "Two distinct tasks selected by fixed hash order using only rejected initial edit decoding. Three paired generic/diagnostic repairs per frozen initial response. Identical provider bodies outside feedback; one call per arm, no retries. Full grades after all calls. Development smoke only; not independent confirmation. Repair latency excludes grading. Shared initial calls are reused and not billed again.",
+    "rows": [
+      {
+        "caseId": "undici-d43e421f839a",
+        "repeat": 1,
+        "arm": "generic",
+        "model": "openai/gpt-6-luna",
+        "publicPassed": true,
+        "fullValid": true,
+        "fullPassed": true,
+        "passed": true,
+        "costMicros": 771,
+        "normalizedMicros": 771,
+        "repairLatencyMs": 4460.840625
+      },
+      {
+        "caseId": "undici-d43e421f839a",
+        "repeat": 1,
+        "arm": "diagnostic",
+        "model": "openai/gpt-6-luna",
+        "publicPassed": false,
+        "fullValid": false,
+        "fullPassed": false,
+        "passed": false,
+        "costMicros": 806,
+        "normalizedMicros": 806,
+        "repairLatencyMs": 4988.558917
+      },
+      {
+        "caseId": "undici-d43e421f839a",
+        "repeat": 2,
+        "arm": "diagnostic",
+        "model": "openai/gpt-6-luna",
+        "publicPassed": false,
+        "fullValid": false,
+        "fullPassed": false,
+        "passed": false,
+        "costMicros": 753,
+        "normalizedMicros": 753,
+        "repairLatencyMs": 3532.311916999999
+      },
+      {
+        "caseId": "undici-d43e421f839a",
+        "repeat": 2,
+        "arm": "generic",
+        "model": "openai/gpt-6-luna",
+        "publicPassed": false,
+        "fullValid": false,
+        "fullPassed": false,
+        "passed": false,
+        "costMicros": 700,
+        "normalizedMicros": 700,
+        "repairLatencyMs": 7309.99575
+      },
+      {
+        "caseId": "undici-d43e421f839a",
+        "repeat": 3,
+        "arm": "generic",
+        "model": "openai/gpt-6-luna",
+        "publicPassed": true,
+        "fullValid": true,
+        "fullPassed": true,
+        "passed": true,
+        "costMicros": 835,
+        "normalizedMicros": 835,
+        "repairLatencyMs": 5007.951916000002
+      },
+      {
+        "caseId": "undici-d43e421f839a",
+        "repeat": 3,
+        "arm": "diagnostic",
+        "model": "openai/gpt-6-luna",
+        "publicPassed": false,
+        "fullValid": false,
+        "fullPassed": false,
+        "passed": false,
+        "costMicros": 710,
+        "normalizedMicros": 710,
+        "repairLatencyMs": 3458.9226249999992
+      },
+      {
+        "caseId": "undici-5e6e0e96e86f",
+        "repeat": 1,
+        "arm": "diagnostic",
+        "model": "openai/gpt-6.1-terra",
+        "publicPassed": true,
+        "fullValid": true,
+        "fullPassed": true,
+        "passed": true,
+        "costMicros": 4698,
+        "normalizedMicros": 4698,
+        "repairLatencyMs": 7899.921041000001
+      },
+      {
+        "caseId": "undici-5e6e0e96e86f",
+        "repeat": 1,
+        "arm": "generic",
+        "model": "openai/gpt-6.1-terra",
+        "publicPassed": false,
+        "fullValid": false,
+        "fullPassed": false,
+        "passed": false,
+        "costMicros": 4823,
+        "normalizedMicros": 4823,
+        "repairLatencyMs": 8204.615334000002
+      },
+      {
+        "caseId": "undici-5e6e0e96e86f",
+        "repeat": 2,
+        "arm": "generic",
+        "model": "openai/gpt-6.1-terra",
+        "publicPassed": false,
+        "fullValid": false,
+        "fullPassed": false,
+        "passed": false,
+        "costMicros": 5463,
+        "normalizedMicros": 5463,
+        "repairLatencyMs": 9449.428792000006
+      },
+      {
+        "caseId": "undici-5e6e0e96e86f",
+        "repeat": 2,
+        "arm": "diagnostic",
+        "model": "openai/gpt-6.1-terra",
+        "publicPassed": true,
+        "fullValid": true,
+        "fullPassed": true,
+        "passed": true,
+        "costMicros": 4533,
+        "normalizedMicros": 4534,
+        "repairLatencyMs": 7047.4285420000015
+      },
+      {
+        "caseId": "undici-5e6e0e96e86f",
+        "repeat": 3,
+        "arm": "diagnostic",
+        "model": "openai/gpt-6.1-terra",
+        "publicPassed": true,
+        "fullValid": true,
+        "fullPassed": true,
+        "passed": true,
+        "costMicros": 5003,
+        "normalizedMicros": 5004,
+        "repairLatencyMs": 8317.471000000005
+      },
+      {
+        "caseId": "undici-5e6e0e96e86f",
+        "repeat": 3,
+        "arm": "generic",
+        "model": "openai/gpt-6.1-terra",
+        "publicPassed": false,
+        "fullValid": false,
+        "fullPassed": false,
+        "passed": false,
+        "costMicros": 3988,
+        "normalizedMicros": 3988,
+        "repairLatencyMs": 5760.572332999989
+      }
+    ],
+    "newCostMicros": 33083
+  },
+  "fallbackRepair": {
+    "protocolSha256": "e9efb4eb1e840048e06d4fc42eaae869f438dca0da038176a3735ca7d0f84cda",
+    "resultSha256": "6956ddc9cf69bdc8d022e4dc85e89d3e279ba3342b9643cc0781b33340400668",
+    "auditSha256": "233447bd1c2d421be8a8542e162c27d178a6648832eecd63d2f16272b8387176",
+    "sourceSha": "77a4ad3db8f10b25c2414150b2ece258ab34eff8",
+    "controllerSha": "9faba0e1b1b23b4cf1eb7b6621140abbf7ace84a",
+    "scope": "Post-hoc development extension of every admitted public-rejected two-call cascade prefix in the complete 30-task, three-trial study. Reuse audited prefixes and controls; one new strong repair per selected prefix, no retries. Selection ignores full grades. Full grading after all new calls. Original experiment unchanged. No fresh-cohort, latency or production claim.",
+    "rows": [
+      {
+        "caseId": "undici-0160a719063f",
+        "trial": 1,
+        "publicPassed": true,
+        "fullValid": true,
+        "fullPassed": true,
+        "passed": true,
+        "newCostMicros": 16604,
+        "newNormalizedMicros": 16604
+      },
+      {
+        "caseId": "undici-0160a719063f",
+        "trial": 3,
+        "publicPassed": true,
+        "fullValid": true,
+        "fullPassed": true,
+        "passed": true,
+        "newCostMicros": 18639,
+        "newNormalizedMicros": 18639
+      },
+      {
+        "caseId": "undici-f36ea9cab02a",
+        "trial": 2,
+        "publicPassed": false,
+        "fullValid": false,
+        "fullPassed": false,
+        "passed": false,
+        "newCostMicros": 5417,
+        "newNormalizedMicros": 5417
+      }
+    ],
+    "newCostMicros": 40660,
+    "latencyComparable": false
+  },
+  "freshStrongWorkflowReplay": {
+    "kind": "offline-shared-trace-replay",
+    "newCalls": 0,
+    "newCostMicros": 0,
+    "latencyComparable": false,
+    "scope": "Only the 20 predeclared admitted tasks, all three trials. Keep a public-accepted cheap draft; otherwise reuse the complete same-task/trial strong control trace. Model bodies match the frozen initial control request. This post-hoc policy was selected after seeing results; it is not a fresh live validation. Recorded trace costs do not predict changed cache behavior or wall-clock latency.",
+    "rows": [
+      {
+        "caseId": "undici-b73952a4f74e",
+        "trial": 1,
+        "draftCostMicros": 391,
+        "draftNormalizedMicros": 391,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "1f8231bd08fabd0ff62cbcc048aeecb8c637bfe3e1c71c5a9114ac7795b42982"
+      },
+      {
+        "caseId": "undici-a18ef2d05af4",
+        "trial": 1,
+        "draftCostMicros": 903,
+        "draftNormalizedMicros": 903,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "9b33f755aa113f5f0332337d3b23a0fe2deab5fb4c7d0609b135cb4013a5ef5c"
+      },
+      {
+        "caseId": "undici-4fe5bc5fefe5",
+        "trial": 1,
+        "draftCostMicros": 1025,
+        "draftNormalizedMicros": 1025,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "08a714e72bf53c42e8e461a7a3dd027bb4c76811fbfd8a8ebd7d6d76de9bec44"
+      },
+      {
+        "caseId": "undici-8f5868fbdbc8",
+        "trial": 1,
+        "draftCostMicros": 722,
+        "draftNormalizedMicros": 722,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "d18272bc2e56ab111348824a3b8e70a091e325bf82c4216e0aed0013e0f7cfee"
+      },
+      {
+        "caseId": "undici-0160a719063f",
+        "trial": 1,
+        "draftCostMicros": 724,
+        "draftNormalizedMicros": 725,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "a67ee555b79ba399f32583e029aaaf6a37ef00b5f3918c27b9cbe949bf1b8d2d"
+      },
+      {
+        "caseId": "undici-f36ea9cab02a",
+        "trial": 1,
+        "draftCostMicros": 583,
+        "draftNormalizedMicros": 583,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "0ed8740999f81232257a7c9701522619e4d7a1007161db500070b9def6c5b9de"
+      },
+      {
+        "caseId": "undici-f387057bd1e0",
+        "trial": 1,
+        "draftCostMicros": 727,
+        "draftNormalizedMicros": 727,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "b8558056b61caef02bd95208600914f90db8abfd39bdbd0aff03b48cb6078030"
+      },
+      {
+        "caseId": "undici-47c2493a992e",
+        "trial": 1,
+        "draftCostMicros": 800,
+        "draftNormalizedMicros": 800,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "ba0c3dfa0092fb391db90d4678c76a158a57f4c523f5ab54b19258580031894a"
+      },
+      {
+        "caseId": "undici-b8b2ae8f199e",
+        "trial": 1,
+        "draftCostMicros": 933,
+        "draftNormalizedMicros": 933,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "64ba6c647553b54390f14447b6f4849b2ddc29a143ef2c5c4ed3fcdccecae6d9"
+      },
+      {
+        "caseId": "undici-f2e02f69a3c1",
+        "trial": 1,
+        "draftCostMicros": 598,
+        "draftNormalizedMicros": 598,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "77584c901352bd4d3a5d859b831a369fcde93670a3ddf4beb056f5088fe7d6b1"
+      },
+      {
+        "caseId": "undici-762f3b5a743a",
+        "trial": 1,
+        "draftCostMicros": 981,
+        "draftNormalizedMicros": 981,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "5bf89935cf2c815d9253bea6112fd8560579ff41566ae9ed85b9ee8cebefce9f"
+      },
+      {
+        "caseId": "undici-57f50a278b86",
+        "trial": 1,
+        "draftCostMicros": 641,
+        "draftNormalizedMicros": 642,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "4a8950ccaa1731dbe9d8df8826674c4298301b46c0113bbf971b609cffccf9c9"
+      },
+      {
+        "caseId": "undici-6933139baebc",
+        "trial": 1,
+        "draftCostMicros": 662,
+        "draftNormalizedMicros": 662,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "319d694a3fca4d10f9d69e7c906e8f060e54e8aeb5a828a199d2c5afbbee356b"
+      },
+      {
+        "caseId": "undici-471d4257259e",
+        "trial": 1,
+        "draftCostMicros": 318,
+        "draftNormalizedMicros": 318,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "4e1e0e0d8954d177ee7d0d604a82b67578e15028d0995716301f9c3383064703"
+      },
+      {
+        "caseId": "undici-7f50f74d02c2",
+        "trial": 1,
+        "draftCostMicros": 1188,
+        "draftNormalizedMicros": 1188,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "f804d443588c786ca96caabeebd1181b89d3d2efcfef0fe3f074597fe99ddcae"
+      },
+      {
+        "caseId": "undici-c5b3a6e478d1",
+        "trial": 1,
+        "draftCostMicros": 961,
+        "draftNormalizedMicros": 961,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "bdb3370ffc7df834d9b8a01b9071c9a1ecca2b91507efee947f36e399827ce98"
+      },
+      {
+        "caseId": "undici-6de6e9a14a1d",
+        "trial": 1,
+        "draftCostMicros": 666,
+        "draftNormalizedMicros": 666,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "0f627c499917f2d226977690535bcc8fae03a5c7bd0a35f41ff024cf2a69cd5c"
+      },
+      {
+        "caseId": "undici-3e622dc7947b",
+        "trial": 1,
+        "draftCostMicros": 477,
+        "draftNormalizedMicros": 477,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "d260b0c52a0cb0d28724bf677f584cd03b5ee8d963565bc8da330ee0a6c4e87b"
+      },
+      {
+        "caseId": "undici-65fd635cc9bb",
+        "trial": 1,
+        "draftCostMicros": 953,
+        "draftNormalizedMicros": 953,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "b98e82f5abd2be403483ac7be27a71fb4869c494b4d58f2be69aebd00d45e011"
+      },
+      {
+        "caseId": "undici-d43e421f839a",
+        "trial": 1,
+        "draftCostMicros": 744,
+        "draftNormalizedMicros": 744,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "887a71cc56b7aa0bc427776149cd761b2d8bbc30d611c870f1c56375f770242a"
+      },
+      {
+        "caseId": "undici-6933139baebc",
+        "trial": 2,
+        "draftCostMicros": 703,
+        "draftNormalizedMicros": 703,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "319d694a3fca4d10f9d69e7c906e8f060e54e8aeb5a828a199d2c5afbbee356b"
+      },
+      {
+        "caseId": "undici-b8b2ae8f199e",
+        "trial": 2,
+        "draftCostMicros": 988,
+        "draftNormalizedMicros": 988,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "64ba6c647553b54390f14447b6f4849b2ddc29a143ef2c5c4ed3fcdccecae6d9"
+      },
+      {
+        "caseId": "undici-f2e02f69a3c1",
+        "trial": 2,
+        "draftCostMicros": 608,
+        "draftNormalizedMicros": 608,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "77584c901352bd4d3a5d859b831a369fcde93670a3ddf4beb056f5088fe7d6b1"
+      },
+      {
+        "caseId": "undici-0160a719063f",
+        "trial": 2,
+        "draftCostMicros": 1012,
+        "draftNormalizedMicros": 1012,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "a67ee555b79ba399f32583e029aaaf6a37ef00b5f3918c27b9cbe949bf1b8d2d"
+      },
+      {
+        "caseId": "undici-47c2493a992e",
+        "trial": 2,
+        "draftCostMicros": 1019,
+        "draftNormalizedMicros": 1019,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "ba0c3dfa0092fb391db90d4678c76a158a57f4c523f5ab54b19258580031894a"
+      },
+      {
+        "caseId": "undici-65fd635cc9bb",
+        "trial": 2,
+        "draftCostMicros": 873,
+        "draftNormalizedMicros": 873,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "b98e82f5abd2be403483ac7be27a71fb4869c494b4d58f2be69aebd00d45e011"
+      },
+      {
+        "caseId": "undici-6de6e9a14a1d",
+        "trial": 2,
+        "draftCostMicros": 666,
+        "draftNormalizedMicros": 666,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "0f627c499917f2d226977690535bcc8fae03a5c7bd0a35f41ff024cf2a69cd5c"
+      },
+      {
+        "caseId": "undici-c5b3a6e478d1",
+        "trial": 2,
+        "draftCostMicros": 1035,
+        "draftNormalizedMicros": 1035,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "bdb3370ffc7df834d9b8a01b9071c9a1ecca2b91507efee947f36e399827ce98"
+      },
+      {
+        "caseId": "undici-d43e421f839a",
+        "trial": 2,
+        "draftCostMicros": 710,
+        "draftNormalizedMicros": 710,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "887a71cc56b7aa0bc427776149cd761b2d8bbc30d611c870f1c56375f770242a"
+      },
+      {
+        "caseId": "undici-471d4257259e",
+        "trial": 2,
+        "draftCostMicros": 318,
+        "draftNormalizedMicros": 318,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "4e1e0e0d8954d177ee7d0d604a82b67578e15028d0995716301f9c3383064703"
+      },
+      {
+        "caseId": "undici-4fe5bc5fefe5",
+        "trial": 2,
+        "draftCostMicros": 1132,
+        "draftNormalizedMicros": 1132,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "08a714e72bf53c42e8e461a7a3dd027bb4c76811fbfd8a8ebd7d6d76de9bec44"
+      },
+      {
+        "caseId": "undici-8f5868fbdbc8",
+        "trial": 2,
+        "draftCostMicros": 674,
+        "draftNormalizedMicros": 674,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "d18272bc2e56ab111348824a3b8e70a091e325bf82c4216e0aed0013e0f7cfee"
+      },
+      {
+        "caseId": "undici-3e622dc7947b",
+        "trial": 2,
+        "draftCostMicros": 494,
+        "draftNormalizedMicros": 494,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "d260b0c52a0cb0d28724bf677f584cd03b5ee8d963565bc8da330ee0a6c4e87b"
+      },
+      {
+        "caseId": "undici-7f50f74d02c2",
+        "trial": 2,
+        "draftCostMicros": 1206,
+        "draftNormalizedMicros": 1206,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "f804d443588c786ca96caabeebd1181b89d3d2efcfef0fe3f074597fe99ddcae"
+      },
+      {
+        "caseId": "undici-b73952a4f74e",
+        "trial": 2,
+        "draftCostMicros": 391,
+        "draftNormalizedMicros": 391,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "1f8231bd08fabd0ff62cbcc048aeecb8c637bfe3e1c71c5a9114ac7795b42982"
+      },
+      {
+        "caseId": "undici-762f3b5a743a",
+        "trial": 2,
+        "draftCostMicros": 994,
+        "draftNormalizedMicros": 995,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "5bf89935cf2c815d9253bea6112fd8560579ff41566ae9ed85b9ee8cebefce9f"
+      },
+      {
+        "caseId": "undici-a18ef2d05af4",
+        "trial": 2,
+        "draftCostMicros": 978,
+        "draftNormalizedMicros": 978,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "9b33f755aa113f5f0332337d3b23a0fe2deab5fb4c7d0609b135cb4013a5ef5c"
+      },
+      {
+        "caseId": "undici-f387057bd1e0",
+        "trial": 2,
+        "draftCostMicros": 800,
+        "draftNormalizedMicros": 800,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "b8558056b61caef02bd95208600914f90db8abfd39bdbd0aff03b48cb6078030"
+      },
+      {
+        "caseId": "undici-f36ea9cab02a",
+        "trial": 2,
+        "draftCostMicros": 554,
+        "draftNormalizedMicros": 554,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "0ed8740999f81232257a7c9701522619e4d7a1007161db500070b9def6c5b9de"
+      },
+      {
+        "caseId": "undici-57f50a278b86",
+        "trial": 2,
+        "draftCostMicros": 599,
+        "draftNormalizedMicros": 599,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "4a8950ccaa1731dbe9d8df8826674c4298301b46c0113bbf971b609cffccf9c9"
+      },
+      {
+        "caseId": "undici-8f5868fbdbc8",
+        "trial": 3,
+        "draftCostMicros": 663,
+        "draftNormalizedMicros": 663,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "d18272bc2e56ab111348824a3b8e70a091e325bf82c4216e0aed0013e0f7cfee"
+      },
+      {
+        "caseId": "undici-471d4257259e",
+        "trial": 3,
+        "draftCostMicros": 318,
+        "draftNormalizedMicros": 318,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "4e1e0e0d8954d177ee7d0d604a82b67578e15028d0995716301f9c3383064703"
+      },
+      {
+        "caseId": "undici-b73952a4f74e",
+        "trial": 3,
+        "draftCostMicros": 396,
+        "draftNormalizedMicros": 396,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "1f8231bd08fabd0ff62cbcc048aeecb8c637bfe3e1c71c5a9114ac7795b42982"
+      },
+      {
+        "caseId": "undici-47c2493a992e",
+        "trial": 3,
+        "draftCostMicros": 767,
+        "draftNormalizedMicros": 768,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "ba0c3dfa0092fb391db90d4678c76a158a57f4c523f5ab54b19258580031894a"
+      },
+      {
+        "caseId": "undici-b8b2ae8f199e",
+        "trial": 3,
+        "draftCostMicros": 931,
+        "draftNormalizedMicros": 931,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "64ba6c647553b54390f14447b6f4849b2ddc29a143ef2c5c4ed3fcdccecae6d9"
+      },
+      {
+        "caseId": "undici-3e622dc7947b",
+        "trial": 3,
+        "draftCostMicros": 491,
+        "draftNormalizedMicros": 491,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "d260b0c52a0cb0d28724bf677f584cd03b5ee8d963565bc8da330ee0a6c4e87b"
+      },
+      {
+        "caseId": "undici-6933139baebc",
+        "trial": 3,
+        "draftCostMicros": 694,
+        "draftNormalizedMicros": 694,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "319d694a3fca4d10f9d69e7c906e8f060e54e8aeb5a828a199d2c5afbbee356b"
+      },
+      {
+        "caseId": "undici-65fd635cc9bb",
+        "trial": 3,
+        "draftCostMicros": 997,
+        "draftNormalizedMicros": 997,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "b98e82f5abd2be403483ac7be27a71fb4869c494b4d58f2be69aebd00d45e011"
+      },
+      {
+        "caseId": "undici-d43e421f839a",
+        "trial": 3,
+        "draftCostMicros": 768,
+        "draftNormalizedMicros": 768,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "887a71cc56b7aa0bc427776149cd761b2d8bbc30d611c870f1c56375f770242a"
+      },
+      {
+        "caseId": "undici-c5b3a6e478d1",
+        "trial": 3,
+        "draftCostMicros": 963,
+        "draftNormalizedMicros": 963,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "bdb3370ffc7df834d9b8a01b9071c9a1ecca2b91507efee947f36e399827ce98"
+      },
+      {
+        "caseId": "undici-f2e02f69a3c1",
+        "trial": 3,
+        "draftCostMicros": 574,
+        "draftNormalizedMicros": 574,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "77584c901352bd4d3a5d859b831a369fcde93670a3ddf4beb056f5088fe7d6b1"
+      },
+      {
+        "caseId": "undici-f36ea9cab02a",
+        "trial": 3,
+        "draftCostMicros": 665,
+        "draftNormalizedMicros": 665,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "0ed8740999f81232257a7c9701522619e4d7a1007161db500070b9def6c5b9de"
+      },
+      {
+        "caseId": "undici-762f3b5a743a",
+        "trial": 3,
+        "draftCostMicros": 1109,
+        "draftNormalizedMicros": 1109,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "5bf89935cf2c815d9253bea6112fd8560579ff41566ae9ed85b9ee8cebefce9f"
+      },
+      {
+        "caseId": "undici-a18ef2d05af4",
+        "trial": 3,
+        "draftCostMicros": 942,
+        "draftNormalizedMicros": 942,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "9b33f755aa113f5f0332337d3b23a0fe2deab5fb4c7d0609b135cb4013a5ef5c"
+      },
+      {
+        "caseId": "undici-7f50f74d02c2",
+        "trial": 3,
+        "draftCostMicros": 1323,
+        "draftNormalizedMicros": 1323,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "f804d443588c786ca96caabeebd1181b89d3d2efcfef0fe3f074597fe99ddcae"
+      },
+      {
+        "caseId": "undici-6de6e9a14a1d",
+        "trial": 3,
+        "draftCostMicros": 665,
+        "draftNormalizedMicros": 665,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "0f627c499917f2d226977690535bcc8fae03a5c7bd0a35f41ff024cf2a69cd5c"
+      },
+      {
+        "caseId": "undici-0160a719063f",
+        "trial": 3,
+        "draftCostMicros": 892,
+        "draftNormalizedMicros": 892,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "a67ee555b79ba399f32583e029aaaf6a37ef00b5f3918c27b9cbe949bf1b8d2d"
+      },
+      {
+        "caseId": "undici-57f50a278b86",
+        "trial": 3,
+        "draftCostMicros": 603,
+        "draftNormalizedMicros": 603,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "4a8950ccaa1731dbe9d8df8826674c4298301b46c0113bbf971b609cffccf9c9"
+      },
+      {
+        "caseId": "undici-f387057bd1e0",
+        "trial": 3,
+        "draftCostMicros": 722,
+        "draftNormalizedMicros": 722,
+        "useStrongControl": false,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "b8558056b61caef02bd95208600914f90db8abfd39bdbd0aff03b48cb6078030"
+      },
+      {
+        "caseId": "undici-4fe5bc5fefe5",
+        "trial": 3,
+        "draftCostMicros": 973,
+        "draftNormalizedMicros": 973,
+        "useStrongControl": true,
+        "equalInitialRequest": true,
+        "initialRequestSha256": "08a714e72bf53c42e8e461a7a3dd027bb4c76811fbfd8a8ebd7d6d76de9bec44"
+      }
+    ]
+  },
+  "campaign": {
+    "priorSpentOrReservedMicros": 316589082,
+    "newCostMicros": 73743,
+    "spentOrReservedMicros": 316662825,
+    "limitMicros": 400000000
+  },
+  "limitations": [
+    "Two exposed tasks with three paired feedback repairs each cannot establish a general diagnostic policy.",
+    "The fallback extension reuses already-audited prefixes and controls, with one new attempt for every admitted public failure; it is not an independent cohort.",
+    "Fresh-workflow replay reuses strong control outputs. It establishes an accounting hypothesis, not prospective efficacy or latency.",
+    "All original full-grading failures remain in the original document. No production default or deployment is changed."
+  ]
+}

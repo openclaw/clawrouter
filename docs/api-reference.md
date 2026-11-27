@@ -729,10 +729,13 @@ the existing grant usage ledger, with token references or opaque shared IDs repl
 it contains no individual request events. These are policy-wide totals, including
 other credentials on the same policy, and retain historical attribution.
 
-Eligibility shares the Subscriptions page and dispatch quota rules: scoped
-windows match upstream model family names, reserve applies to subscriptions,
-active cooldown blocks selection, and stale observations block only under
-`staleState: "deny"`. Status is `eligible`, `exhausted`, `cooldown`, `stale`, or
+Eligibility shares the dispatch quota rules: scoped windows match upstream
+model family names, reserve applies to subscriptions, active cooldown blocks
+selection, and stale observations block only under `staleState: "deny"`.
+The reserve is a soft floor. When none of the policy's grants is eligible above
+it for a model and the policy has no environment fallback, grants that only the
+reserve excludes are `eligible`, because dispatch drains them. The Subscriptions
+page still marks them by their reserve. Status is `eligible`, `exhausted`, `cooldown`, `stale`, or
 `reauth_required`. Models belonging to another provider use `exhausted` (no
 usable capacity); disabled grants are never eligible, and missing or invalid
 credentials use `reauth_required`. Eligibility reports quota/credential availability, not priority
@@ -742,7 +745,9 @@ are advisory snapshots, not an atomic upstream quota guarantee.
 `provider_mismatch`, `policy_disabled`, `grant_disabled`, `reauth_required`,
 `credential_unavailable`, `cooldown`, `shared_quota_exhausted`,
 `model_quota_exhausted`, `shared_quota_reserve`, `model_quota_reserve`,
-`stale_quota`, and `quota_unknown`; eligible entries have a null reason.
+`stale_quota`, and `quota_unknown`. Eligible entries have a null reason, except
+reserve-band grants being drained, which keep `shared_quota_reserve` or
+`model_quota_reserve`.
 An eligible unknown/stale observation under `staleState: "allow"` is not
 confirmed headroom. A model-only exhausted window does not exhaust other models.
 
@@ -753,7 +758,7 @@ strategy, stickiness, failover, priority and stale-state settings:
 
 | Field | Default | Contract |
 | --- | --- | --- |
-| `includedQuotaReservePercent` | `0` | Integer 0–50. A subscription is ineligible when any applicable, unexpired window has this percentage or less remaining. |
+| `includedQuotaReservePercent` | `0` | Integer 0–50, a soft floor. A subscription is skipped when any applicable, unexpired window has this percentage or less remaining, while another grant is above the reserve. When none is and there is no environment fallback, the grants with quota left in every applicable window serve, spread within the policy hysteresis. |
 | `environmentFallback` | `false` | If no scoped grant is eligible, allow the provider's configured environment credential with normal transport, pricing and budget enforcement. Missing environment credentials retain the pool-unavailable error. |
 
 Scoped quota windows in `GET /v1/admin/upstream-grants` optionally carry
@@ -933,7 +938,7 @@ but remains available after group, binding, or policy access is removed. Revoke
 disables the latest record, preserves any intervening hash rotation, and is
 idempotent for an existing key. Local administrator disable or demotion is also
 rechecked before credential writes; Cloudflare administrator status comes from
-the verified Access configuration. Personal keys remain limited to 10 enabled
+the verified Access configuration. Personal keys are limited to 25 enabled
 and 100 retained records; creating another key can prune revoked records in ID
 order at the retention limit. Rotation and rename consume no additional slot.
 

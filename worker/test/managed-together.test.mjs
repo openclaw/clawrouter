@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { prepareTogetherVideoCreate, readTogetherVideo, togetherVideoManagedAdapter as adapter, togetherVideoModels, togetherVideoOutput, togetherVideoTiming, validateTogetherVideoId } from "../managed-together.ts";
-import { managedMediaEnvelopeBytes } from "../managed-media-json.ts";
+import { managedMediaEnvelopeBytes } from "../media-wire.ts";
 const fixture = JSON.parse(await readFile(new URL("../../providers/_fixtures/together/video.json", import.meta.url), "utf8"));
 const context = (action = "create", overrides = {}) => ({ action, requestedVersion: "Wan-AI/wan2.7-t2v", pathParams: {}, ...(action === "retrieve" ? { expectedId: "video_fixture" } : {}), ...overrides });
 const read = (value, action = "create", overrides = {}) => readTogetherVideo(Response.json(value), context(action, overrides));

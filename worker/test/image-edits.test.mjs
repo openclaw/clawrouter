@@ -54,7 +54,7 @@ for (const [name, path, body, fixedCost] of [
 });
 
 const { providerById, routeCatalog } = await import("../provider-catalog.ts");
-const { grantSupports } = await import("../provider-auth.ts");
+const { grantSupports } = await import("../grant-compatibility.ts");
 const { shouldFailoverGrant } = await import("../grant-quota.ts");
 const { estimateModelCost, actualModelCost, requestPricingGap } = await import("../pricing.ts");
 const { extractImageUsageTokens } = await import("../image-generation.ts");

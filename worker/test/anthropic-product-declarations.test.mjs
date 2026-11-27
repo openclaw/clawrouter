@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import snapshot from "../generated/provider-snapshot.json" with { type: "json" };
 import { resolveProviderOffer } from "../provider-offers.ts";
-import { grantSupports } from "../provider-auth.ts";
+import { grantSupports } from "../grant-compatibility.ts";
 import { sha256Hex } from "../utils.ts";
 import { accessBytesResponse } from "./access-byte-fixture.mjs";
 

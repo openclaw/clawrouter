@@ -1,5 +1,5 @@
 import { readNativeJson } from "./native-json.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const miniMaxImageModel = "image-01";
 export const miniMaxImagePath = "/v1/image_generation";

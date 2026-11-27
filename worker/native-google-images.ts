@@ -1,7 +1,7 @@
 import { googleImageModels, observeGoogleImage, prepareGoogleImage } from "./google-images.ts";
 import { jsonBodyBytes } from "./json-body.ts";
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
-import { readNativeJson } from "./native-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
+import { readIdentityNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { HttpError } from "./http-error.ts";
@@ -42,16 +42,7 @@ export function prepareNativeGoogleImage(selection: ProxySelection): NativeRespo
     // BodyLease charges twice this amount, before dispatch, through delivery.
     acquire: () => nativeResponseLease(32 * 1024 * 1024),
     async read(response, signal) {
-      const encoding = response.headers.get("content-encoding");
-      if (response.status !== 200 || response.redirected || encoding !== null && encoding.trim().toLowerCase() !== "identity") {
-        void response.body?.cancel().catch(() => undefined); invalid();
-      }
-      // Identity still needs the reader's exact declared-length comparison.
-      if (encoding !== null) {
-        const headers = new Headers(response.headers); headers.delete("content-encoding");
-        response = new Response(response.body, { status: response.status, headers });
-      }
-      return readNativeJson(response, signal, jsonLimit, original => {
+      return readIdentityNativeJson(response, signal, jsonLimit, original => {
         const observed = observeGoogleImage(original, true);
         let bytes = 0, count = 0;
         const candidates = list(observed.body.candidates).map(value => {

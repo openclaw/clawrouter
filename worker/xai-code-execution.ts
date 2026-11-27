@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { observeXaiSearch, readXaiSearch, type XaiSearchQualification, type XaiSearchObservation } from "./xai-search.ts";
 
 type Json = Record<string, unknown>;

@@ -32,7 +32,7 @@ const observerCode = stripTypeScriptTypes(observerSource);
 const { preserveFailures, createLifetimeObserver } = new Function(observerCode + "; return { preserveFailures, createLifetimeObserver };")();
 const responseHarness = readFileSync(new URL("./openclaw-provider-responses.test.mjs", import.meta.url), "utf8");
 const outcomeSource = responseHarness.slice(responseHarness.indexOf("const workerOutcomePins ="), responseHarness.indexOf("function assertProof("));
-assert.equal(sha(outcomeSource), "bde24d7748ccad7cf76c034ae6535ac36cdc33359e853cc6cce584bc1e6b1b8d");
+assert.equal(sha(outcomeSource), "30efa102a291f83f9aa63dd262118614e3c5e7d9c561595550aa0d6e7300dc5b");
 const outcomeHelperSource = readFileSync(new URL("./helpers/worker-outcome-fixture.mjs", import.meta.url), "utf8");
 assert.equal(sha(outcomeHelperSource), "7b6cd56db95d00e362a86fb1aa6f0eca79635146c8129c4ead740b09474c456e");
 // Google does not enter ownOrdinaryResponse. Its original fetched reader is

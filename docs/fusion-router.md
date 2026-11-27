@@ -64,6 +64,12 @@ model and resource controls below the cards configure the selected workflow.
 - input and injected-proposal character limits; and
 - adviser temperature preference.
 
+The adviser input limit counts text across the most recent messages. When a
+message exceeds the remaining budget, Fusion keeps its beginning and end and
+marks the omitted middle. This preserves the task instruction before a long
+source excerpt as well as its closing context. Very small remaining budgets
+keep only the tail. The synthesizer still receives the original conversation.
+
 Every selected model must expose OpenAI chat-completions request and response
 formats. Provider-native chat routes without that wire contract are rejected.
 Advisers receive the temperature preference only when that model and endpoint
@@ -427,6 +433,24 @@ Only include feedback that the fallback is allowed to see. Keep evaluation-only
 held-out cases outside this receipt, and treat generated artifacts as untrusted
 data in the provider adapter. No quality or cost improvement is implied by this
 option; validate it on the intended workload.
+
+Set `draftAttempts: 2` with `strategy: 'cascade'` to give the draft model
+one repair attempt before using the strong fallback. Handle the `draft-repair`
+stage in the caller's adapter: it uses `models.draft` and receives the rejected
+draft plus cloned verifier feedback. Each draft attempt uses the same
+verification gate. A passing repair ends the workflow without a strong call.
+
+If both drafts fail, `fallbackMode: 'fresh'` keeps the strong request isolated
+from them. With `fallbackMode: 'repair'`, the strong model receives the latest
+rejected draft and its feedback. The existing deadline covers every attempt;
+provider and verifier errors stop the workflow instead of triggering fallback.
+
+The default `draftAttempts: 1` preserves the current sequence. Only 1 and 2
+are accepted, and only cascades may use 2. Combining `draftAttempts: 2` with
+`fallbackAttempts: 2` permits at most four calls. Reserve for every allowed
+attempt before dispatch and retain every charge, including failed drafts.
+This caller-side option does not enable a routing default or establish a
+quality or cost advantage for a workload.
 
 Set `fallbackAttempts: 2` with `strategy: 'cascade'` to allow one repair of a
 failed strong fallback. The maximum then becomes three calls: cheap draft,

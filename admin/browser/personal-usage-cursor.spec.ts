@@ -2,8 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { cursorUsageFixture } from '../test/helpers/personal-usage-cursor.mjs';
 import { fixtureResponses } from './fixtures/personal-usage';
 
-async function cursorUsage(page: Page) {
- const server=await cursorUsageFixture();let now=server.now,failReport=false,failEvents=false;
+async function cursorUsage(page: Page, options?: { rows: number }) {
+ const server=await cursorUsageFixture(options);let now=server.now,failReport=false,failEvents=false;
  const queries:URL[]=[],invalid:string[]=[];
  await page.clock.setFixedTime(new Date(now));
  await page.route('**/v1/**',async route=>{
@@ -27,6 +27,268 @@ async function custom(page:Page,from:string,to:string,timezone='UTC'){
  await page.getByLabel('Start',{exact:true}).fill(from);await page.getByLabel('End (exclusive)',{exact:true}).fill(to);await page.getByLabel('Timezone',{exact:true}).fill(timezone);await page.getByRole('button',{name:'Apply filters',exact:true}).click();
 }
 
+test('partial recorded accounting is visible before expanding the member summary', async ({ page }) => {
+ const f = await cursorUsage(page, { rows: 0 });
+ try {
+  await f.ingest('free', { cost_basis: 'none', actual_cost_micros: 0 });
+  await f.ingest('estimate', { cost_basis: 'unpriced_model', actual_cost_micros: 0, reporting_estimated_cost_micros: 25_000, reporting_estimate_reason: 'fixture' });
+  // Historical invalid accounting is normalized to null, not a genuine zero.
+  await f.ingest('unreported', { cost_basis: 'unpriced_model', actual_cost_micros: -1 });
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const calls = summary.getByText('Model calls', { exact: true }).locator('+ dd');
+  const accounting = summary.locator('.personalAccounting');
+  const headline = accounting.locator('summary');
+  const caveat = ' · not a price or confirmed settlement';
+  for (const surface of ['Dashboard', 'My usage']) {
+   if (surface === 'Dashboard') await page.goto('/dashboard/home');
+   else await summary.getByRole('button', { name: 'Open My usage' }).click();
+   await expect(calls).toHaveText('3');
+   await expect(accounting).not.toHaveAttribute('open');
+   await expect.soft(headline, surface).toHaveText('Recorded accounting subtotal: $0.00 · 2 of 3 calls reported' + caveat);
+  }
+  await headline.focus();
+  await page.keyboard.press('Enter');
+  await expect(accounting.getByText('2/3 rows with a valid recorded accounting field.')).toBeVisible();
+  const nextDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export refreshed snapshot JSON' }).click();
+  const stream = await (await nextDownload).createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream!) chunks.push(chunk);
+  const file = JSON.parse(Buffer.concat(chunks).toString());
+  expect(file.metadata.totals).toMatchObject({ recordedChargeMicros: 0, chargeReportedCalls: 2, metrics: { calls: 3 } });
+  expect(file.events).toEqual(expect.arrayContaining([
+   expect.objectContaining({ id: 'free', costClass: 'no_charge', reportingCostMicros: 0, recordedChargeMicros: 0 }),
+   expect.objectContaining({ id: 'estimate', costClass: 'estimated', reportingCostMicros: 25_000, recordedChargeMicros: 0 }),
+   expect.objectContaining({ id: 'unreported', costClass: 'unknown', reportingCostMicros: null, recordedChargeMicros: null }),
+  ]));
+
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  await form.getByText('Custom dates & exact filters').click();
+  const quality = form.getByLabel('Price quality');
+  const apply = form.getByRole('button', { name: 'Apply filters' });
+  await quality.selectOption('no_charge');
+  await apply.click();
+  await expect(calls).toHaveText('1');
+  await expect(headline).toHaveText('Recorded accounting amount: $0.00' + caveat);
+  await quality.selectOption('unknown');
+  await apply.click();
+  await expect(headline).toHaveText('Recorded accounting amount: Not reported' + caveat);
+  await expect(calls).toHaveText('1');
+  await form.getByLabel('Model (exact)').fill('no-matching-model');
+  await apply.click();
+  await expect(calls).toHaveText('0');
+  await expect(headline).toHaveText('Recorded accounting amount: Not reported' + caveat);
+ } finally { f.close(); }
+});
+
+test('members compare keys, inspect one and return to all keys in the same period', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  await f.ingest('build-call', { credential_id: 'build-key', model: 'build-model', input_tokens: 12, output_tokens: 4, total_tokens: 16, actual_cost_micros: 15, cost_basis: 'unpriced_usage' });
+  await page.route('**/v1/session/credentials', route => route.fulfill({ json: { credentials: [
+   { credentialId: 'build-key', name: 'Renamed build runner', policyId: 'p', principalId: 'member@example.com', enabled: true },
+   { credentialId: 'retained-key', name: 'Retired laptop', policyId: 'p', principalId: 'member@example.com', enabled: false },
+  ] } }));
+  await f.ingest('session-call', { credential_id: null });
+  await f.ingest('another-member', { principal_id: 'other@example.test', credential_id: 'another-members-key' });
+  await page.goto('/dashboard/my-usage');
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const ranks = page.getByRole('region', { name: 'Usage breakdown' });
+  const calls = summary.locator('.personalGlance > div').filter({ has: page.getByText('Model calls', { exact: true }) }).locator('dd').first();
+  await expect(calls).toHaveText('144');
+  const from = new Date(f.now - 3600000).toISOString(), to = f.end();
+  await custom(page, from, to);
+  await expect(summary.locator('.personalRange')).toContainText(from);
+  await expect(calls).toHaveText('144');
+  await page.getByText('Custom dates & exact filters', { exact: true }).click();
+  const compare = page.getByRole('button', { name: 'Compare keys', exact: true });
+  await page.getByRole('combobox', { name: 'Group by', exact: true }).focus();
+  await page.keyboard.press('Tab');
+  await expect(compare).toBeFocused();
+  await expect(compare).toHaveCSS('outline-style', 'solid');
+  await page.keyboard.press('Enter');
+  await expect(ranks.getByRole('heading', { name: 'Top keys' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Comparing keys' })).toBeFocused();
+  await expect(ranks.getByRole('listitem').filter({ hasText: 'retained-key' })).toContainText('426');
+  await expect(ranks.getByRole('listitem').filter({ hasText: 'build-key' })).toContainText('16');
+  const inventory = page.getByRole('combobox', { name: 'Current own-key selector' });
+  await expect(inventory).toContainText('Current name: Renamed build runner — build-key');
+  await expect(inventory).toContainText('Current name: Retired laptop — retained-key (revoked)');
+  await expect(ranks).not.toContainText('Renamed build runner');
+  await expect(ranks).not.toContainText('Retired laptop');
+  await expect(ranks).not.toContainText('another-members-key');
+  const cut = reads(f, 'report').at(-1)!.searchParams.get('cut');
+  expect(cut).toBeTruthy();
+
+  await ranks.getByRole('button', { name: 'build-key', exact: true }).click();
+  await expect(calls).toHaveText('1');
+  await expect(ranks.getByRole('heading', { name: 'Selected key usage' })).toBeVisible();
+  const scope = summary.locator('.personalActiveFilters');
+  await expect(scope.locator('strong')).toHaveText('Selected key = build-key');
+  await expect(scope.locator('time').first()).toHaveAttribute('datetime', from);
+  await expect(scope.locator('time').last()).toHaveAttribute('datetime', to);
+  await expect(summary).toContainText('12 input · 4 output');
+  await expect(summary).toContainText('Recorded accounting amount: $0.000015');
+  await expect(summary.getByLabel('Known API cost unavailable')).toBeVisible();
+  await activity(page);
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page)).toContainText('build-model');
+  await expect(rows(page)).toContainText('Price unknown');
+  await expect(rows(page).getByText('Key: build-key', { exact: true })).toBeVisible();
+  const events = reads(f, 'events').at(-1)!.searchParams;
+  expect([events.get('key'), events.get('from'), events.get('to'), events.get('cut')]).toEqual(['build-key', from, to, cut]);
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export refreshed snapshot JSON' }).click();
+  const stream = await (await download).createReadStream();
+  let json = '';
+  for await (const chunk of stream!) json += chunk.toString();
+  const file = JSON.parse(json);
+  expect(file.metadata.filters.key).toEqual({ kind: 'credential', id: 'build-key' });
+  expect(file.metadata.range).toMatchObject({ from: Date.parse(from), to: Date.parse(to) });
+  expect(file.events).toHaveLength(1);
+  expect(file.events[0]).toMatchObject({ user: 'member@example.com', keyId: 'build-key', reportingCostMicros: null, recordedChargeMicros: 15 });
+
+  await page.getByRole('button', { name: 'Show all keys', exact: true }).click();
+  await expect(calls).toHaveText('144');
+  await expect(rows(page)).toHaveCount(100);
+  // Scanning mixed activity doesn't require opening each call or resolving today's names.
+  const activityTable = page.getByRole('region', { name: 'Recent calls table', exact: true });
+  for (const identity of ['Key: build-key', 'Key: retained-key', 'Dashboard session']) {
+   await expect(activityTable.getByText(identity, { exact: true }).first()).toBeVisible();
+  }
+  await expect(activityTable).not.toContainText('another-members-key');
+  await expect(activityTable).not.toContainText('Retired laptop');
+  const restored = reads(f, 'events').at(-1)!.searchParams;
+  expect([restored.get('groupBy'), restored.get('keyKind'), restored.get('from'), restored.get('to'), restored.get('cut')]).toEqual(['key', null, from, to, cut]);
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await ranks.getByRole('button', { name: 'Dashboard session', exact: true }).click();
+  await expect(calls).toHaveText('1');
+  await expect(scope).toContainText('Dashboard session');
+  expect(reads(f, 'report').at(-1)!.searchParams.get('keyKind')).toBe('session');
+
+  // A key with no matching rows is a valid filter. Clearing only that key
+  // keeps the member's applied provider and the original period.
+  await page.getByText('Custom dates & exact filters', { exact: true }).click();
+  await page.getByLabel('Key ID (exact)', { exact: true }).fill('unused-key');
+  await page.getByLabel('Provider (exact)', { exact: true }).fill('openai');
+  await page.getByRole('button', { name: 'Apply filters' }).click();
+  await expect(calls).toHaveText('0');
+  await expect(summary).toContainText('No calls in discovered locations for this range for your current access.');
+  await page.getByRole('button', { name: 'Show all keys' }).click();
+  await expect(calls).toHaveText('144');
+  await expect(summary).toContainText('provider = openai');
+  const reset = reads(f, 'report').at(-1)!.searchParams;
+  expect([reset.get('provider'), reset.get('keyKind'), reset.get('from'), reset.get('to')]).toEqual(['openai', null, from, to]);
+  await inventory.selectOption('key:retained-key');
+  await expect(calls).toHaveText('142');
+  await expect(summary.getByText('Selected key = retained-key', { exact: true })).toBeVisible();
+  await expect(summary).not.toContainText('Retired laptop');
+  expect(f.queries.some(url => url.pathname.startsWith('/v1/admin/'))).toBe(false);
+  expect(f.invalid).toEqual([]);
+ } finally { f.close(); }
+});
+
+test('a failed refresh keeps key ranks readable but not actionable until Retry succeeds', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  await f.ingest('session-call', { credential_id: null });
+  await page.goto('/dashboard/my-usage');
+  await page.getByRole('button', { name: 'Compare keys', exact: true }).click();
+  const ranks = page.getByRole('region', { name: 'Usage breakdown' });
+  const keys = ['retained-key', 'Dashboard session'];
+  for (const name of keys) await expect(ranks.getByRole('button', { name, exact: true })).toBeEnabled();
+  f.failReport();
+  await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Old displayed report');
+  for (const name of keys) {
+   await expect(ranks.getByText(name, { exact: true })).toBeVisible();
+   await expect(ranks.getByRole('button', { name, exact: true })).toHaveCount(0);
+  }
+  await ranks.getByLabel('Group ranking scope and coverage').click();
+  await expect(ranks).not.toContainText('Select a named group');
+  await expect(ranks).not.toContainText('select a name to filter');
+  await expect(page.getByRole('combobox', { name: 'Current own-key selector' })).toBeDisabled();
+  await page.getByRole('tab', { name: 'Details', exact: true }).click();
+  const exact = page.getByRole('region', { name: 'Retained usage ranking' });
+  for (const name of keys) await expect(exact.getByRole('button', { name: 'member@example.com · ' + name, exact: true })).toBeDisabled();
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await page.getByRole('button', { name: 'Retry report' }).click();
+  for (const name of keys) await expect(ranks.getByRole('button', { name, exact: true })).toBeEnabled();
+  await expect(ranks).toContainText('select a name to filter');
+  await expect(page.getByRole('combobox', { name: 'Current own-key selector' })).toBeEnabled();
+  expect(f.invalid).toEqual([]);
+ } finally { f.close(); }
+});
+
+test('Activity distinguishes a pending page, a blocked report, and an independently retryable page', async ({ page }) => {
+ const f = await cursorUsage(page, { rows: 0 });
+ const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+ try {
+  await f.ingest('old', { credential_id: 'old-key', model: 'old-model' });
+  await f.ingest('new-1', { credential_id: 'new-key', model: 'new-model-1' });
+  await f.ingest('new-2', { credential_id: 'new-key', model: 'new-model-2' });
+  await page.route(url => url.pathname === '/v1/session/usage/events' && url.searchParams.get('key') === 'old-key', async route => {
+   const body = await f.read(route.request().url());
+   started.resolve();
+   await release.promise;
+   await route.fulfill({ json: body });
+  }, { times: 1 });
+  await page.goto('/dashboard/my-usage');
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const calls = summary.getByText('Model calls', { exact: true }).locator('+ dd');
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  const key = form.getByLabel('Key ID (exact)', { exact: true });
+  const apply = form.getByRole('button', { name: 'Apply filters' });
+  const recent = page.getByRole('region', { name: 'Recent model calls' });
+  const download = page.getByRole('button', { name: 'Export refreshed snapshot JSON' });
+  await expect(calls).toHaveText('3');
+  await form.getByText('Custom dates & exact filters').click();
+  await key.fill('old-key');
+  await apply.click();
+  await expect(calls).toHaveText('1');
+  await activity(page);
+  await started.promise;
+  await expect(recent.getByRole('status')).toHaveText('Loading recent model calls…');
+  await expect(download).toBeEnabled();
+
+  f.failReport();
+  await key.fill('new-key');
+  await apply.click();
+  const alert = summary.getByRole('alert');
+  await expect(alert).toContainText('Injected report failure');
+  await expect(alert).toContainText('Old displayed report');
+  await expect(summary).toContainText('Selected key = old-key');
+  release.resolve();
+  await expect(calls).toHaveText('1');
+  await expect(download).toBeDisabled();
+  await expect(recent.getByRole('button')).toHaveCount(0);
+  await expect(rows(page)).toHaveCount(0);
+  expect(reads(f, 'events').filter(url => url.searchParams.get('key') === 'new-key')).toHaveLength(0);
+  const blocked = await recent.innerText();
+  expect.soft(blocked).toContain('Retry the report above to load recent calls.');
+  expect.soft(blocked).not.toContain('Loading recent model calls');
+
+  f.failEvents();
+  await alert.getByRole('button', { name: 'Retry report' }).click();
+  await expect(calls).toHaveText('2');
+  await expect(summary).toContainText('Selected key = new-key');
+  await expect(download).toBeEnabled();
+  await expect(recent.getByRole('alert')).toContainText('Injected event failure');
+  const reportReads = reads(f, 'report').length;
+  const failedPage = reads(f, 'events').at(-1)!.search;
+  await recent.getByRole('button', { name: 'Retry recent calls' }).click();
+  await expect(rows(page)).toContainText(['new-model-2', 'new-model-1']);
+  await expect(recent.getByRole('alert')).toHaveCount(0);
+  expect(reads(f, 'events').at(-1)!.search).toBe(failedPage);
+  expect(reads(f, 'report')).toHaveLength(reportReads);
+  expect(f.invalid).toEqual([]);
+ } finally {
+  release.resolve();
+  await page.unrouteAll({ behavior: 'wait' });
+  f.close();
+ }
+});
+
 test('same-root retries preserve exact cursor; navigation retires roots and reentry starts page one',async({page})=>{
  const f=await cursorUsage(page);try{
   await page.goto('/dashboard/my-usage');await activity(page);await expect(rows(page)).toHaveCount(100);
@@ -40,6 +302,105 @@ test('same-root retries preserve exact cursor; navigation retires roots and reen
   await expect(page.getByRole('button',{name:'Previous page',exact:true})).toBeDisabled();expect(f.invalid).toEqual([]);
  }finally{f.close();}
 });
+test('invalid custom dates leave the last applied period, events and export intact', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  const day = 86_400_000, start = Math.floor(f.now / day) * day - 3 * day;
+  const date = (offset: number) => new Date(start + offset * day).toISOString().slice(0, 10);
+  for (const [id, at] of [['before', start - 1], ['first', start], ['last', start + day - 1], ['after', start + day]] as const) {
+   await f.ingest(id, { model: 'period-test', occurred_at_ms: at });
+  }
+  await f.ingest('other-model', { model: 'excluded', occurred_at_ms: start });
+  await page.goto('/dashboard/my-usage');
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const calls = summary.getByText('Model calls', { exact: true }).locator('+ dd');
+  await expect(calls).toHaveText('147');
+  await form.getByText('Custom dates & exact filters').click();
+  const model = form.getByLabel('Model (exact)', { exact: true });
+  const from = form.getByLabel('Start', { exact: true });
+  const to = form.getByLabel('End (exclusive)', { exact: true });
+  const apply = form.getByRole('button', { name: 'Apply filters' });
+  await model.fill('period-test');
+  await custom(page, date(0), date(1));
+  await activity(page);
+  await expect(calls).toHaveText('2');
+  await expect(rows(page)).toHaveCount(2);
+  const priorReads = f.queries.filter(url => url.pathname.startsWith('/v1/session/usage/')).length;
+  await model.fill('unapplied');
+  await from.fill(date(1));
+  await to.fill(date(0));
+  await apply.focus();
+  await page.keyboard.press('Enter');
+  const error = form.getByRole('alert');
+  await expect(error).toContainText('not applied');
+  await expect(error).toContainText('end is exclusive');
+  await expect(from).toHaveValue(date(1));
+  await expect(to).toHaveValue(date(0));
+  await expect(form.getByRole('button', { name: 'Last 7 days' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(calls).toHaveText('2');
+  await expect(rows(page)).toContainText(['period-test', 'period-test']);
+  await expect(summary).toContainText('model = period-test');
+  await expect(page.getByRole('button', { name: 'Retry report' })).toHaveCount(0);
+  await from.fill('2026-02-30');
+  await form.getByRole('combobox', { name: 'Group by' }).selectOption('provider');
+  await expect(error).toContainText('Invalid calendar date');
+  await expect(form.getByRole('combobox', { name: 'Group by' })).toHaveValue('model');
+  expect(f.queries.filter(url => url.pathname.startsWith('/v1/session/usage/'))).toHaveLength(priorReads);
+
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export refreshed snapshot JSON' }).click();
+  const stream = await (await download).createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream!) chunks.push(chunk);
+  const file = JSON.parse(Buffer.concat(chunks).toString());
+  expect(file.metadata.range).toMatchObject({ from: start, to: start + day, timezone: 'UTC' });
+  expect(file.metadata.filters.model).toBe('period-test');
+  expect(file.events.map((event: { id: string }) => event.id)).toEqual(['last', 'first']);
+  await expect(from).toHaveValue('2026-02-30');
+  await expect(model).toHaveValue('unapplied');
+
+  await model.fill('period-test');
+  await custom(page, date(1), date(2));
+  await expect(error).toHaveCount(0);
+  await expect(calls).toHaveText('1');
+  await expect(rows(page)).toHaveCount(1);
+  await custom(page, date(2), date(3));
+  await expect(calls).toHaveText('0');
+  await expect(page.getByText('No recent model calls for these filters.')).toBeVisible();
+  await custom(page, date(2), date(1));
+  await expect(error).toBeVisible();
+  await form.getByRole('button', { name: 'Last 7 days' }).click();
+  await expect(error).toHaveCount(0);
+  await expect(calls).toHaveText('4');
+  await expect(rows(page)).toHaveCount(4);
+  expect(f.invalid).toEqual([]);
+ } finally { f.close(); }
+});
+
+test('a replacement member does not inherit the invalid draft or the previous report', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  await page.goto('/dashboard/my-usage');
+  await expect(page.getByRole('heading', { name: 'Top models', exact: true })).toBeVisible();
+  await custom(page, 'not-a-date', f.end());
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  await expect(form.getByRole('alert')).toContainText('not applied');
+  await page.route('**/v1/session', route => route.fulfill({ json: {
+   ...(fixtureResponses['/v1/session'] as object), email: 'second@example.test', tenantId: 'second-tenant',
+  } }));
+  // The replacement identity has no access to the former member's usage fixture.
+  await page.route('**/v1/session/usage/report?**', route => route.fulfill({ json: { kind: 'no_access' } }));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('.tenantSwitch strong')).toHaveText('second@example.test');
+  await expect(page.getByRole('alert')).toHaveText(/No current access/);
+  await expect(form.getByRole('alert')).toHaveCount(0);
+  await form.getByText('Custom dates & exact filters').click();
+  await expect(form.getByLabel('Start', { exact: true })).toHaveValue('');
+  await expect(page.getByRole('heading', { name: 'Top models', exact: true })).toHaveCount(0);
+ } finally { f.close(); }
+});
+
 test('failed report retry creates a fresh root; custom range stays pinned on refresh and page stack resets',async({page})=>{
  const f=await cursorUsage(page);try{
   await page.goto('/dashboard/my-usage');await pageTwo(page);const from=new Date(f.now-3600000).toISOString(),to=f.end();

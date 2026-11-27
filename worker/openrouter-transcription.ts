@@ -1,4 +1,4 @@
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 import { readNativeJson } from "./native-json.ts";
 
 export const openRouterTranscriptionModels = ["openai/whisper-large-v3-turbo"] as const;

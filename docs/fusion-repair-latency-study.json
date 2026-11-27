@@ -1,0 +1,833 @@
+{
+  "schema": "fusion-repair-latency-study-v1",
+  "date": "2026-11-27",
+  "component": {
+    "scope": "Both public-rejected drafts from the completed six-task fresh-package study; three paired repeats per task. API time only. Previously exposed tasks, no production qualification.",
+    "protocolSha256": "12836ade8a00cbfa914935aa37cf278109ee49b3d778cd5f56edba3c484c23ae",
+    "auditSha256": "6f3e5daaf7141d8fa13d2a865d9e330210b142ad33cf7d8bb83b4b3047671760",
+    "model": "openai/gpt-6.1-terra",
+    "reasoningEffort": "medium",
+    "maxOutputTokens": 8192,
+    "gate": {
+      "allRepairPass": true,
+      "noLostFreshSuccess": true,
+      "minimumEstimatedCostReduction": 0.2,
+      "minimumCacheNeutralCostReduction": 0.2,
+      "minimumApiTimeReduction": 0.2,
+      "minimumPairedTimeWins": 4,
+      "eachTaskFaster": true
+    },
+    "records": [
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "round": 0,
+        "arm": "fresh",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 74921,
+          "expectedTests": 74921
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74926,
+          "expectedTests": 74926
+        },
+        "costMicros": 14645,
+        "normalizedMicros": 34336,
+        "apiMs": 33065.782291
+      },
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "round": 0,
+        "arm": "repair",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 74921,
+          "expectedTests": 74921
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74926,
+          "expectedTests": 74926
+        },
+        "costMicros": 12606,
+        "normalizedMicros": 31999,
+        "apiMs": 23995.500332999996
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "round": 0,
+        "arm": "repair",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 75167,
+          "expectedTests": 75167
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 75168,
+          "expectedTests": 75168
+        },
+        "costMicros": 6897,
+        "normalizedMicros": 30342,
+        "apiMs": 11890.540708
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "round": 0,
+        "arm": "fresh",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 75167,
+          "expectedTests": 75167
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 75168,
+          "expectedTests": 75168
+        },
+        "costMicros": 7642,
+        "normalizedMicros": 31269,
+        "apiMs": 19554.177666999996
+      },
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "round": 1,
+        "arm": "repair",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 74921,
+          "expectedTests": 74921
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74926,
+          "expectedTests": 74926
+        },
+        "costMicros": 10935,
+        "normalizedMicros": 31759,
+        "apiMs": 23186.168208999996
+      },
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "round": 1,
+        "arm": "fresh",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 74921,
+          "expectedTests": 74921
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74926,
+          "expectedTests": 74926
+        },
+        "costMicros": 17915,
+        "normalizedMicros": 37606,
+        "apiMs": 38521.692500000005
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "round": 1,
+        "arm": "fresh",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 75167,
+          "expectedTests": 75167
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 75168,
+          "expectedTests": 75168
+        },
+        "costMicros": 7337,
+        "normalizedMicros": 30965,
+        "apiMs": 15820.106333000003
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "round": 1,
+        "arm": "repair",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 75167,
+          "expectedTests": 75167
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 75168,
+          "expectedTests": 75168
+        },
+        "costMicros": 6773,
+        "normalizedMicros": 31092,
+        "apiMs": 13373.070083999977
+      },
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "round": 2,
+        "arm": "fresh",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 74921,
+          "expectedTests": 74921
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74926,
+          "expectedTests": 74926
+        },
+        "costMicros": 11305,
+        "normalizedMicros": 30997,
+        "apiMs": 27242.709083000023
+      },
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "round": 2,
+        "arm": "repair",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 74921,
+          "expectedTests": 74921
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74926,
+          "expectedTests": 74926
+        },
+        "costMicros": 12220,
+        "normalizedMicros": 33045,
+        "apiMs": 26580.106874999998
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "round": 2,
+        "arm": "repair",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 75167,
+          "expectedTests": 75167
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 75168,
+          "expectedTests": 75168
+        },
+        "costMicros": 6508,
+        "normalizedMicros": 30827,
+        "apiMs": 14274.516124999995
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "round": 2,
+        "arm": "fresh",
+        "public": {
+          "valid": true,
+          "passed": true,
+          "tests": 75167,
+          "expectedTests": 75167
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 75168,
+          "expectedTests": 75168
+        },
+        "costMicros": 6937,
+        "normalizedMicros": 30564,
+        "apiMs": 15247.951791
+      }
+    ],
+    "summary": {
+      "fresh": {
+        "passed": 6,
+        "costMicros": 65781,
+        "normalizedMicros": 195737,
+        "apiMs": 149452.41966500002
+      },
+      "repair": {
+        "passed": 6,
+        "costMicros": 55939,
+        "normalizedMicros": 189064,
+        "apiMs": 113299.90233399995
+      },
+      "losses": 0,
+      "timeWins": 6,
+      "caseTimeWins": true,
+      "componentGatePassed": false,
+      "workflowGainQualified": false
+    }
+  },
+  "workflow": {
+    "scope": "Prospectively fixed development replay on all six already exposed tasks from the fresh-package study. Independent direct-strong, single-cheap and cheap-then-one-strong-repair arms. Initial requests identical to the parent study; repair alone appends its own rejected proposal and bounded public failure. Strict anchored acceptance unchanged, including rejection of invalid anchors; the rejected text is diagnostic only. Hash-seeded arm order, original public/full tests and exact counts, all full labels after all arms. End-to-end timing includes preflight, durable accounting, decoding and public verification. <=1.0x direct-strong time, >=20% estimated saving, cache-neutral cost screen, no strong losses/false accepts and quality above cheap required. Max24calls, $4 within cumulative$400. No new task-transfer or production qualification. Retain <=512files/64MiB.",
+    "protocolSha256": "b52fe65caee34dde4690f0117bacaa9085c93fb549c675abd2f60c2fede3fd85",
+    "policy": {
+      "orderSeed": "flat-repair-three-arm-v1",
+      "fallbackMode": "repair",
+      "controlMode": "single",
+      "maximumCalls": 24,
+      "stageBudgetMicros": 4000000,
+      "maxElapsedRatio": 1,
+      "fullLabelsUsedForRouting": false
+    },
+    "records": [
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "strategy": "cheap",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 4172,
+        "costMicros": 4690,
+        "elapsedMs": 34228.773542,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74926,
+          "expectedTests": 74926
+        },
+        "passed": true
+      },
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": true,
+        "normalizedMicros": 33938,
+        "costMicros": 12605,
+        "elapsedMs": 49545.893541,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74926,
+          "expectedTests": 74926
+        },
+        "passed": true
+      },
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 31907,
+        "costMicros": 12215,
+        "elapsedMs": 32662.143540999998,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74926,
+          "expectedTests": 74926
+        },
+        "passed": true
+      },
+      {
+        "caseId": "safe-stable-stringify-66517e725672",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 22847,
+        "costMicros": 27868,
+        "elapsedMs": 15267.604416999995,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74921,
+          "expectedTests": 74921
+        },
+        "passed": true
+      },
+      {
+        "caseId": "safe-stable-stringify-66517e725672",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 2247,
+        "costMicros": 2749,
+        "elapsedMs": 10714.462958000018,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74921,
+          "expectedTests": 74921
+        },
+        "passed": true
+      },
+      {
+        "caseId": "safe-stable-stringify-66517e725672",
+        "strategy": "cheap",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 2258,
+        "costMicros": 450,
+        "elapsedMs": 9646.298749999987,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74921,
+          "expectedTests": 74921
+        },
+        "passed": true
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "strategy": "cheap",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 2998,
+        "costMicros": 3620,
+        "elapsedMs": 11989.79570799999,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 75168,
+          "expectedTests": 75168
+        },
+        "passed": true
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 31170,
+        "costMicros": 7542,
+        "elapsedMs": 26001.743707999995,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 75168,
+          "expectedTests": 75168
+        },
+        "passed": true
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 3109,
+        "costMicros": 871,
+        "elapsedMs": 14488.949625000008,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 75168,
+          "expectedTests": 75168
+        },
+        "passed": true
+      },
+      {
+        "caseId": "safe-stable-stringify-a8df6a14cb25",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 2401,
+        "costMicros": 2945,
+        "elapsedMs": 9568.128874999995,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74940,
+          "expectedTests": 74940
+        },
+        "passed": true
+      },
+      {
+        "caseId": "safe-stable-stringify-a8df6a14cb25",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 29897,
+        "costMicros": 35338,
+        "elapsedMs": 28130.213749999995,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74940,
+          "expectedTests": 74940
+        },
+        "passed": true
+      },
+      {
+        "caseId": "safe-stable-stringify-a8df6a14cb25",
+        "strategy": "cheap",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 2666,
+        "costMicros": 707,
+        "elapsedMs": 12816.58270900001,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 74940,
+          "expectedTests": 74940
+        },
+        "passed": true
+      },
+      {
+        "caseId": "fastify-deepmerge-bc2075c0993b",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1419,
+        "costMicros": 1677,
+        "elapsedMs": 8456.279583999974,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 135,
+          "expectedTests": 135
+        },
+        "passed": true
+      },
+      {
+        "caseId": "fastify-deepmerge-bc2075c0993b",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 13457,
+        "costMicros": 16043,
+        "elapsedMs": 11608.568833000027,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 135,
+          "expectedTests": 135
+        },
+        "passed": true
+      },
+      {
+        "caseId": "fastify-deepmerge-bc2075c0993b",
+        "strategy": "cheap",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1842,
+        "costMicros": 911,
+        "elapsedMs": 14144.548332999984,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 135,
+          "expectedTests": 135
+        },
+        "passed": true
+      },
+      {
+        "caseId": "fastify-deepmerge-aa0137863598",
+        "strategy": "cheap",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1570,
+        "costMicros": 1858,
+        "elapsedMs": 8388.193291000032,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 147,
+          "expectedTests": 147
+        },
+        "passed": true
+      },
+      {
+        "caseId": "fastify-deepmerge-aa0137863598",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 18735,
+        "costMicros": 21616,
+        "elapsedMs": 21049.492417,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 147,
+          "expectedTests": 147
+        },
+        "passed": true
+      },
+      {
+        "caseId": "fastify-deepmerge-aa0137863598",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": true,
+        "normalizedMicros": 26849,
+        "costMicros": 15194,
+        "elapsedMs": 46531.907582999964,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 147,
+          "expectedTests": 147
+        },
+        "passed": true
+      }
+    ],
+    "calls": [
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "strategy": "cheap",
+        "role": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 4690,
+        "normalizedMicros": 4172,
+        "elapsedMs": 28239.946833,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "strategy": "cascade",
+        "role": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 1441,
+        "normalizedMicros": 3307,
+        "elapsedMs": 18010.826290999998,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "strategy": "cascade",
+        "role": "fallback",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 11164,
+        "normalizedMicros": 30631,
+        "elapsedMs": 21993.420250000003,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-132e76cad225",
+        "strategy": "strong",
+        "role": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 12215,
+        "normalizedMicros": 31907,
+        "elapsedMs": 27863.553,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-66517e725672",
+        "strategy": "strong",
+        "role": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 27868,
+        "normalizedMicros": 22847,
+        "elapsedMs": 8127.916500000007,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-66517e725672",
+        "strategy": "cascade",
+        "role": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 2749,
+        "normalizedMicros": 2247,
+        "elapsedMs": 3447.6199999999953,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-66517e725672",
+        "strategy": "cheap",
+        "role": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 450,
+        "normalizedMicros": 2258,
+        "elapsedMs": 3670.982458000013,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "strategy": "cheap",
+        "role": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 3620,
+        "normalizedMicros": 2998,
+        "elapsedMs": 7296.386666999984,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "strategy": "strong",
+        "role": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 7542,
+        "normalizedMicros": 31170,
+        "elapsedMs": 16424.940249999985,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-25b3110f88ed",
+        "strategy": "cascade",
+        "role": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 871,
+        "normalizedMicros": 3109,
+        "elapsedMs": 9036.96854099998,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-a8df6a14cb25",
+        "strategy": "cascade",
+        "role": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 2945,
+        "normalizedMicros": 2401,
+        "elapsedMs": 4161.708374999987,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-a8df6a14cb25",
+        "strategy": "strong",
+        "role": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 35338,
+        "normalizedMicros": 29897,
+        "elapsedMs": 23610.132083000004,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "safe-stable-stringify-a8df6a14cb25",
+        "strategy": "cheap",
+        "role": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 707,
+        "normalizedMicros": 2666,
+        "elapsedMs": 8262.136584000022,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "fastify-deepmerge-bc2075c0993b",
+        "strategy": "cascade",
+        "role": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 1677,
+        "normalizedMicros": 1419,
+        "elapsedMs": 6478.260250000021,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "fastify-deepmerge-bc2075c0993b",
+        "strategy": "strong",
+        "role": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 16043,
+        "normalizedMicros": 13457,
+        "elapsedMs": 9515.12045799999,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "fastify-deepmerge-bc2075c0993b",
+        "strategy": "cheap",
+        "role": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 911,
+        "normalizedMicros": 1842,
+        "elapsedMs": 12015.20416600001,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "fastify-deepmerge-aa0137863598",
+        "strategy": "cheap",
+        "role": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 1858,
+        "normalizedMicros": 1570,
+        "elapsedMs": 6246.997042000003,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "fastify-deepmerge-aa0137863598",
+        "strategy": "strong",
+        "role": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 21616,
+        "normalizedMicros": 18735,
+        "elapsedMs": 18637.37079200003,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "fastify-deepmerge-aa0137863598",
+        "strategy": "cascade",
+        "role": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 1303,
+        "normalizedMicros": 2339,
+        "elapsedMs": 15799.851584000047,
+        "disposition": "complete"
+      },
+      {
+        "caseId": "fastify-deepmerge-aa0137863598",
+        "strategy": "cascade",
+        "role": "fallback",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 13891,
+        "normalizedMicros": 24510,
+        "elapsedMs": 27080.259666999977,
+        "disposition": "complete"
+      }
+    ],
+    "summary": {
+      "strong": {
+        "passed": 6,
+        "costMicros": 120622,
+        "elapsedMs": 134719.766666
+      },
+      "cascade": {
+        "passed": 6,
+        "costMicros": 36041,
+        "elapsedMs": 139305.62216599996
+      },
+      "falseAccepts": 0,
+      "strongLosses": 0,
+      "rescues": 2,
+      "escalations": 2,
+      "costRatio": 0.2987929233473164,
+      "elapsedRatio": 1.03403996023367,
+      "costComparison": {
+        "costBasis": "invoice-and-cache-neutral-v1",
+        "strong": {
+          "costMicros": 120622,
+          "normalizedMicros": 148013
+        },
+        "cascade": {
+          "costMicros": 36041,
+          "normalizedMicros": 69963
+        },
+        "costRatio": 0.2987929233473164,
+        "normalizedCostRatio": 0.47268145365609776,
+        "invoiceCostScreen": true,
+        "normalizedCostScreen": true,
+        "costScreen": true
+      },
+      "qualityMatchedCostScreen": true,
+      "liveDevelopmentLead": false,
+      "qualifiedProductionGain": false,
+      "cheap": {
+        "passed": 6,
+        "costMicros": 12236,
+        "elapsedMs": 91214.19233300001
+      },
+      "summaryPolicy": "routing-three-arm-v1",
+      "routingLead": false
+    },
+    "auditSha256": "2f74f631589ab19758126cb525470cb5bb2faf2f02a630edf2c9508cd0fcb398",
+    "auditScope": "Complete outcome and cost replay matched, preserving original measured times; no model calls during audit."
+  }
+}

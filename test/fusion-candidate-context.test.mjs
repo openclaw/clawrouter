@@ -36,3 +36,14 @@ test('full-file fallback avoids expansion and invalid paths fail closed', () => 
   assert.throws(() => compactCandidateContext([file('a')], []), /candidate_path_mismatch/);
   assert.throws(() => compactCandidateContext([file('a')], [file('b'), file('c')]), /invalid_candidate_file/);
 });
+
+test('compact before request admission to avoid duplicating large originals', () => {
+  const original = [file('// ' + 'a'.repeat(100000) + '\nmodule.exports = 1;\n')];
+  const candidate = [file(original[0].content.replace('exports = 1', 'exports = 2'))];
+  const body = value => ({ original, candidate: value });
+  const limit = 190000;
+  assert.ok(Buffer.byteLength(JSON.stringify(body(candidate))) > limit);
+  const compact = compactCandidateContext(original, candidate);
+  assert.ok(Buffer.byteLength(JSON.stringify(body(compact))) < limit);
+  assert.deepEqual(reconstruct(original, compact), candidate);
+});

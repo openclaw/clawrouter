@@ -79,3 +79,21 @@ test('Node library source paths require explicit policy without weakening exclus
   }
   assert.doesNotThrow(() => fileArtifactSchema({ sourcePathPolicy: 'worker-v1', editPaths: ['worker/a.ts'] }));
 });
+
+
+test('package root replacements require an explicit narrow policy', () => {
+  const task = { sourcePathPolicy: 'node-package-root-v1', editPaths: ['index.js', 'default.js'] };
+  const files = task.editPaths.map(path => ({ path, content: 'module.exports = {};\n' }));
+  assert.deepEqual(parseFileArtifact(task, { files: [...files].reverse() }), { files });
+  assert.deepEqual(fileArtifactSchema(task).properties.files.items.properties.path.enum, task.editPaths);
+  for (const sourcePathPolicy of [undefined, 'worker-v1', 'node-library-v1']) {
+    assert.throws(() => fileArtifactSchema({ sourcePathPolicy, editPaths: ['index.js'] }), /invalid_replacement_path/);
+  }
+  for (const path of ['Index.js', 'index.mjs', 'index.cjs', 'package.json', 'test.js', 'lib/index.js',
+    '../index.js', './index.js', 'index.js/', 'src/index.js', 'test/index.js', 'node_modules/index.js',
+    'index.test.js', 'default.spec.js']) {
+    assert.throws(() => fileArtifactSchema({ ...task, editPaths: [path] }), /invalid_replacement_path/);
+  }
+  assert.throws(() => parseFileArtifact(task, { files: [files[0], files[0]] }), /unexpected_replacement_path/);
+  assert.throws(() => parseFileArtifact({ ...task, maxReplacementBytes: 4 }, { files }), /replacement_bytes/);
+});

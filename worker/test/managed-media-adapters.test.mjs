@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { KIE_MAX_ENVELOPE_BYTES } from "../kie-jobs.ts";
+import { VYDRA_MAX_ENVELOPE_BYTES } from "../vydra-jobs.ts";
 import { managedCreateAdapter, managedLifecycleAdapter } from "../managed-lifecycle-adapters.ts";
-import { managedMediaEnvelopeBytes } from "../managed-media-json.ts";
+import { managedMediaEnvelopeBytes } from "../media-wire.ts";
 
 const load = path => JSON.parse(readFileSync(new URL("../../providers/_fixtures/" + path, import.meta.url), "utf8"));
 const contracts = load("media/managed-routes.json");
@@ -15,6 +17,11 @@ const context = (c, action) => ({ action, ...(action === "create" ? {} : { expec
 const response = (body, status = 200) => Response.json(body, { status });
 const publicPaths = { retrieve: "/v1/native/fixture/jobs/job_fixture",
   result: "/v1/native/fixture/jobs/job_fixture/result", cancel: "/v1/native/fixture/jobs/job_fixture/cancel" };
+
+test("managed parsed job envelopes stay within both text codec limits", () => {
+  assert.ok(managedMediaEnvelopeBytes <= KIE_MAX_ENVELOPE_BYTES);
+  assert.ok(managedMediaEnvelopeBytes <= VYDRA_MAX_ENVELOPE_BYTES);
+});
 
 test("managed registry requires both explicit protocol and matching create format", () => {
   for (const { route, adapter } of cases) {

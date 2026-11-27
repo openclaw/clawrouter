@@ -4,7 +4,8 @@ import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
 import { isFalPromptVideoModel, prepareFalPromptVideo } from "./fal-prompt-video.ts";
 import { isFalHostedWanModel, prepareFalHostedWan } from "./fal-hosted-wan.ts";
 import { isFalSeedanceModel, prepareFalSeedance } from "./fal-seedance.ts";
-import { dropMediaControlUrls, exactMediaParams, mediaObject, mediaPublicPath, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
+import { readMediaJson } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, mediaObject, mediaPublicPath, noMediaQuery } from "./media-wire.ts";
 
 function endpointId(params: Record<string, string>): string {
   exactMediaParams(params, ["owner", "app"], ["variant", "subvariant"]);

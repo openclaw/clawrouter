@@ -26,6 +26,7 @@ export function router(source, candidate, proofOffset) { return `
  export class UsageLedgerObject extends Ledger {
   async fetch(request) {
    ${candidate ? costEvidenceLedgerRoute : ""}
+   ${candidate ? 'if (request.method === "POST" && new URL(request.url).pathname === "/_proof/alarm") { await super.alarm(); return Response.json({ ok: true }); }' : ''}
    if (new URL(request.url).pathname !== "/_proof/state") return super.fetch(request);
    const rows = [...this.sql.exec("SELECT id, event_json FROM usage_events ORDER BY id")];
    const exists = [...this.sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='usage_report_events'")].length > 0;
@@ -37,6 +38,7 @@ export function router(source, candidate, proofOffset) { return `
   env = { ...env, CLAWROUTER_LOCAL_AUTH: "enabled" };
   const url = new URL(request.url);
   ${candidate ? costRouterRoutes : ""}
+  ${candidate ? 'if (request.method === "POST" && url.pathname === "/_proof/alarm") return usageStub(env, "proof-tenant", "proof").fetch("https://ledger/_proof/alarm", { method: "POST" });' : ''}
   if (url.pathname === "/_proof/setup") {
    await authorityCall(env, "/policies/initialize-all", [{ policyId: "proof", policy }]);
    await authorityCall(env, "/connections/initialize-all", [{ providerId: "openai", enabled: true, monthlyBudgetMicros: null }]);
@@ -79,7 +81,7 @@ export const upstream = `export default { async fetch(request) {
 }};`;
 const summarize = values => { const sorted = [...values].sort((a,b)=>a-b); return { samplesMs: values, medianMs: sorted[Math.floor(sorted.length/2)], p95Ms: sorted[Math.ceil(sorted.length*.95)-1] }; };
 
-/** All authority/report/proxy/queue/ledger code is shipped code. Only setup/state inspection and upstream are fixture adapters. */
+/** All authority/report/proxy/queue/ledger code is shipped code. Setup/state inspection, alarm invocation and upstream are fixture adapters. */
 export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactPath } = {}) {
  const root = resolve(".openclaw/tmp"); await mkdir(root, { recursive: true });
  const temporary = await mkdtemp(join(root, "authenticated-upgrade-")), baseline = join(temporary, "baseline");
@@ -123,7 +125,8 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   const afterRead = await json("/_proof/state"); assert.equal(afterRead.rawDigest,before.rawDigest); assert.equal(afterRead.projection,0); assert.deepEqual(afterRead.config,before.config); assert.equal(afterRead.settingsDigest,before.settingsDigest); assert.equal(afterRead.budget.spentMicros,before.budget.spentMicros);
   await send("owner"); await send("other");
   const withNew = await until(()=>json("/_proof/state"),s=>s.rawCount===(eventsPerOwner+1)*2 && s.budget.spentMicros===(eventsPerOwner+1)*17);
-  assert.equal(withNew.projection,2);
+  // The upgraded history predates the projection, so nothing reads it: new writes no longer extend that copy.
+  assert.equal(withNew.projection,0);
   const beforeProjection = await samples("/v1/session/usage/report?days=7&intent=summary"), mixed = beforeProjection.body; assert.equal(mixed.metrics.calls,eventsPerOwner+1); assert.equal(mixed.metrics.reasoningReportedCalls,1); assert.equal(mixed.metrics.reasoningOutputTokens,10);
   await read("/_proof/binding",{method:"POST",body:JSON.stringify({enabled:false})});
   const revoked = await json("/v1/session/usage/report?days=7&intent=summary"); assert.equal(revoked.kind,"no_access");
@@ -139,7 +142,7 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   const release = await read("/v1/session/usage/report?" + new URLSearchParams({ cut: browse.cut }), { method: "DELETE", headers: { origin: "https://router.example" } });
   assert.equal(release.status,200,await release.clone().text());
   const migrate = async opts => {const r=await read("/_proof/migrate",{method:"POST",body:JSON.stringify(opts)});assert.equal(r.status,200,await r.clone().text());return r.json();};
-  const dry = await migrate({}); assert.equal(dry.dryRun,true); assert.equal((await json("/_proof/state")).projection,2);
+  const dry = await migrate({}); assert.equal(dry.dryRun,true); assert.equal((await json("/_proof/state")).projection,0);
   let applied; do { applied=await migrate({apply:true,batchSize:200}); } while(!applied.complete);
   const indexed=await samples("/v1/session/usage/report?days=7&intent=summary"), final=await json("/_proof/state");
   assert.equal(indexed.body.metrics.calls,eventsPerOwner+1); assert.equal(final.projectionComplete,true); assert.equal(indexed.body.coverage.allDiscoveredSourcesAnswered,true); assert.equal(final.rawDigest,withNew.rawDigest); assert.equal(final.budget.spentMicros,withNew.budget.spentMicros); assert.deepEqual(final.config,before.config);
@@ -152,6 +155,8 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   const sourcePaths = [
     "worker/index.ts",
     "worker/http-error.ts",
+    "worker/managed-media-json.ts",
+    "worker/media-wire.ts",
     "worker/access.ts",
     "worker/json-measurement.ts",
     "worker/local-auth.ts",
@@ -167,7 +172,10 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
     "providers/anthropic.provider.yaml",
     "providers/openai.provider.yaml",
     "worker/provider-auth.ts",
+    "worker/grant-compatibility.ts",
     "worker/model-discovery-formats.ts",
+    "worker/model-discovery-request.ts",
+    "worker/model-discovery.ts",
     "worker/authority.ts",
     "worker/grant-owner-facts.ts",
     "worker/authority-admission.ts",

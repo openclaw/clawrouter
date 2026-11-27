@@ -11,7 +11,8 @@ test('literal totals, day buckets, complete groups/remainder and all accounting 
  assert.deepEqual(r.costs,[{lane:'api',costClass:'calculated',calls:1,amountMicros:20},{lane:'subscription',costClass:'unknown',calls:1,amountMicros:0}]);
  assert.equal(r.rank.distinctGroups,2);assert.equal(r.remainder.metrics.calls,0);assert.equal(r.buckets.reduce((s,b)=>s+b.metrics.calls,0),2);
  assert.equal(r.coverage.historicalLocations,'not_exhaustively_assessed');assert.equal(r.coverage.formerLocationLateWrites,'not_bounded');assert.equal(f.owner.usageCuts,undefined);
- const exported=complete(await f.export());assert.equal(exported.events.length,2);assert.deepEqual(exported.report.metrics,r.metrics);
+ const exported=await f.export();assert.equal(exported.events.length,2);assert.deepEqual(exported.report.metrics,r.metrics);
+ assert.deepEqual(f.exportRequests.map(({kind})=>kind),['report','events','validate','release']);assert.equal(f.owner.usageCuts.roots.size,0);assert.equal(JSON.parse(exported.file.content).metadata.totals.metrics.calls,2);
 });
 
 test('more than 2048 groups: global winner absent local top100; exact ranks and remainder',async t=>{
@@ -52,7 +53,7 @@ test('late paired inserts excluded, fresh export independent, empty shard destru
  const f=await completeFixture(t);await f.ingest(0,f.event('before'));
  const r=complete(await f.read({intent:'browse'}));await f.ingest(0,f.event('late',{occurred_at_ms:f.now-5000}));
  assert.equal(complete(await f.continuation({kind:'report',intent:'browse',cut:r.cut,query:r.query})).metrics.calls,1);
- assert.equal(complete(await f.export(r.query)).events.length,2);
+ assert.equal((await f.export(r.query)).events.length,2);
  // Empty contributing shard still validates source and visibility.
  const empty=[...f.shards.values()][1];empty.sql.exec('UPDATE usage_report_visibility SET epoch=lower(hex(randomblob(16)))');
  assert.equal((await f.continuation({kind:'events',cut:r.cut,query:r.query})).kind,'restart');
@@ -63,7 +64,7 @@ test('retained v1 fallback preserves missing recorded amount; pinned source neve
  const shard=[...f.shards.values()][0];shard.sql.exec("UPDATE usage_events SET event_json=json_remove(event_json,'$.actual_cost_micros','$.input_tokens') WHERE id='missing'");
  const retained=complete(await f.read({intent:'browse'}));assert.equal(retained.metrics.calls,2);assert.equal(retained.chargeReportedCalls,1);assert.equal(retained.recordedChargeMicros,0);assert.equal(retained.metrics.inputReportedCalls,1);
  const root=[...f.owner.usageCuts.roots.values()][0];assert.equal(root.capture.vector[0].cut.source,'retained_ledger');
- const exported=complete(await f.export());assert.equal(exported.events.find(e=>e.id==='missing').recordedChargeMicros,null);assert.equal(exported.events.find(e=>e.id==='zero').recordedChargeMicros,0);
+ const exported=await f.export();assert.equal(exported.events.find(e=>e.id==='missing').recordedChargeMicros,null);assert.equal(exported.events.find(e=>e.id==='zero').recordedChargeMicros,0);
  const {migrateUsageReport}=await import('../usage-report-store.ts');migrateUsageReport(shard.sql,shard.transactionSync,{apply:true,now:f.now});
  assert.equal(complete(await f.continuation({kind:'report',intent:'browse',cut:retained.cut,query:retained.query})).chargeReportedCalls,1);
  assert.equal(root.capture.vector[0].cut.source,'retained_ledger');
@@ -131,16 +132,28 @@ test('cancel/outage releases pending, never partial; uncertain finalize observes
 test('disabled visibility maintenance commits drain on unavailable reads; attribution migration is unavailable',async t=>{
  const f=await completeFixture(t,1),s=[...f.shards.values()][0];for(let i=0;i<1001;i++)await f.ingest(0,f.event('r'+i));
  s.sql.exec('UPDATE usage_report_visibility SET usable=0');
- assert.deepEqual(await f.read(),{kind:'unavailable',reason:'capacity'});assert.equal(s.sql.exec('SELECT COUNT(*) AS n FROM usage_report_arrivals')[0].n,1);
+ // Recovering visibility is retryable and independent of the requested range.
+ assert.deepEqual(await f.read(),{kind:'unavailable',reason:'migration'});assert.equal(s.sql.exec('SELECT COUNT(*) AS n FROM usage_report_arrivals')[0].n,1);
  assert.equal(complete(await f.read()).metrics.calls,1001);
  s.sql.exec('UPDATE usage_attribution_migration SET complete=0');assert.deepEqual(await f.read(),{kind:'unavailable',reason:'migration'});
+});
+
+test('in-range ingest between capture and group pages is excluded without exhausting the allowance',async t=>{
+ const f=await completeFixture(t,1);await f.ingest(0,f.event('before'));
+ let late=0;const after=new Set(['capture','groups']);
+ f.hook=async(call,response)=>{if(after.delete(call.body.action))for(let i=0;i<3;i++)await f.ingest(0,f.event('late-'+late++));return response;};
+ const r=complete(await f.read({intent:'browse'}));assert.equal(r.metrics.calls,1);assert.equal(late,6);
+ // A burst larger than the reserved late headroom is a work limit, not a wrong total.
+ f.hook=async(call,response)=>{if(call.body.action==='capture')for(let i=0;i<=2100;i++)await f.ingest(0,f.event('burst-'+i));return response;};
+ assert.deepEqual(await f.read(),{kind:'unavailable',reason:'capacity'});
+ f.hook=undefined;assert.equal(complete(await f.read()).metrics.calls,2108);
 });
 
 test('checked sums and oversized event metadata fail whole rather than truncating',async t=>{
  const f=await completeFixture(t,1);await f.ingest(0,f.event('a',{input_tokens:Number.MAX_SAFE_INTEGER}));await f.ingest(0,f.event('b'));
  assert.equal((await f.read()).kind,'unavailable');
  const g=await completeFixture(t,1);await g.ingest(0,g.event('huge',{compound_request_id:'x'.repeat(1024*1024)}));
- const r=complete(await g.read({intent:'browse'}));assert.equal((await g.continuation({kind:'events',cut:r.cut,query:r.query})).reason,'capacity');assert.equal((await g.export()).kind,'unavailable');
+ const r=complete(await g.read({intent:'browse'}));assert.equal((await g.continuation({kind:'events',cut:r.cut,query:r.query})).reason,'capacity');await assert.rejects(g.export());assert.ok(g.exportRequests.some(({outcome})=>outcome.kind==='unavailable'&&outcome.reason==='capacity'));
 });
 
 test('elapsed deadline stops new work even when synchronous SQL starves the timeout callback',async t=>{
@@ -165,8 +178,8 @@ test('full export independently reconciles every present count, amount, lane/cla
  const f=await completeFixture(t,1);await f.ingest(0,f.event('zero',{input_tokens:0,output_tokens:0,cached_input_tokens:0,cache_write_input_tokens:0,reasoning_output_tokens:0,actual_cost_micros:0,cost_basis:'none'}));
  const patches=[...['inputTokens','outputTokens','cachedInputTokens','cacheWriteInputTokens','reasoningOutputTokens','recordedChargeMicros'].map(k=>({[k]:null})),{inputTokens:1},{outputTokens:1},{cachedInputTokens:1},{cacheWriteInputTokens:1},{reasoningOutputTokens:1},{recordedChargeMicros:1},{reportingCostMicros:1},{lane:'subscription'},{costClass:'fixed'},{status:'denied'},{status:'server_error'},{callKind:'utility'}];
  for(const patch of patches){let corrupted=false;f.hook=async(call,response)=>{if(call.body.action==='events'&&!corrupted){corrupted=true;const body=await response.json();Object.assign(body.value.events[0],patch);return Response.json(body);}return response;};
-  assert.deepEqual(await f.export(),{kind:'unavailable',reason:'source'},JSON.stringify(patch));assert.equal(f.owner.usageCuts.roots.size,0);}
- f.hook=undefined;assert.equal(complete(await f.export()).events.length,1);
+  await assert.rejects(f.export(),undefined,JSON.stringify(patch));assert.equal(f.owner.usageCuts.roots.size,0);}
+ f.hook=undefined;assert.equal((await f.export()).events.length,1);
 });
 
 test('final authority expansion/session refresh and final export mutation cannot publish',async t=>{
@@ -176,7 +189,8 @@ test('final authority expansion/session refresh and final export mutation cannot
  f.hook=undefined;f.addShard('tenant','new');const base=complete(await f.read({intent:'browse'}));f.caller={...f.caller,sessionBinding:'c'.repeat(64)};
  assert.equal((await f.continuation({kind:'events',cut:base.cut,query:base.query})).kind,'restart');
  let mutate=false;f.hook=(call,response)=>{if(call.body.action==='events'&&!mutate){mutate=true;[...f.shards.values()][0].sql.exec("DELETE FROM usage_events WHERE id='one'");}return response;};
- assert.equal((await f.export()).kind,'restart');
+ const rootsBeforeExport=[...f.owner.usageCuts.roots.keys()];
+ await assert.rejects(f.export());assert.ok(f.exportRequests.some(({outcome})=>outcome.kind==='restart'));assert.deepEqual([...f.owner.usageCuts.roots.keys()],rootsBeforeExport,'failed export releases only its own cut');
 });
 
 test('summary rejects even empty handles before I/O; omitted rank offset has canonical continuation identity',async t=>{
@@ -192,5 +206,6 @@ test('malformed stored detail fails whole, while unlisted raw fields never escap
  s.sql.exec("UPDATE usage_report_events SET detail_json=json_set(detail_json,'$.raw_prompt','private fixture') WHERE id='one'");
  const r=complete(await f.read({intent:'browse'}));assert.equal(JSON.stringify(complete(await f.continuation({kind:'events',cut:r.cut,query:r.query}))).includes('private fixture'),false);
  s.sql.exec("UPDATE usage_report_events SET detail_json=json_set(detail_json,'$.inputTokens','not numeric') WHERE id='one'");
- assert.equal((await f.continuation({kind:'events',cut:r.cut,query:r.query})).kind,'unavailable');assert.equal((await f.export()).kind,'unavailable');
+ assert.equal((await f.continuation({kind:'events',cut:r.cut,query:r.query})).kind,'unavailable');const rootsBeforeExport=[...f.owner.usageCuts.roots.keys()];
+ await assert.rejects(f.export());assert.ok(f.exportRequests.some(({outcome})=>outcome.kind==='unavailable'));assert.deepEqual([...f.owner.usageCuts.roots.keys()],rootsBeforeExport,'failed export releases only its own cut');
 });

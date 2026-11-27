@@ -1,0 +1,1177 @@
+{
+  "schema": "fusion-fallback-study-v1",
+  "date": "2026-11-27",
+  "scope": "Development data only. Same-provider low-reasoning models, four task identities, no certified unseen evaluation. Shared prefixes are charged to both policy comparisons and once in physical spend.",
+  "models": {
+    "openai/gpt-6-luna": {
+      "inputUsdPerMillionTokens": 0.1,
+      "outputUsdPerMillionTokens": 0.5,
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna"
+    },
+    "openai/gpt-6.1-terra": {
+      "inputUsdPerMillionTokens": 1.0,
+      "outputUsdPerMillionTokens": 5.0,
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+    }
+  },
+  "studies": [
+    {
+      "id": "h2-stream-cap",
+      "policy": "reader-first",
+      "taskUrl": "https://github.com/nodejs/undici/commit/8d2bd41e58711af0ca85053b3510218ece7632be",
+      "expectedPublicTests": 8,
+      "expectedFullTests": 9,
+      "protocolSha256": "0b0ce85f12c887767f0ac80d87e0926827e1806a99baa95386ad633f49541dc8",
+      "auditSha256": "2bb1c87908cd4ac415e5fc4c8d05e23ada488d50e5f531891bee27a0edb45207",
+      "resultSha256": "cec592a4ca97d853255cbe2e42d02521166d5950ce37dcb87651151bb23bd1d1",
+      "calls": [
+        {
+          "directory": "compact/initial",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 28785,
+          "normalizedMicros": 28785,
+          "elapsedMs": 8386.692875,
+          "usage": {
+            "uncachedInputTokens": 25920,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 573
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 8,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "policy/initial",
+          "model": "openai/gpt-6-luna",
+          "arm": "cheap",
+          "costMicros": 5296,
+          "normalizedMicros": 5296,
+          "elapsedMs": 4958.343375,
+          "usage": {
+            "uncachedInputTokens": 49808,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 630
+          },
+          "disposition": "complete",
+          "publicPassed": false,
+          "publicGrade": {
+            "valid": false,
+            "passed": false,
+            "tests": 9,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "policy/handoff",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "compact-handoff",
+          "costMicros": 29719,
+          "normalizedMicros": 29719,
+          "elapsedMs": 11801.767500000002,
+          "usage": {
+            "uncachedInputTokens": 26239,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 696
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 8,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "full/initial",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 52073,
+          "normalizedMicros": 52073,
+          "elapsedMs": 6531.401249999995,
+          "usage": {
+            "uncachedInputTokens": 49808,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 453
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 8,
+            "failures": 0,
+            "skipped": 0
+          }
+        }
+      ],
+      "runs": [
+        {
+          "strategy": "compact",
+          "costMicros": 28785,
+          "workflowMs": 24771.639708,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "callIds": [
+            "compact/initial"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 8,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 9,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "strategy": "policy",
+          "costMicros": 35015,
+          "workflowMs": 46138.352375,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "callIds": [
+            "policy/initial",
+            "policy/handoff"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 8,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 9,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "strategy": "full",
+          "costMicros": 52073,
+          "workflowMs": 22474.174832999997,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "callIds": [
+            "full/initial"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 8,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 9,
+            "failures": 0,
+            "skipped": 0
+          }
+        }
+      ],
+      "summary": {
+        "accepted": {
+          "compact": true,
+          "policy": true,
+          "full": true
+        },
+        "falseAccepts": 0,
+        "costRatio": 0.672421408407428,
+        "timeRatio": 2.0529497842676148,
+        "mixedRescue": true,
+        "economySignal": false,
+        "fusionValueSignal": false,
+        "compactControlDominates": true,
+        "independentTasks": 1,
+        "repetitions": 1,
+        "productionQualified": false
+      },
+      "physicalCallCostMicros": 115873
+    },
+    {
+      "id": "h2-settings",
+      "policy": "reader-first",
+      "taskUrl": "https://github.com/nodejs/undici/commit/dd2bd50a6ce78e3ad4f352aff1c62935abcac27b",
+      "expectedPublicTests": 13,
+      "expectedFullTests": 14,
+      "protocolSha256": "159284963c510c1a7cdb1e9d06f6d75262cd64981bdc6f55acdee082d6a9a0e0",
+      "auditSha256": "cfb04c98461676ce108a192c0e37b2eeb346401dacd94829aaceb73963fc69a6",
+      "resultSha256": "f35da5975bcf30fa140fde8276ea2952cca64ddb5eda04b8b1bf4467dc858485",
+      "calls": [
+        {
+          "directory": "compact/initial",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 28569,
+          "normalizedMicros": 28569,
+          "elapsedMs": 6890.950875,
+          "usage": {
+            "uncachedInputTokens": 26469,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 420
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 13,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "policy/initial",
+          "model": "openai/gpt-6-luna",
+          "arm": "cheap",
+          "costMicros": 5020,
+          "normalizedMicros": 5020,
+          "elapsedMs": 3982.4943330000006,
+          "usage": {
+            "uncachedInputTokens": 47659,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 507
+          },
+          "disposition": "complete",
+          "publicPassed": false,
+          "publicGrade": {
+            "valid": false,
+            "passed": false,
+            "tests": 7,
+            "failures": 1,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "policy/handoff",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "compact-handoff",
+          "costMicros": 29545,
+          "normalizedMicros": 29545,
+          "elapsedMs": 6845.072333,
+          "usage": {
+            "uncachedInputTokens": 27110,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 487
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 13,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "full/initial",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 49419,
+          "normalizedMicros": 49419,
+          "elapsedMs": 7117.011999999999,
+          "usage": {
+            "uncachedInputTokens": 47659,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 352
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 13,
+            "failures": 0,
+            "skipped": 0
+          }
+        }
+      ],
+      "runs": [
+        {
+          "strategy": "compact",
+          "costMicros": 28569,
+          "workflowMs": 9871.577125,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "callIds": [
+            "compact/initial"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 13,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "strategy": "policy",
+          "costMicros": 34565,
+          "workflowMs": 19659.042625000002,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "callIds": [
+            "policy/initial",
+            "policy/handoff"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 13,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "strategy": "full",
+          "costMicros": 49419,
+          "workflowMs": 11408.115542,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "callIds": [
+            "full/initial"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 13,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        }
+      ],
+      "summary": {
+        "accepted": {
+          "compact": true,
+          "policy": true,
+          "full": true
+        },
+        "falseAccepts": 0,
+        "costRatio": 0.6994273457577045,
+        "timeRatio": 1.7232506589386718,
+        "mixedRescue": true,
+        "economySignal": true,
+        "fusionValueSignal": false,
+        "compactControlDominates": true,
+        "independentTasks": 1,
+        "repetitions": 1,
+        "productionQualified": false
+      },
+      "physicalCallCostMicros": 112553
+    },
+    {
+      "id": "h2-compact-first",
+      "policy": "compact-first",
+      "taskUrl": "https://github.com/nodejs/undici/commit/55bf29469dc86deb6e6e5522fba934e9d7cb4adb",
+      "expectedPublicTests": 14,
+      "expectedFullTests": 16,
+      "protocolSha256": "abd2a75569ce3daaa6603aa1368953cf59b8738694a6c6d28a6e3ab7601557d1",
+      "auditSha256": "7a5c44af56f4ce4b2397744f511cbcac61143609bc268000a8d3a8c4e1564722",
+      "resultSha256": "783584061aa40b157621a23e3e09569d5c62312bebe6a6f4d20e917889bf3749",
+      "calls": [
+        {
+          "directory": "compact/initial",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong-compact-handoff",
+          "costMicros": 13687,
+          "normalizedMicros": 13688,
+          "elapsedMs": 16190.439375,
+          "usage": {
+            "uncachedInputTokens": 8897,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 958
+          },
+          "disposition": "complete",
+          "publicPassed": false,
+          "publicGrade": {
+            "valid": false,
+            "passed": false,
+            "tests": 2,
+            "failures": 1,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "policy/initial",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong-compact-handoff",
+          "costMicros": 14397,
+          "normalizedMicros": 14397,
+          "elapsedMs": 16789.66175,
+          "usage": {
+            "uncachedInputTokens": 8897,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1100
+          },
+          "disposition": "complete",
+          "publicPassed": false,
+          "publicGrade": {
+            "valid": false,
+            "passed": false,
+            "tests": 2,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "policy/reader",
+          "model": "openai/gpt-6-luna",
+          "arm": "cheap-context",
+          "costMicros": 3943,
+          "normalizedMicros": 3943,
+          "elapsedMs": 8858.575041999997,
+          "usage": {
+            "uncachedInputTokens": 32626,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1360
+          },
+          "disposition": "complete",
+          "publicPassed": false,
+          "publicGrade": null
+        },
+        {
+          "directory": "policy/handoff",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "compact-handoff",
+          "costMicros": 18375,
+          "normalizedMicros": 18375,
+          "elapsedMs": 26412.303625000008,
+          "usage": {
+            "uncachedInputTokens": 9820,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1711
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "full/initial",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong-context",
+          "costMicros": 38611,
+          "normalizedMicros": 38611,
+          "elapsedMs": 16571.118709000002,
+          "usage": {
+            "uncachedInputTokens": 32626,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1197
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        }
+      ],
+      "runs": [
+        {
+          "strategy": "compact",
+          "costMicros": 13687,
+          "workflowMs": 18833.731959,
+          "publicPassed": false,
+          "fullPassed": null,
+          "fullContextFallback": false,
+          "callIds": [
+            "compact/initial"
+          ],
+          "publicGrade": {
+            "valid": false,
+            "passed": false,
+            "tests": 2,
+            "failures": 1,
+            "skipped": 0
+          },
+          "fullGrade": null
+        },
+        {
+          "strategy": "policy",
+          "costMicros": 36715,
+          "workflowMs": 62894.265750000006,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "callIds": [
+            "policy/initial",
+            "policy/reader",
+            "policy/handoff"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 16,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "strategy": "full",
+          "costMicros": 38611,
+          "workflowMs": 19867.263083000013,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "callIds": [
+            "full/initial"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 16,
+            "failures": 0,
+            "skipped": 0
+          }
+        }
+      ],
+      "summary": {
+        "accepted": {
+          "compact": false,
+          "policy": true,
+          "full": true
+        },
+        "falseAccepts": 0,
+        "costRatio": 0.9508948227189143,
+        "timeRatio": 3.165723707752039,
+        "mixedRescue": true,
+        "economySignal": false,
+        "fusionValueSignal": false,
+        "compactControlDominates": false,
+        "independentTasks": 1,
+        "repetitions": 1,
+        "productionQualified": false
+      },
+      "physicalCallCostMicros": 89013
+    },
+    {
+      "id": "cache-compact-first",
+      "policy": "compact-first",
+      "taskUrl": "https://github.com/nodejs/undici/commit/03feee2770bf7eacc9c5185d9c48bfb43ab2ea7b",
+      "expectedPublicTests": 14,
+      "expectedFullTests": 15,
+      "protocolSha256": "a51e6aee100f6adc1d7c2dd068311b1bf9491ab496d703b4dadd0d5f710e887a",
+      "auditSha256": "f09cb7a7d7152213091f9b26f031b4e86162e05006fbf83c6763b34fbab9aa0d",
+      "resultSha256": "22e1a53f6946a808cb720f15d57a6d4a21972e581c4eb43dc62dbc0dedf59b9b",
+      "calls": [
+        {
+          "directory": "compact/initial",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 27616,
+          "normalizedMicros": 27616,
+          "elapsedMs": 17889.337292,
+          "usage": {
+            "uncachedInputTokens": 20481,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1427
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "policy/initial",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 27731,
+          "normalizedMicros": 27731,
+          "elapsedMs": 18525.741208,
+          "usage": {
+            "uncachedInputTokens": 20481,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1450
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "full/initial",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong",
+          "costMicros": 55947,
+          "normalizedMicros": 55947,
+          "elapsedMs": 19186.558582999998,
+          "usage": {
+            "uncachedInputTokens": 48477,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1494
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        }
+      ],
+      "runs": [
+        {
+          "strategy": "compact",
+          "costMicros": 27616,
+          "workflowMs": 20529.143207999998,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "callIds": [
+            "compact/initial"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 15,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "strategy": "policy",
+          "costMicros": 27731,
+          "workflowMs": 22301.124375000003,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "callIds": [
+            "policy/initial"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 15,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "strategy": "full",
+          "costMicros": 55947,
+          "workflowMs": 23267.879333000004,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "callIds": [
+            "full/initial"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 15,
+            "failures": 0,
+            "skipped": 0
+          }
+        }
+      ],
+      "summary": {
+        "accepted": {
+          "compact": true,
+          "policy": true,
+          "full": true
+        },
+        "falseAccepts": 0,
+        "costRatio": 0.4956655406009259,
+        "timeRatio": 0.9584510928493218,
+        "mixedRescue": false,
+        "economySignal": false,
+        "fusionValueSignal": false,
+        "compactControlDominates": true,
+        "independentTasks": 1,
+        "repetitions": 1,
+        "productionQualified": false
+      },
+      "physicalCallCostMicros": 111294
+    },
+    {
+      "id": "h2-paired-fallback",
+      "policy": "shared-compact-prefix",
+      "taskUrl": "https://github.com/nodejs/undici/commit/55bf29469dc86deb6e6e5522fba934e9d7cb4adb",
+      "expectedPublicTests": 14,
+      "expectedFullTests": 16,
+      "protocolSha256": "767af8645ca20d9f99cb309e10b0dbd75d68c0789fab16cf08a9cf011c1d5862",
+      "auditSha256": "54f8a07274c200d5ba6c81e46a13305527594df106d6bb9f10fd00584e6ca7d7",
+      "resultSha256": "dc59b1226984807f4e9262a4b43909649465c9ee70c45e5baed410e41375e77d",
+      "calls": [
+        {
+          "directory": "pair-0/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong-compact-handoff",
+          "costMicros": 14037,
+          "normalizedMicros": 14037,
+          "elapsedMs": 16816.126959,
+          "usage": {
+            "uncachedInputTokens": 8897,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1028
+          },
+          "disposition": "complete",
+          "publicPassed": false,
+          "publicGrade": {
+            "valid": false,
+            "passed": false,
+            "tests": 2,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "pair-0/fusion/reader",
+          "model": "openai/gpt-6-luna",
+          "arm": "cheap-context",
+          "costMicros": 3854,
+          "normalizedMicros": 3854,
+          "elapsedMs": 8364.200749999996,
+          "usage": {
+            "uncachedInputTokens": 32626,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1181
+          },
+          "disposition": "complete",
+          "publicPassed": false,
+          "publicGrade": {
+            "valid": false,
+            "passed": false,
+            "tests": 5,
+            "failures": 1,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "pair-0/fusion/handoff",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "compact-handoff",
+          "costMicros": 15439,
+          "normalizedMicros": 15440,
+          "elapsedMs": 14070.206124999997,
+          "usage": {
+            "uncachedInputTokens": 9984,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1091
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "pair-0/full/fallback",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong-context",
+          "costMicros": 39366,
+          "normalizedMicros": 39366,
+          "elapsedMs": 16898.162041999996,
+          "usage": {
+            "uncachedInputTokens": 32626,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1348
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "pair-1/prefix",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong-compact-handoff",
+          "costMicros": 15087,
+          "normalizedMicros": 15087,
+          "elapsedMs": 17343.834541999997,
+          "usage": {
+            "uncachedInputTokens": 8897,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1238
+          },
+          "disposition": "complete",
+          "publicPassed": false,
+          "publicGrade": {
+            "valid": false,
+            "passed": false,
+            "tests": 2,
+            "failures": 1,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "pair-1/full/fallback",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "strong-context",
+          "costMicros": 38851,
+          "normalizedMicros": 38851,
+          "elapsedMs": 17333.609166999988,
+          "usage": {
+            "uncachedInputTokens": 32626,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1245
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "pair-1/fusion/reader",
+          "model": "openai/gpt-6-luna",
+          "arm": "cheap-context",
+          "costMicros": 3839,
+          "normalizedMicros": 3839,
+          "elapsedMs": 7711.283291,
+          "usage": {
+            "uncachedInputTokens": 32626,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1152
+          },
+          "disposition": "complete",
+          "publicPassed": false,
+          "publicGrade": {
+            "valid": false,
+            "passed": false,
+            "tests": 5,
+            "failures": 1,
+            "skipped": 0
+          }
+        },
+        {
+          "directory": "pair-1/fusion/handoff",
+          "model": "openai/gpt-6.1-terra",
+          "arm": "compact-handoff",
+          "costMicros": 17583,
+          "normalizedMicros": 17583,
+          "elapsedMs": 22123.49674999999,
+          "usage": {
+            "uncachedInputTokens": 9928,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "cacheWrite1hInputTokens": 0,
+            "outputTokens": 1531
+          },
+          "disposition": "complete",
+          "publicPassed": true,
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          }
+        }
+      ],
+      "runs": [
+        {
+          "strategy": "fusion",
+          "costMicros": 33330,
+          "workflowMs": 54018.598874999996,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "pair": 0,
+          "sharedPrefixDirectory": "pair-0/prefix",
+          "prefixCostMicros": 14037,
+          "suffixCostMicros": 19293,
+          "callIds": [
+            "pair-0/prefix",
+            "pair-0/fusion/reader",
+            "pair-0/fusion/handoff"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 16,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "strategy": "full",
+          "costMicros": 53403,
+          "workflowMs": 45483.12304099999,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "pair": 0,
+          "sharedPrefixDirectory": "pair-0/prefix",
+          "prefixCostMicros": 14037,
+          "suffixCostMicros": 39366,
+          "callIds": [
+            "pair-0/prefix",
+            "pair-0/full/fallback"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 16,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "strategy": "full",
+          "costMicros": 53938,
+          "workflowMs": 39268.77870799998,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "pair": 1,
+          "sharedPrefixDirectory": "pair-1/prefix",
+          "prefixCostMicros": 15087,
+          "suffixCostMicros": 38851,
+          "callIds": [
+            "pair-1/prefix",
+            "pair-1/full/fallback"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 16,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        {
+          "strategy": "fusion",
+          "costMicros": 36509,
+          "workflowMs": 54146.84983399999,
+          "publicPassed": true,
+          "fullPassed": true,
+          "fullContextFallback": false,
+          "pair": 1,
+          "sharedPrefixDirectory": "pair-1/prefix",
+          "prefixCostMicros": 15087,
+          "suffixCostMicros": 21422,
+          "callIds": [
+            "pair-1/prefix",
+            "pair-1/fusion/reader",
+            "pair-1/fusion/handoff"
+          ],
+          "publicGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 14,
+            "failures": 0,
+            "skipped": 0
+          },
+          "fullGrade": {
+            "valid": true,
+            "passed": true,
+            "tests": 16,
+            "failures": 0,
+            "skipped": 0
+          }
+        }
+      ],
+      "summary": {
+        "fusion": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 69839
+        },
+        "full": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "costMicros": 107341
+        },
+        "costRatio": 0.6506274396549315,
+        "medianPairedTimeRatio": 1.2832701754445583,
+        "mixedRescues": 2,
+        "economySignal": true,
+        "sharedPrefixChargedToEachPolicy": true,
+        "independentTasks": 1,
+        "repetitions": 2,
+        "productionQualified": false
+      },
+      "physicalCallCostMicros": 148056
+    }
+  ],
+  "newCalls": 24,
+  "newEstimatedCostMicros": 576789,
+  "previousCampaignSpentOrReservedMicros": 325353066,
+  "campaignSpentOrReservedMicros": 325929855,
+  "campaignBudgetMicros": 400000000
+}

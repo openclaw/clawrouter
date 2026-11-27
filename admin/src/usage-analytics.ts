@@ -108,9 +108,18 @@ function emptyUsageDay(dayStartMs: number): UsageDailySummary {
   return { dayStartMs, requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 };
 }
 
-export function providerChartRows(providers: ProviderUsageSummary[], limit: number): ProviderUsageSummary[] {
+// Only incomplete aggregates carry a lower bound; unpricedRequestCount remains an exact count.
+export type ProviderChartRow = ProviderUsageSummary & { minimumUnpricedCount?: number };
+
+export function providerChartRows(providers: ProviderUsageSummary[], limit: number): ProviderChartRow[] {
   if (providers.length <= limit) return providers;
   const visibleCount = Math.max(1, limit - 1);
-  const remainder = providers.slice(visibleCount).reduce<ProviderUsageSummary>(addUsageCounters, { provider: "other-providers", requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 });
-  return [...providers.slice(0, visibleCount), remainder];
+  const hidden = providers.slice(visibleCount);
+  const remainder = hidden.reduce<ProviderUsageSummary>(addUsageCounters, { provider: "other-providers", requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 });
+  const visible = providers.slice(0, visibleCount);
+  if (hidden.some(provider => provider.unpricedRequestCount == null)) {
+    const { unpricedRequestCount: minimumUnpricedCount = 0, ...totals } = remainder;
+    return [...visible, { ...totals, minimumUnpricedCount }];
+  }
+  return [...visible, remainder];
 }

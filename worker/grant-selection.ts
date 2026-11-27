@@ -1,11 +1,11 @@
 import { canonicalFreshIdentityRouting, admitIdentity, admitIdentityCount, identitySourceBudget, readIdentityKv } from "./identity-admission.ts";
-import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
+import { grantSupports, type GrantRequirement } from "./grant-compatibility.ts";
 import { HttpError } from "./http-error.ts";
 import { authorityCall, type AdmissionPool } from "./authority.ts";
 import { grantQuotaRatio } from "../shared/grant-quota.ts";
 import { rankingStaleAfterMs } from "./grant-routing.ts";
 import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy } from "./grant-routing.ts";
-import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantWeight, grantPriority, poolRetryAt, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
+import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantChoices, grantWeight, grantPriority, poolRetryAt, servingCandidates, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
 export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array<{ entry: T; candidates: GrantCandidates }>, requirement?: GrantRequirement): { entry: T; candidates: GrantCandidates } | undefined {
@@ -16,7 +16,9 @@ export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array
     candidates: { ...candidates, available: candidates.available.filter(({ grant }) => !requirement || grantSupports(requirement, grant)) },
   }));
   // Policy order is decided by grant/transport availability, never affordability.
-  return compatible.find(({ candidates }) => candidates.available.length > 0) ?? compatible[0];
+  // A policy draining its reserve yields to one with a grant above its reserve.
+  return compatible.find(({ candidates }) => candidates.available.length > 0 && !candidates.reserveDrain)
+    ?? compatible.find(({ candidates }) => candidates.available.length > 0) ?? compatible[0];
 }
 
 export async function policyGrantCandidates<T extends AccessPolicyEntry>(entry: T, providerId: string, env: Env, tokenRef = providerId, requirement?: GrantRequirement, admittedPool?: AdmissionPool) {
@@ -27,11 +29,14 @@ export async function policyGrantCandidates<T extends AccessPolicyEntry>(entry: 
 
 export async function selectProviderPolicy(entries: AccessPolicyEntry[], providerId: string, env: Env, requirement?: GrantRequirement): Promise<AccessPolicyEntry> {
   const tokenRef = requirement?.provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? providerId;
+  let draining: AccessPolicyEntry | undefined;
   for (const entry of entries) {
     const pool = await policyGrantCandidates(entry, providerId, env, tokenRef, requirement);
-    if (selectPolicyCandidates([pool], requirement)!.candidates.available.length) return entry;
+    const { candidates } = selectPolicyCandidates([pool], requirement)!;
+    if (candidates.available.length && !candidates.reserveDrain) return entry;
+    if (candidates.available.length) draining ??= entry;
   }
-  return entries[0];
+  return draining ?? entries[0];
 }
 
 export async function resolveGrantSelection(
@@ -51,19 +56,20 @@ export async function resolveGrantSelection(
   admitIdentity(routing, "record");
   routing = canonicalFreshIdentityRouting(grantRoutingPolicy(routing));
   const candidates = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement, admittedPool);
-  const { available, hasConfiguredGrant } = candidates;
+  const { hasConfiguredGrant } = candidates;
   const nowMs = Date.now();
-  const active = activeOperationCandidates(available, env, requirement);
+  const { active, reserveDrain } = servingCandidates(candidates, entries => activeOperationCandidates(entries, env, requirement));
+  const choices = grantChoices(active, routing, nowMs, requirement?.model, reserveDrain);
   let selected: SelectedGrant | null = null;
-  if (active.length && !recordSelection) selected = active[0];
-  else if (active.length) {
+  if (choices.length && !recordSelection) selected = active.find((entry) => entry.key === choices[0].key) ?? null;
+  else if (choices.length) {
     const choice = await authorityCall<{ selectedKey: string }>(env, "/grant-pools/select", {
       poolKey: `${encodeURIComponent(providerId)}/${encodeURIComponent(policyId)}/${encodeURIComponent(tenantId)}`,
       strategy: routing.strategy,
       stickyHash,
       switchAtUsedPercent: routing.switchAtUsedPercent,
       hysteresisPercent: routing.hysteresisPercent,
-      candidates: active.map((entry) => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, nowMs, rankingStaleAfterMs(routing), requirement?.model) })),
+      candidates: choices,
     });
     selected = active.find((entry) => entry.key === choice.selectedKey) ?? null;
   }

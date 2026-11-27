@@ -1,5 +1,5 @@
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, mediaPublicPath, noMediaQuery } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, mediaPublicPath, noMediaQuery } from "./media-wire.ts";
 import { prepareVydraModel, readVydraModel } from "./vydra-models.ts";
 import { validateVydraJobId, vydraJobPath } from "./vydra-jobs.ts";
 

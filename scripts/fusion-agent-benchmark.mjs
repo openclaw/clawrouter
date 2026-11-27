@@ -48,6 +48,20 @@ export function validateExperiment(config, taskCount) {
   return bound;
 }
 
+// Admit every possible worker for the selected strategies, including fallbacks.
+export function experimentModels(selected) {
+  const byStrategy = {
+    cheap: [models.cheap], strong: [models.strong], claude: [models.critic],
+    panel: [models.cheap, models.strong, models.critic], cascade: [models.cheap, models.strong],
+    planned: [models.cheap, models.critic], critique: [models.strong, models.critic],
+    handoff: [models.strong, models.critic], 'candidate-ensemble': [models.strong, models.critic],
+  };
+  if (!Array.isArray(selected) || !selected.length || selected.some(strategy => !Object.hasOwn(byStrategy, strategy))) {
+    throw new Error('invalid_strategies');
+  }
+  return [...new Set(selected.flatMap(strategy => byStrategy[strategy]))];
+}
+
 export class SpendLedger {
   constructor(config, persist) { this.config = config; this.persist = persist; this.attempts = []; this.blocked = false; }
   total(trialId) {
@@ -546,7 +560,7 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
   }
   await mkdir(out, { recursive: false, mode: 0o700 });
   const engine = await import('../worker/fusion.ts');
-  const pins = await nativePins(env);
+  const pins = await nativePins(env, undefined, experimentModels(config.strategies));
   const records = [], details = [];
   let complete = false, tail = Promise.resolve();
   const snapshot = () => {

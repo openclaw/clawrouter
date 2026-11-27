@@ -2,7 +2,7 @@ import { grantOwnerIdentity, qualifiedApiKeyOwner } from "./grant-owner-facts.ts
 import { filterGrantCandidates } from "./grant-eligibility.ts";
 import { grantRoutingPolicy } from "./grant-routing.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { discoveryAllows } from "./model-discovery.ts";
+import { discoveryAllows } from "./model-discovery-request.ts";
 import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./model-discovery-formats.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";

@@ -1,7 +1,7 @@
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
 import { googleOmniVideoManagedAdapter } from "./managed-google-omni.ts";
 import { managedFileAdapter } from "./managed-file-adapters.ts";
-import { exactMediaParams, mediaPublicPath } from "./managed-media-json.ts";
+import { exactMediaParams, mediaPublicPath } from "./media-wire.ts";
 
 function flags(params: Record<string, string>): { stored: boolean; background: boolean } {
   exactMediaParams(params, ["background", "store"]);
