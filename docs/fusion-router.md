@@ -500,7 +500,10 @@ helpers can be included with a fourth argument, `{ suiteWrappers: ['whenHeader']
 Their first argument must be a string, null or literal `undefined`, and their
 second argument a function body. The caller must verify the helper's suite
 semantics and the native census; dynamic identities remain unsupported. Nested
-`describe` suites retain their context; ambiguous duplicate titles are rejected.
+`describe` suites retain their context. Plain lexical blocks and synchronous
+immediately invoked functions with no arguments retain their setup and nested
+test groups; ambiguous duplicate titles are rejected. Async and generator
+functions, uncalled functions and other dynamic registration remain unsupported.
 The existing preservation splitter is unchanged.
 
 For Tape files, `splitRegressionAssertions(id, files, parse)` splits individual
