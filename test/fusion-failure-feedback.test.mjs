@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { firstTestFailureFeedback as first } from '../scripts/fusion-failure-feedback.mjs';
+import { firstTestFailureFeedback as first, compactRepairFeedback } from '../scripts/fusion-failure-feedback.mjs';
 
 const failure = (name, type = 'testCodeFailure') => `not ok 2 - ${name}\n  ---\n  duration_ms: <elapsed>\n  type: 'test'\n  failureType: '${type}'\n  error: 'Store should not be full after eviction'\n  expected: false\n  actual: true\n  stack: |-\n    at fixture.js:12:3\n  ...`;
 
@@ -45,5 +45,49 @@ test('retains raw syntax/import diagnostics instead of selecting generic process
       .replace('  stack: |-', `  ${field}\n  stack: |-`);
     assert.equal(first('# SyntaxError: invalid token\n' + wrapper), null);
     assert.equal(first(wrapper + '\n' + failure('real assertion')), failure('real assertion'));
+  }
+});
+
+test('compact repair context keeps diagnostics when previous edits exceed the byte budget', () => {
+  const publicFeedback = { passed: false, diagnostics: "Unexpected token '}'" };
+  const small = { previousEdits: [{ search: 'old', replace: 'new' }], publicFeedback };
+  const snapshot = structuredClone(small);
+  assert.deepEqual(JSON.parse(compactRepairFeedback(small)).previousEdits, small.previousEdits);
+  assert.deepEqual(small, snapshot);
+  const large = compactRepairFeedback({ previousEdits: [{ search: 'x'.repeat(20000), replace: '' }], publicFeedback });
+  assert.ok(Buffer.byteLength(large) <= 12000);
+  assert.deepEqual(JSON.parse(large).publicFeedback, publicFeedback);
+  assert.equal(Object.hasOwn(JSON.parse(large), 'previousEdits'), false);
+});
+
+test('oversized diagnostics remain an explicitly truncated JSON string excerpt', () => {
+  for (const text of ['x', '\0', '✦', '🦊', '\ud800', '\\"']) {
+    const feedback = compactRepairFeedback({ publicFeedback: { diagnostics: text.repeat(20000) } });
+    assert.ok(Buffer.byteLength(feedback) <= 12000);
+    const value = JSON.parse(feedback);
+    assert.equal(value.diagnosticsTruncated, true);
+    assert.equal(typeof value.feedbackExcerpt, 'string');
+    assert.equal(Object.hasOwn(value, 'publicFeedback'), false);
+  }
+});
+
+test('compact context captures public feedback once and rejects invalid input', () => {
+  let reads = 0;
+  const text = compactRepairFeedback({ previousEdits: [{ search: 'x'.repeat(20000) }],
+    publicFeedback: { toJSON() { reads++; return { diagnostics: 'error' }; } } });
+  assert.equal(reads, 1);
+  assert.deepEqual(JSON.parse(text).publicFeedback, { diagnostics: 'error' });
+  for (const publicFeedback of [undefined, null, 1, false, () => {}]) {
+    assert.throws(() => compactRepairFeedback({ publicFeedback }), TypeError);
+  }
+  assert.throws(() => compactRepairFeedback({ previousEdits: {}, publicFeedback: 'error' }), TypeError);
+});
+
+test('diagnostic excerpts end at a complete Unicode code point', () => {
+  for (const prefix of ['', 'a']) {
+    const publicFeedback = prefix + '🦊'.repeat(5000);
+    const { feedbackExcerpt } = JSON.parse(compactRepairFeedback({ publicFeedback }));
+    assert.ok(feedbackExcerpt.isWellFormed());
+    assert.equal(feedbackExcerpt, '"' + prefix + '🦊'.repeat(999));
   }
 });
