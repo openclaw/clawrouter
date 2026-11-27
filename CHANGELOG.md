@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Route local proxy-key creation, rotation, and revocation through the running Worker's authenticated authority API, preserving migrated state and rejecting obsolete KV selectors instead of reporting ineffective writes.
+
 - Allow the native-test Fusion cascade to opt into a two-call repair with an isolated failed draft and bounded public feedback.
 - Add opt-in supplied-contract source handoff from a failed cheap candidate to a fresh strong fallback, preserving independent verification and shared budgets.
 
