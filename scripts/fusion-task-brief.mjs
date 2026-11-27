@@ -4,6 +4,12 @@ export const TASK_BRIEF_REVISION = 'external-task-brief-v1';
 const sha256 = text => createHash('sha256').update(text).digest('hex');
 const excludedHeading = /^(?:tests?|testing|verification|validation|status|checklist|benchmarks?|benchmarking|screenshots?)(?:\b|$)/i;
 
+function startsChangelogBlock(line) {
+  const text = line.trim();
+  return !text || /^(?:[-*+](?:\s|$)|\d+[.)](?:\s|$)|#|>|`{3}|~{3})/.test(text)
+    || /^(?:=+|-+)$/.test(text) || /^([*_\-])(?:[ \t]*\1){2,}$/.test(text);
+}
+
 // Local history has no PR body. Admit one inserted changelog paragraph and
 // record its actual origin instead of presenting it as an external task brief.
 export function localHistoryTaskBrief({ title, commit, before, after }) {
@@ -21,9 +27,8 @@ export function localHistoryTaskBrief({ title, commit, before, after }) {
     && oldLines[oldLines.length - 1 - end] === newLines[newLines.length - 1 - end]) end++;
   if (start + end !== oldLines.length) throw new Error('local_history_brief_not_additive');
   const added = newLines.slice(start, newLines.length - end).join('\n').trim();
-  if (!/^- \S/.test(added) || added.slice(2).split('\n').some(line =>
-    !line.trim() || /^\s*(?:[-*+]\s|\d+[.)]\s|#|`{3}|~{3})/.test(line))
-    || Buffer.byteLength(added) > 8192) throw new Error('ambiguous_local_history_narrative');
+  if (Buffer.byteLength(added) > 8192 || !/^- \S/.test(added)
+    || added.slice(2).split('\n').some(startsChangelogBlock)) throw new Error('ambiguous_local_history_narrative');
   const narrative = added.slice(2).trim();
   const instruction = title.trim() + '\n\n' + narrative;
   return { instruction, provenance: { revision: 'local-history-task-brief-v1', commit,

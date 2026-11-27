@@ -34,3 +34,16 @@ test('local brief permits a single wrapped paragraph at the end and rejects over
   assert.throws(() => localHistoryTaskBrief({ ...input, after: input.after.replace('Invalid inputs', 'x'.repeat(8192)) }),
     /ambiguous_local_history_narrative/);
 });
+
+test('local brief rejects quotes, dividers, and heading underlines as narrative', () => {
+  const before = '# Changelog\n';
+  for (const entry of ['- > Compatibility note.', '- Report errors.\n> Compatibility note.',
+    '- Report errors.\n  > Nested quote.', '- Report errors.\n---\nCompatibility note.',
+    '- Report errors.\n***', '- Report errors.\n_ _ _', '- Report errors.\n  ===']) {
+    assert.throws(() => localHistoryTaskBrief({ ...input, before, after: before + '\n' + entry + '\n' }),
+      /ambiguous_local_history_narrative/, entry);
+  }
+  const prose = 'Accept values > 0\nand preserve the inline `---` marker.';
+  assert.equal(localHistoryTaskBrief({ ...input, before, after: before + '\n- ' + prose + '\n' }).instruction,
+    input.title + '\n\n' + prose);
+});
