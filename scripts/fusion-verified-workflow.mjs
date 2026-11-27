@@ -23,11 +23,13 @@ async function bounded(signal, operation) {
  * the workflow; they never authorize another provider call or a model fallback.
  */
 export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () => {}, strategy = 'fusion',
-  fallbackMode = 'fresh', fallbackAttempts = 1, draftAttempts = 1, deadlineMs = 900000, signal: callerSignal }) {
+  fallbackMode = 'fresh', fallbackAttempts = 1, draftAttempts = 1, repairMissingDraft = true,
+  deadlineMs = 900000, signal: callerSignal }) {
   const requiredModels = strategy === 'cascade' ? ['draft', 'repair'] : ['draft', 'repair', 'compiler'];
   if (!['fusion', 'strong', 'cascade'].includes(strategy) || !Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 1800000
     || !['fresh', 'repair'].includes(fallbackMode) || (fallbackMode === 'repair' && strategy !== 'cascade')
     || ![1, 2].includes(draftAttempts) || (draftAttempts !== 1 && strategy !== 'cascade')
+    || typeof repairMissingDraft !== 'boolean' || (!repairMissingDraft && strategy !== 'cascade')
     || ![1, 2].includes(fallbackAttempts) || (fallbackAttempts !== 1 && strategy !== 'cascade')
     || typeof invoke !== 'function' || typeof verify !== 'function' || typeof onStep !== 'function'
     || !models || requiredModels.some(k => !validModel(models[k]))
@@ -69,7 +71,7 @@ export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () 
   if (strategy === 'cascade') {
     let first = await attempt('draft', models.draft);
     if (isPassed(first)) return finish(first);
-    if (draftAttempts === 2) {
+    if (draftAttempts === 2 && (repairMissingDraft || first.artifact !== null)) {
       first = await attempt('draft-repair', models.draft, first);
       if (isPassed(first)) return finish(first);
     }

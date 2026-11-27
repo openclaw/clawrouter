@@ -532,6 +532,15 @@ from them. With `fallbackMode: 'repair'`, the strong model receives the latest
 rejected draft and its feedback. The existing deadline covers every attempt;
 provider and verifier errors stop the workflow instead of triggering fallback.
 
+Set `repairMissingDraft: false` to skip the extra draft attempt when the initial
+artifact is `null`. The strong fallback runs immediately and still requires
+verification. With `fallbackMode: 'repair'`, it receives the null artifact and
+the failed draft's feedback; fresh mode supplies neither. Usable failed drafts
+still get their configured repair attempt. The default is `true`, preserving
+the existing sequence. Only cascades accept `false`. A skipped attempt is not
+reassigned to the fallback: deadlines, maximum calls and cost accounting stay
+unchanged. This option does not turn provider errors into missing artifacts.
+
 The default `draftAttempts: 1` preserves the current sequence. Only 1 and 2
 are accepted, and only cascades may use 2. Combining `draftAttempts: 2` with
 `fallbackAttempts: 2` permits at most four calls. Reserve for every allowed
