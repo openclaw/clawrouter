@@ -216,6 +216,61 @@ test('displayed key report uses retained bounds and never labels pending results
  } finally { release.resolve(); f.close(); }
 });
 
+for (const role of ['admin', 'user'] as const) test(role + ' keeps the last downloaded scope when a different export fails validation', async ({page, isMobile}) => {
+ const f = await serve(page, role), release = Promise.withResolvers<void>();
+ const files: string[] = [];
+ page.on('download', file => files.push(file.suggestedFilename()));
+ try {
+  await f.ingest('sibling-key', {credential_id: 'weekend-key'});
+  await page.emulateMedia({colorScheme: isMobile ? 'dark' : 'light'});
+  await page.goto(role === 'admin' ? '/dashboard/usage' : '/dashboard/my-usage');
+  const button = page.getByRole('button', {name: 'Export refreshed snapshot JSON', exact: true});
+  const receipt = page.getByRole('group', {name: 'Export snapshot scope'});
+  async function download() {
+   const [file] = await Promise.all([page.waitForEvent('download'), button.click()]);
+   const stream = await file.createReadStream();
+   if (!stream) throw Error('No download stream');
+   const bytes: Buffer[] = [];
+   for await (const chunk of stream) bytes.push(chunk);
+   return JSON.parse(Buffer.concat(bytes).toString());
+  }
+  const original = await download();
+  expect(original.metadata.filters.key).toBeUndefined();
+  expect(original.events).toHaveLength(role === 'admin' ? 121 : 7);
+  await expect(receipt).toContainText('All keys');
+  const originalScope = await receipt.innerText();
+
+  await page.getByRole('button', {name: role === 'admin' ? 'By key' : 'Compare keys', exact: true}).click();
+  if (role === 'user') await page.getByRole('tab', {name: 'Details', exact: true}).click();
+  await page.getByRole('region', {name: 'Retained usage ranking'}).getByRole('button', {name: 'member@example.com · retained-key', exact: true}).click();
+  const displayed = role === 'admin' ? page.getByRole('group', {name: 'Displayed report scope'}) : page.locator('.personalUsageSummary .personalActiveFilters');
+  await expect(displayed).toContainText('retained-key');
+  await expect(button).toBeEnabled();
+  const validation = (url: URL) => url.pathname.endsWith('/usage/validate');
+  await page.route(validation, async route => {
+   await release.promise;
+   await route.fulfill({status: 503, json: {error: {message: 'Validation temporarily unavailable'}}});
+  }, {times: 1});
+  const pending = page.waitForRequest(request => validation(new URL(request.url())));
+  await button.focus();
+  await expect(button).toBeFocused();
+  await page.keyboard.press('Enter');
+  await pending;
+  await expect(button).toBeDisabled();
+  await expect(receipt).toHaveText(originalScope, {useInnerText: true});
+  release.resolve();
+  await expect(page.getByRole('status').filter({hasText: 'No file was downloaded'})).toContainText('Validation temporarily unavailable');
+  await expect(receipt).toHaveText(originalScope, {useInnerText: true});
+  expect(files).toHaveLength(1);
+
+  const retried = await download();
+  expect(retried.events).toHaveLength(6);
+  expect(retried.metadata.filters).toMatchObject({user: 'member@example.com', key: {kind: 'credential', id: 'retained-key'}});
+  await expect(receipt).toContainText('Key: retained-key');
+  expect(files).toHaveLength(2);
+ } finally { release.resolve(); await page.unrouteAll({behavior: 'wait'}); f.close(); }
+});
+
 for (const role of ['admin','user'] as const) test(role + ' keeps a completed export receipt but locks stale ranking and export actions until retry succeeds', async ({page}) => {
  const f = await serve(page, role);
  try {
