@@ -431,7 +431,9 @@ all `checks`, generation `steps`, `agreement` (or `null` when not reached),
 total `costMicros` and `elapsedMs`. Each callback must honor `signal`; optional
 `deadlineMs` bounds the whole workflow. Malformed or incomplete receipts,
 callback errors, cancellation and deadlines stop execution without fallback.
-An unsuccessful fallback returns `passed: false`.
+An unsuccessful fallback returns `passed: false`. If a native receipt includes
+`skipped`, `cancelled` or `todo` counters, each must be numeric zero. Nonzero or
+malformed counters stop the workflow before comparison or another model call.
 
 Agreement is evidence of consistency, not correctness: two implementations can
 share the same defect, and a weak comparison set can miss differences. This
@@ -456,7 +458,10 @@ const result = await runNativeCascade({
 ```
 
 The adapter accepts only valid native receipts at the exact expected assertion
-count. A valid test failure permits one fresh fallback. An incomplete test run,
+count. Optional `skipped`, `cancelled` and `todo` counters must each be numeric
+zero when present; existing receipts may omit them. The caller must mark runs
+with unexecuted tests invalid even when its parser omits these counters.
+A valid test failure permits one fresh fallback. An incomplete test run,
 incorrect count, malformed receipt or callback error stops execution. An
 unusable candidate is explicitly `{ artifact: null, tests: null, costMicros }`;
 its charge is retained and it may use the fallback. The caller must reserve
