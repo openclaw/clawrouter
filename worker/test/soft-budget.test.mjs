@@ -172,8 +172,8 @@ test('soft charges preserve distinct logical scopes on a physically aliased mont
   const auth = { policyId: 'openai', policy: { tenantId: 'provider', monthlyBudgetMicros: 100, budgetScope: 'policy' } };
   const budget = softBudget(env, auth, 'llm.chat', { providerId: 'openai', monthlyBudgetMicros: 100 }, 'request', () => {});
   await budget.check; await budget.beforeDelivery();
-  const { finalizeAccounting } = await import('../accounting.ts');
-  await finalizeAccounting(env, budget.reservation, 5, { request_id: 'request' });
+  const { accountingSinks, finalizeOwnedAccounting } = await import('../accounting.ts');
+  await finalizeOwnedAccounting(accountingSinks(env), budget.reservation, 5, { request_id: 'request' });
   const rows = env.BUDGET_LEDGER.get('provider:openai').reservations();
   assert.equal(rows.length, 2); assert.equal(new Set(rows.map(row => row.reservation_id)).size, 2);
   assert.equal((await budgetStatus(env, 'openai', auth.policy)).spentMicros, 5);

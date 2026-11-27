@@ -2,7 +2,7 @@ import { sqliteFixture } from "./sqlite-storage.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { finalizeAccounting, markBudgetDispatched, reserveBudget, settleBudget } from "../accounting.ts";
+import { accountingSinks, finalizeOwnedAccounting, markBudgetDispatched, reserveBudget, settleBudget } from "../accounting.ts";
 import { BudgetLedgerObject, queue } from "../ledgers.ts";
 
 const minute = 60_000, day = 86_400_000;
@@ -77,7 +77,7 @@ test("live work keeps both charges after lease expiry and settles exactly once",
     assert.equal(f.rows(row.objectName)[0].reserved_micros, 75);
   }
   await assert.rejects(reserveBudget(f.env, auth, "llm.responses", { ...cost, reserveMicros: 26 }, connection), error => error.code === "budget_exhausted");
-  assert.equal(await finalizeAccounting(f.env, reserved, 60, event), true);
+  assert.equal(await finalizeOwnedAccounting(accountingSinks(f.env), reserved, 60, event), true);
   await settleBudget(f.env, reserved, 60);
   for (const row of reserved.reservations) {
     assert.equal(f.rows(row.objectName)[0].reserved_micros, 60);
@@ -119,7 +119,7 @@ for (const failedOwner of ["tenant:fixture", "provider:openai"]) {
     const reserved = await reserveBudget(f.env, auth, "llm.responses", cost, connection);
     await markBudgetDispatched(f.env, reserved);
     f.failures.set(failedOwner, "/settle");
-    assert.equal(await finalizeAccounting(f.env, reserved, 40, event), true);
+    assert.equal(await finalizeOwnedAccounting(accountingSinks(f.env), reserved, 40, event), true);
     assert.equal(f.rows(failedOwner)[0].reserved_micros, 75);
     const other = reserved.reservations.find(row => row.objectName !== failedOwner);
     assert.equal(f.rows(other.objectName)[0].reserved_micros, 40);

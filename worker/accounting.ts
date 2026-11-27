@@ -187,10 +187,6 @@ export async function reserveLedgerIntent(env: Env, intent: BudgetReservationInt
   return { reservationId: intent.request.reservationId, objectName: intent.objectName, ...(result.dispatched === true ? { dispatched: true } : {}) };
 }
 
-export function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent, search?: MiniMaxSearchOperation): Promise<boolean> {
-  return finalizeOwnedAccounting(accountingSinks(env), reservation, actualCostMicros, event, search);
-}
-
 export async function finalizeOwnedAccounting(sinks: AccountingSinks, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent, search?: MiniMaxSearchOperation): Promise<boolean> {
   if (search) {
     searchJsonBytes(event);

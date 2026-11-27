@@ -1,7 +1,7 @@
 import { sqliteFixture } from "./sqlite-storage.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { finalizeAccounting, reserveBudget, settleBudget } from "../accounting.ts";
+import { accountingSinks, finalizeOwnedAccounting, reserveBudget, settleBudget } from "../accounting.ts";
 import { queue, UsageLedgerObject } from "../ledgers.ts";
 import { usageSnapshot } from "../usage-ledger-client.ts";
 import { caughtResponse } from "../utils.ts";
@@ -43,7 +43,7 @@ test("settlement retry failure does not suppress the usage event", async () => {
   const original = console.error;
   console.error = (...values) => errors.push(JSON.stringify(values));
   try {
-    assert.equal(await finalizeAccounting(env, reservation, 42, event), false);
+    assert.equal(await finalizeOwnedAccounting(accountingSinks(env), reservation, 42, event), false);
   } finally {
     console.error = original;
   }
@@ -61,7 +61,7 @@ test("finalization reports durable recovery success and independent usage public
       if (usageFails && message.type === "clawrouter.usage.v1") throw new Error("usage unavailable");
       sent.push(message);
     });
-    assert.equal(await finalizeAccounting(env, reservation, 42, event), !usageFails);
+    assert.equal(await finalizeOwnedAccounting(accountingSinks(env), reservation, 42, event), !usageFails);
     assert.ok(sent.some((message) => message.kind === "budget_settlement"));
     assert.equal(sent.includes(event), !usageFails);
   }
@@ -75,7 +75,7 @@ test("rejected usage publication recovers the exact event in its policy shard an
   const env = mockEnv(async message => { accepted.push(structuredClone(message)); throw new Error("ambiguous queue acceptance"); });
   env.BUDGET_LEDGER.get = () => ({ fetch: async () => Response.json({ settled: true }) });
   env.USAGE_LEDGER = { idFromName: name => name, get: name => ({ fetch: async (url, init) => { calls.push({ name, url, init }); return ledger.fetch(new Request(url, init)); } }) };
-  assert.equal(await finalizeAccounting(env, reservation, 42, body), true);
+  assert.equal(await finalizeOwnedAccounting(accountingSinks(env), reservation, 42, body), true);
   assert.deepEqual(accepted, [body]);
   assert.deepEqual(calls.map(({ name, url, init }) => ({ name, url, method: init.method, body: JSON.parse(init.body) })), [{ name: "policy:tenant:policy", url: "https://clawrouter.internal/ingest", method: "POST", body }]);
   let acknowledged = 0;
@@ -105,7 +105,7 @@ test("usage recovery cannot conceal failed budget settlement or exhausted public
       if (direct === "non-2xx" || direct === "unconfirmed") return new Response("accepted", { status: direct === "non-2xx" ? 503 : 200 });
       return Response.json({ eventId: event.id, outcome: direct });
     } });
-    assert.equal(await finalizeAccounting(env, reservation, 42, event), !settlementFails && ["stored", "duplicate", "expired_by_retention"].includes(direct));
+    assert.equal(await finalizeOwnedAccounting(accountingSinks(env), reservation, 42, event), !settlementFails && ["stored", "duplicate", "expired_by_retention"].includes(direct));
     assert.equal(writes, 1);
     assert.equal(settlements, 1);
   }
@@ -114,7 +114,7 @@ test("usage recovery cannot conceal failed budget settlement or exhausted public
 test("accepted queue publication does not also write directly", async () => {
   const env = mockEnv(async message => assert.equal(message, event));
   env.USAGE_LEDGER.get = () => assert.fail("accepted publication must stay queue-only");
-  assert.equal(await finalizeAccounting(env, { reservations: [], reservedMicros: 0 }, 42, event), true);
+  assert.equal(await finalizeOwnedAccounting(accountingSinks(env), { reservations: [], reservedMicros: 0 }, 42, event), true);
 });
 
 test("HTTP success without a settlement receipt remains retryable", async () => {
