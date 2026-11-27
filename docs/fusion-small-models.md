@@ -2629,6 +2629,14 @@ with 38.84% lower model cost and 2.35% less workflow time for the cascade.
 All ninety outcomes and three exact replay audits are retained. This remains
 one draw on the same exposed repository, not production qualification.
 
+The [exact-anchor recovery repeat](fusion-hard-anchor-study.md) also scores
+29/30 for cascade and strong-only, with 23/30 for cheap-only. Estimated model
+cost falls 41.65%, but workflow time rises 13.97%, failing its stricter
+no-slowdown gate. All thirty tasks, ninety outcomes and 118 calls passed replay
+audits. The report retains the failed recovery candidates and shows that three
+recovered final outputs helped the cheap-only control; no recovered cascade
+draft directly completed a task in this draw.
+
 ## SemVer task-transfer smoke
 
 The [SemVer pilot and transfer report](fusion-semver-transfer.md) retains a
