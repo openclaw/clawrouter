@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stage Fusion public test files in one sandbox command while preserving file and symlink checks.
+
 - Document a seven-task Fusion comparison with independent cheap-only and strong-only controls: 7/7 cascade success, three fallback rescues and 51.33% lower model cost than strong-only, with 5.99% higher measured time and explicit study limits.
 
 - Document a live three-task Undici fusion pilot: 3/3 for cascade and strong-only, 58.85% lower model cost and 17.68% less measured workflow time; retain the per-task fallback penalty and pilot limits.
