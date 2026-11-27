@@ -197,9 +197,61 @@ test("admin dashboard distinguishes unavailable prices from mixed and fully pric
     await expect(spend.locator("span")).toHaveText(label);
     await expect(spend.locator("strong")).toHaveText(value);
     await expect(spend.locator("small")).toContainText("Last 30 days · May include estimates");
-    await expect(page.locator(".providerChartValue small")).toHaveText(value);
-    await expect(page.locator(".providerChartLegendMeta")).toHaveText("Requests · accounted spend · may include estimates");
+    const table = page.getByRole("table", { name: "Requests by provider" });
+    await expect(table.getByRole("columnheader")).toHaveText(["Provider", "Requests", "Accounted spend (USD)"]);
+    const providerRow = table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: /openai/i }) });
+    await expect(providerRow.getByRole("cell").last()).toHaveText(value);
+    await expect(providerRow.getByRole("cell").last()).toHaveAttribute("title", /May include estimates/);
+    await expect(page.getByText("Spend may include estimates", { exact: true })).toBeVisible();
   }
+});
+
+test("provider distribution retains long identities and Other providers across Dashboard and Usage", async ({ page }) => {
+  const { responses } = dashboardFixture();
+  const longName = "research-inference-service-with-a-long-provider-identifier";
+  const totals = { requestCount: 10, successCount: 8, errorCount: 2, totalTokens: 200, actualCostMicros: 250_000, unpricedRequestCount: 1 };
+  const usage = (responses["/v1/admin/usage"] as { usage: UsageSnapshot }).usage;
+  usage.providers = [longName, "anthropic", "tavily", "openai", "replicate", "mistral", "xai"].map(provider => ({ provider, ...totals }));
+  await page.route("**/v1/**", route => {
+    const body = responses[new URL(route.request().url()).pathname];
+    return route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  const table = page.getByRole("table", { name: "Requests by provider" });
+  for (const otherCount of [3, 2]) {
+    if (otherCount === 2) {
+      await page.getByRole("navigation", { name: "console" }).getByRole("button", { name: "Usage", exact: true }).press("Enter");
+      await page.getByText("Authoritative allowances and legacy diagnostics", { exact: true }).press("Enter");
+    }
+    const name = table.getByRole("rowheader", { name: new RegExp(longName) });
+    await expect(name).toContainText("200 tokens");
+    const other = table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: /Other providers/ }) });
+    await expect(other.getByRole("img", { name: (10 * otherCount) + " requests, " + (2 * otherCount) + " errors" })).toBeVisible();
+    await expect(other.getByRole("cell").first()).toContainText("80% success");
+    await expect(other.getByRole("cell").last()).toHaveText("$" + (0.25 * otherCount).toFixed(2) + " accounted; " + otherCount + " unpriced");
+    await expect.poll(() => table.evaluate(el => el.scrollWidth <= el.clientWidth && [...el.querySelectorAll("th, td, strong")].every(cell => cell.scrollWidth <= cell.clientWidth + 1))).toBe(true);
+  }
+});
+
+test("a pending provider distribution does not show an empty result before the ledger answers", async ({ page }) => {
+  const { responses } = dashboardFixture();
+  (responses["/v1/admin/usage"] as { usage: UsageSnapshot }).usage.providers = [];
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/v1/admin/usage") await hold;
+    const body = responses[path];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  const panel = page.locator(".dashboardProviderPanel");
+  try {
+    await expect(panel.getByText("Provider usage unavailable.", { exact: true })).toBeVisible();
+    await expect(panel.getByText("No provider activity", { exact: true })).toHaveCount(0);
+  } finally { release(); }
+  await expect(panel.getByText("No provider activity", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("table")).toHaveCount(0);
 });
 
 test("a provider without a cap still explains the other budget scopes", async ({ page }) => {
