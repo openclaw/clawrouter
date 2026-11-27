@@ -1,12 +1,13 @@
 # SemVer cascade pilot and task transfer
 
-A fixed cheap-first cascade matched the strong model on two previously
-unexposed tasks, solving 2/2 while cheap-only solved 1/2. Its replayed model cost
-was **43.42% lower**, or **44.17% lower on the cache-neutral basis**. The first
-candidate passed public and full tests; the second failed public verification
-and selected the passing strong control.
+A fixed cheap-first cascade solved 2/2 additional previously unexposed tasks,
+while strong-only solved 1/2 and cheap-only solved 2/2. Its replayed model cost
+was **88.91% lower**, or **88.69% lower on the cache-neutral basis**. Both cheap
+candidates passed public and full tests, so neither needed escalation. This
+batch demonstrates useful cheap-model capability, not a collaboration gain
+over cheap-only.
 
-This is a two-task, same-package transfer smoke test. It does not qualify
+This is another two-task, same-package transfer smoke test. It does not qualify
 production routing, total operating cost or live workflow latency. The
 [sanitized data](fusion-semver-transfer.json) also retains the failed initial
 policy and the exposed development repeat.
@@ -18,22 +19,27 @@ policy and the exposed development repeat.
 | Initial line-edit pilot | First campaign exposure, four tasks | 3/4 | 3/4 | 0/4 | $0.159608 | $0.177583 | +11.26% |
 | Anchored development repeat | Same four exposed tasks | 3/4 | 3/4 | 2/4 | $0.183253 | $0.101509 | -44.61% |
 | Anchored task transfer | Two new tasks in the same package | 2/2 | 2/2 | 1/2 | $0.095620 | $0.054099 | -43.42% |
+| Anchored task extension | Two further new tasks in the same package | 1/2 | 2/2 | 2/2 | $0.096369 | $0.010684 | -88.91% |
 
 There were no observed false public acceptances or lost strong-model successes
 in these samples. The development repeat gained one full-test success over
 cheap-only; the transfer gained one. A strong development response was rejected
-for an invalid source anchor and remains a failure.
+for an invalid source anchor and remains a failure. The extension gained one
+success over strong-only and none over cheap-only. Its failed strong candidate
+produced an invalid TAP plan with 1,195 assertions instead of the required
+1,204 public assertions; it remains a failure.
 
 Cache-neutral cascade cost increased 11.51% in the initial pilot, then fell
-40.32% in the development repeat and 44.17% in transfer. Normalization charges
+40.32% in the development repeat, 44.17% in transfer and 88.69% in the extension. Normalization charges
 all input tokens at the frozen uncached input rate and output tokens at the
 frozen output rate. It does not price local verification or orchestration.
 
 Both models were called on every admitted task to obtain paired controls.
 Replayed cascade cost counts each cheap call plus the strong call only when
 the cheap public gate rejects it. It is not the experiment's actual bill or a
-separately executed live cascade. The three paired studies together incurred
-$0.479967 in usage-based model-cost estimates. No timing gain is claimed.
+separately executed live cascade. The four paired studies together incurred
+$0.587020 in usage-based model-cost estimates across eight unique tasks, with
+four tasks repeated during development. No timing gain is claimed.
 
 ## Fixed policy and qualification
 
@@ -71,6 +77,24 @@ The two admitted task IDs were absent from the 849 existing campaign protocol
 files checked before inference. This establishes only observed campaign
 exposure, not absence from model training. Their package and range-parsing
 family had already been used in development.
+
+Three additional candidates were frozen for the extension. Two qualified:
+
+- [`c99f336`](https://github.com/npm/node-semver/commit/c99f336fa3bdff465652f9041eab2127d2f52eb2): prerelease identifiers starting with digits; 1,872 public and 1,878 full assertions. This repair touches two source files and adds an upstream test fixture.
+- [`8a34bde`](https://github.com/npm/node-semver/commit/8a34bdecc783407f4e1a8a1ee1f67906b84a4b78): increment identifier validation and state preservation; 1,204 public and 1,210 full assertions.
+
+[`2471d75`](https://github.com/npm/node-semver/commit/2471d7543e2e63d9d95358e2405e7e1cde926c36)
+was excluded before inference: baseline and reference assertion counts differed
+(544 versus 554 full; 542 versus 552 public). The same count gate was retained.
+The two admitted task IDs were absent from the 851 saved campaign protocols
+checked before this extension. This is observed campaign exposure only.
+
+Before inference, the extension exposed and fixed a static context-collector
+bug: a test's `require('../../')` must resolve the repository's `index.js`.
+The failed freeze sent no model request. Root index resolution was tested and
+reviewed, then all four requests were frozen. The model pair, prompt template,
+source-edit rules and public acceptance policy stayed the same. No previously
+completed trial was rerun.
 
 ## Runtime and evidence limits
 
