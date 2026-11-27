@@ -6,6 +6,22 @@ export interface NativeJsonInputHooks {
   observeChunk?: (chunk: Uint8Array) => void;
 }
 
+// Identity responses still need the reader's exact declared-length check.
+export function readIdentityNativeJson<T>(
+  response: Response, signal: AbortSignal, maxBytes: number,
+  observe: (body: unknown) => T, fail: (reason: string) => never,
+): Promise<T> {
+  const encoding = response.headers.get("content-encoding");
+  if (response.status !== 200 || response.redirected || encoding !== null && encoding.trim().toLowerCase() !== "identity") {
+    void response.body?.cancel().catch(() => undefined); fail("http");
+  }
+  if (encoding !== null) {
+    const headers = new Headers(response.headers); headers.delete("content-encoding");
+    response = new Response(response.body, { status: response.status, headers });
+  }
+  return readNativeJson(response, signal, maxBytes, observe, fail);
+}
+
 // Keep protocol observation inside the reader lifetime so invalid envelopes
 // cancel delivery before releasing the lock and abort listener.
 export async function readNativeJson<T>(

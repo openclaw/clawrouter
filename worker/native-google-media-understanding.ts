@@ -1,7 +1,7 @@
 import { googleUnderstandingModel, observeGoogleUnderstanding, prepareGoogleUnderstanding } from "./google-media-understanding.ts";
 import { jsonBodyBytes } from "./json-body.ts";
 import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
-import { readNativeJson } from "./native-json.ts";
+import { readIdentityNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { HttpError } from "./http-error.ts";
@@ -38,15 +38,7 @@ export function prepareNativeGoogleMediaUnderstanding(selection: ProxySelection)
     origin: "https://generativelanguage.googleapis.com", path: prepared.path,
     acquire: () => nativeResponseLease(16 * 1024 * 1024),
     async read(response, signal) {
-      const encoding = response.headers.get("content-encoding");
-      if (response.status !== 200 || response.redirected || encoding !== null && encoding.trim().toLowerCase() !== "identity") {
-        void response.body?.cancel().catch(() => undefined); invalid();
-      }
-      if (encoding !== null) {
-        const headers = new Headers(response.headers); headers.delete("content-encoding");
-        response = new Response(response.body, { status: response.status, headers });
-      }
-      return readNativeJson(response, signal, 1024 * 1024, original => {
+      return readIdentityNativeJson(response, signal, 1024 * 1024, original => {
         const root = observeGoogleUnderstanding(original, true).body;
         const candidate = object(list(root.candidates, 1)[0]), content = object(candidate.content);
         const parts = list(content.parts, 64).map(object).filter(part => part.thought !== true);
