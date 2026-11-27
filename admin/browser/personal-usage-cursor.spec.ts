@@ -80,8 +80,7 @@ test('members compare keys, inspect one and return to all keys in the same perio
   await expect(rows(page)).toHaveCount(1);
   await expect(rows(page)).toContainText('build-model');
   await expect(rows(page)).toContainText('Price unknown');
-  await rows(page).getByText('Call details', { exact: true }).click();
-  await expect(rows(page).locator('.personalEventDetails > div').filter({ has: page.getByText('Key ID', { exact: true }) })).toHaveText('Key IDbuild-key');
+  await expect(rows(page).getByText('Key: build-key', { exact: true })).toBeVisible();
   const events = reads(f, 'events').at(-1)!.searchParams;
   expect([events.get('key'), events.get('from'), events.get('to'), events.get('cut')]).toEqual(['build-key', from, to, cut]);
   const download = page.waitForEvent('download');
@@ -98,6 +97,13 @@ test('members compare keys, inspect one and return to all keys in the same perio
   await page.getByRole('button', { name: 'Show all keys', exact: true }).click();
   await expect(calls).toHaveText('144');
   await expect(rows(page)).toHaveCount(100);
+  // Scanning mixed activity doesn't require opening each call or resolving today's names.
+  const activityTable = page.getByRole('region', { name: 'Recent calls table', exact: true });
+  for (const identity of ['Key: build-key', 'Key: retained-key', 'Dashboard session']) {
+   await expect(activityTable.getByText(identity, { exact: true }).first()).toBeVisible();
+  }
+  await expect(activityTable).not.toContainText('another-members-key');
+  await expect(activityTable).not.toContainText('Retired laptop');
   const restored = reads(f, 'events').at(-1)!.searchParams;
   expect([restored.get('groupBy'), restored.get('keyKind'), restored.get('from'), restored.get('to'), restored.get('cut')]).toEqual(['key', null, from, to, cut]);
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();

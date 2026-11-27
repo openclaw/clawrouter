@@ -9,7 +9,7 @@ import type { PersonalUsageData } from '../hooks/use-personal-usage';
 import { PersonalUsageTimeSeries } from '../analytics-charts';
 import { formatCount } from '../ui-helpers';
 import { knownLaneCost, personalHistoryComplete, personalGlanceMoney, personalSuccessCaption, personalMetricLabels, personalPeak, personalRankedGroups, personalTrendRows, safeUsageSum, tokenTotal, type PersonalUsageMetric } from '../personal-usage-view';
-import { usageEventAnchor, costCell, costClasses, costClassLabel, costLanes, laneLabel, usageGroupLabel, usageKeyLabel, usageMoney, type PersonalUsageQuery, type UsageKeyName } from '../personal-usage';
+import { usageEventAnchor, costCell, costClasses, costClassLabel, costLanes, laneLabel, usageGroupLabel, usageMoney, type PersonalUsageQuery, type UsageKeyName } from '../personal-usage';
 
 const count = (value: number | null) => value === null ? 'Not reported' : value.toLocaleString('en-US');
 const iso = (timestamp: number) => new Date(timestamp).toISOString();
@@ -232,7 +232,6 @@ function UsageControls({ query, onChange, onRefresh, onClear, onPreset, onBack, 
 function EventDetails({ event, peers, page, index }: { event: PersonalUsageEvent; peers: PersonalUsageEvent[]; page: number; index: number }) {
   const fields = {
     'Event ID': event.id,
-    'Key ID': usageKeyLabel(event.keyId),
     Capability: event.capability,
     'Duration (ms)': event.durationMs,
     'HTTP status': event.statusCode,
@@ -354,12 +353,13 @@ function UsageActivity({ data, timezone }: { data: PersonalUsageData; timezone: 
       <p className="personalNote">{usageCaveats.personal}</p>
       {!page.events.length ? <p>No recent model calls for these filters.</p> : <div className="personalTableWrap" tabIndex={0} role="region" aria-label="Recent calls table">
         <table className="personalTable personalActivityTable">
-          <thead><tr><th scope="col">Time</th><th scope="col">Model / provider</th><th scope="col">Outcome</th><th scope="col">Input / output</th><th scope="col">Reporting cost</th></tr></thead>
+          <thead><tr><th scope="col">Time</th><th scope="col">Model / key</th><th scope="col">Outcome</th><th scope="col">Input / output</th><th scope="col">Reporting cost</th></tr></thead>
           <tbody>
             {page.events.map((event, index) => <tr id={usageEventAnchor(data.page, index)} key={usageEventAnchor(data.page, index) + ':' + event.id}>
               <td><time dateTime={iso(event.occurredAt)}>{time(event.occurredAt)}</time></td>
               <th scope="row">
                 <strong>{event.model ?? 'Unattributed model'}</strong>
+                <small>{event.keyId === null ? 'Dashboard session' : 'Key: ' + event.keyId}</small>
                 <small>{event.provider} · {event.callKind}</small>
                 <EventDetails event={event} peers={page.events} page={data.page} index={index} />
               </th>
