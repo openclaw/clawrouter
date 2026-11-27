@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Record an object-equality Fusion transfer check with equal quality across all arms, lower small-model cost, and no fallback or added fusion-quality benefit.
+
 - Record a five-task Fusion cost study with four successful fallbacks, 58.49% lower estimated API cost and a failed no-slowdown gate.
 
 - Report native Node Fusion repair costs with independent cheap-model controls and explicit limits on routing and collaboration claims.
