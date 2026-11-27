@@ -74,3 +74,17 @@ test('normalized cost, latency and cheap-control quality each veto apparent savi
     assert.equal(summarizeTransfer(rows, ids).transferLead, false);
   }
 });
+
+test('a stricter declared time ceiling rejects slower results without changing historical defaults', () => {
+  const rows = fixture();
+  for (const row of rows) if (row.strategy === 'cascade') row.elapsedMs = 101;
+  assert.equal(summarizeTransfer(rows, ids).transferLead, true);
+  const strict = summarizeTransfer(rows, ids, { maxElapsedRatio: 1 });
+  assert.equal(strict.aggregate.efficiencyGate, false);
+  assert.equal(strict.transferLead, false);
+  for (const row of rows) if (row.strategy === 'cascade') row.elapsedMs = 100;
+  assert.equal(summarizeTransfer(rows, ids, { maxElapsedRatio: 1 }).transferLead, true);
+  for (const maxElapsedRatio of [0, -1, 1.21, NaN, Infinity, '1']) {
+    assert.throws(() => summarizeTransfer(rows, ids, { maxElapsedRatio }), /invalid_elapsed_ceiling/);
+  }
+});
