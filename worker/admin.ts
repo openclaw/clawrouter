@@ -225,11 +225,11 @@ async function getContent(request: Request, env: Env): Promise<Response> {
 
 async function overview(env: Env) {
   const [policies, credentials, users] = await Promise.all([listPolicies(env), listCredentials(env), listUsers(env)]);
-  return overviewFrom(policies, credentials, users);
+  return overviewFrom(policies, credentialResponsesFrom(policies, credentials, users));
 }
 
-function overviewFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentialEntry[], users: AccessControlUser[]) {
-  const active = credentialResponsesFrom(policies, credentials, users).filter((credential) => credential.active);
+function overviewFrom(policies: AccessPolicyEntry[], credentials: readonly { active: boolean }[]) {
+  const active = credentials.filter((credential) => credential.active);
   return {
     policiesTotal: policies.length, policiesActive: policies.filter((entry) => entry.policy.enabled).length,
     keysTotal: credentials.length, keysActive: active.length,
@@ -242,10 +242,10 @@ function overviewFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentia
 
 async function tenants(env: Env) {
   const [policies, credentials, users] = await Promise.all([listPolicies(env), listCredentials(env), listUsers(env)]);
-  return tenantsFrom(policies, credentials, users);
+  return tenantsFrom(policies, credentialResponsesFrom(policies, credentials, users));
 }
 
-function tenantsFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentialEntry[], users: AccessControlUser[]) {
+function tenantsFrom(policies: AccessPolicyEntry[], credentials: readonly { policyId: string; active: boolean }[]) {
   const groups = new Map<string, { tenantId: string; policies: number; activePolicies: number; keys: number; activeKeys: number; providers: Set<string>; allProviders: boolean; monthlyBudgetMicros: number; requestCostMicros: number }>();
   for (const entry of policies) {
     const id = entry.policy.tenantId ?? "default";
@@ -256,7 +256,7 @@ function tenantsFrom(policies: AccessPolicyEntry[], credentials: ProxyCredential
     groups.set(id, row);
   }
   const byId = new Map(policies.map((entry) => [entry.policyId, entry.policy]));
-  for (const entry of credentialResponsesFrom(policies, credentials, users)) {
+  for (const entry of credentials) {
     const policy = byId.get(entry.policyId); if (!policy) continue;
     const row = groups.get(policy.tenantId ?? "default")!; row.keys += 1; row.activeKeys += Number(entry.active);
   }
@@ -337,9 +337,10 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
   ]);
   const connectionRows = connectionsFrom(storedConnections);
   const connectionResponseRows = await connectionResponses(env, connectionRows);
+  const credentialRows = credentialResponsesFrom(policies, credentials, users);
   return {
     policies: policies.map(policyResponse),
-    credentials: credentialResponsesFrom(policies, credentials, users),
+    credentials: credentialRows,
     connections: connectionResponseRows,
     users: users.map(userResponse),
     bindings,
@@ -347,8 +348,8 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
     grants: await upstreamGrantResponses(env, grants),
     rules,
     fusion,
-    overview: overviewFrom(policies, credentials, users),
-    tenants: tenantsFrom(policies, credentials, users),
+    overview: overviewFrom(policies, credentialRows),
+    tenants: tenantsFrom(policies, credentialRows),
   };
 }
 
