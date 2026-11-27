@@ -80,4 +80,3 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
   if (requirement.endpoint.request_format === "openai.responses_input_tokens" && grant && grant.kind !== "api_key") return false;
   return bindingSupportsOperation(requirement, grant);
 }
-

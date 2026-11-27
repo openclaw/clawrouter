@@ -136,7 +136,7 @@ test("registered Z.AI global standard streams preserve original grants, selected
   }, async () => { try { await mf?.dispose(); } catch (error) { failureRecord("dispose", error); throw error; } },
     async () => { try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failureRecord("remove", error); throw error; } }]);
 });
-const workerOutcomePins = {"proxy.ts": "e7996f77dd28d60d6636597da4aaa85bc1f9e0578c8601585ffef7553971337f", "proxy-response.ts": "da7664084749cff3c5bb9f9d6b82053e6d04438fc7fdcca1dd9d3025e175e8f3", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+const workerOutcomePins = {"proxy.ts": "8d13dc558be26485c3b64a4dc668639d5daa34dea771ede63b4811b7fe94092b", "proxy-response.ts": "da7664084749cff3c5bb9f9d6b82053e6d04438fc7fdcca1dd9d3025e175e8f3", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
 function workerOutcomeOverlay(text, name = "proxy-response.ts") {
   assert.equal(createHash("sha256").update(text).digest("hex"), workerOutcomePins[name]);
   const edit = (before, after, count = 1) => { assert.equal(text.split(before).length, count + 1, before); text = text.replaceAll(before, after); };
