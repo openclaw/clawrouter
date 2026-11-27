@@ -3,12 +3,12 @@ import { expect, test, type Page } from '@playwright/test';
 import { cursorUsageFixture } from '../test/helpers/personal-usage-cursor.mjs';
 import { fixtureResponses } from './fixtures/personal-usage';
 
-async function fromMemberHome(page: Page, populated = true) {
+async function fromMemberHome(page: Page, populated = true, laptopKey = 'workstation') {
   const history = await cursorUsageFixture({rows: 0});
   if (populated) {
     // The historical key is intentionally absent from today's inventory.
     await history.ingest('build', {credential_id: 'archived-build', input_tokens: 120, output_tokens: 30, actual_cost_micros: 10000});
-    await history.ingest('laptop', {credential_id: 'workstation', input_tokens: 10, output_tokens: 20, actual_cost_micros: 50000});
+    await history.ingest('laptop', {credential_id: laptopKey, input_tokens: 10, output_tokens: 20, actual_cost_micros: 50000});
     await history.ingest('web', {credential_id: null, cost_basis: 'unpriced_usage'});
   }
   await page.clock.setFixedTime(new Date(history.now));
@@ -112,13 +112,14 @@ test('the sticky header does not cover the comparison or clear-filter focus ring
 
 test('tabbing to a ranked key shows its entire outline at the bottom of a short viewport', async ({page}) => {
   await page.setViewportSize({width: 721, height: 280});
-  const close = await fromMemberHome(page);
+  const close = await fromMemberHome(page, true, 'workstation-archive-' + 'abcdef'.repeat(8));
   try {
     await button(page, 'Compare keys').press('Enter');
     const rank = ranks(page), key = rank.getByRole('button', {name: 'archived-build'});
     await expect(key).toBeVisible();
     const previous = rank.getByLabel('Group ranking scope and coverage');
-    await previous.focus();
+    for (let i = 0; i < 20 && !await previous.evaluate(el => el === document.activeElement); i++) await page.keyboard.press('Tab');
+    await expect(previous).toBeFocused();
     // The border box is visible; its outside outline will cross the viewport edge.
     await key.evaluate(el => scrollBy(0, Math.ceil(el.getBoundingClientRect().bottom - innerHeight)));
     await page.keyboard.press('Tab');

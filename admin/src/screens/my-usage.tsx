@@ -524,7 +524,10 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
       const ranking = <UsageRanking value={value} query={query} setQuery={setQuery} canRefine={!report.error} onKey={selectKey} metric={metric} />;
       const trend = <UsageTrend value={value} metric={metric} />;
       if (comparisonFirst) return <div className="personalKeyOverview">
-        <PersonalUsageSummary data={data} comparison={<div className="personalKeyComparison" ref={comparison}>{metrics}{ranking}</div>} />
+        <PersonalUsageSummary data={data} comparison={<div className="personalKeyComparison" ref={comparison} onFocus={event => {
+          const key = event.target;
+          if (key instanceof HTMLButtonElement && key.matches('.personalGroupButton:focus-visible')) revealComparison(key);
+        }}>{metrics}{ranking}</div>} />
         {trend}
       </div>;
       return <>{metrics}<div className="personalChartsGrid">{trend}{ranking}</div></>;
