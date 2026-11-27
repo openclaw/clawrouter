@@ -460,11 +460,18 @@ For evaluations that need hidden bug regressions, use the opt-in
 `scripts/fusion-regression-holdout.mjs`. Supply the fixed test source as
 `content`, the baseline tests as `before`, and a pinned Babel-compatible parser.
 The helper requires at least two changed static `it`/`test` groups, retains one
-in public tests, and selects one hidden group by a fixed source hash. Nested
+in public tests, and selects one hidden group by a fixed source hash. For a task
+whose regressions span files, use `splitRegressionTests(id, files, parse)` with
+the same per-file fields. It returns public and hidden views in `files`, sorted
+by unique path. The two changed groups may belong to different files. Explicit synchronous suite
+helpers can be included with a fourth argument, `{ suiteWrappers: ['whenHeader'] }`.
+Their first argument must be a string, null or literal `undefined`, and their
+second argument a function body. The caller must verify the helper's suite
+semantics and the native census; dynamic identities remain unsupported. Nested
 `describe` suites retain their context; ambiguous duplicate titles are rejected.
 The existing preservation splitter is unchanged.
 
-The returned `content` is the public test view; `hiddenContent` contains only
+Each returned `content` is the public test view; `hiddenContent` contains only
 the selected test group plus shared scaffolding. Keep the latter out of model
 requests, repair feedback and logs. Text changes alone do not prove a regression.
 Run full, public and hidden views independently against both the unchanged
@@ -472,7 +479,10 @@ baseline implementation and the fixed reference before inference. Pass those
 six trusted native receipts to `qualifyRegressionHoldout(split, { reference,
 baseline })`. Each view requires `testsSha256`, `valid`, `passed`, `assertions`,
 `failedAssertions`, `skipped` and `cancelled`. Bind `testsSha256` to that view's
-exact test source; pin the implementation revisions separately in the protocol.
+exact test source; for multiple files, hash the UTF-8 JSON array of
+`{ path, content }` objects in the returned path order for that view. A single
+file keeps its direct content hash. Pin implementation revisions separately
+in the protocol.
 
 Qualification requires the reference to pass every view, the baseline to fail
 every view, complete expected test counts, and no skips or cancellations. Count

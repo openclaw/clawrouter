@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Script } from 'node:vm';
-import { splitRegressionSuiteTest, qualifyRegressionHoldout } from '../scripts/fusion-regression-holdout.mjs';
+import { createHash } from 'node:crypto';
+import { splitRegressionSuiteTest, splitRegressionTests, qualifyRegressionHoldout } from '../scripts/fusion-regression-holdout.mjs';
 
 const preservation = "it('preserves zero', () => { assert.equal(fix(0), 0); });";
 const positive = "it('fixes positive', () => { assert.equal(fix(2), 2); });";
@@ -107,4 +108,59 @@ test('qualification rejects stale, incomplete, skipped, cancelled and contradict
   }
   assert.equal(qualifyRegressionHoldout({ ...split, expectedHidden: 0 }, evidence(split)), false);
   assert.equal(qualifyRegressionHoldout({ ...split, heldUnchanged: true }, evidence(split)), false);
+});
+
+
+test('regressions spread across files qualify as one task without leaking the hidden group', () => {
+  const files = [
+    { ...file, path: 'test/positive.js', content: wrap(preservation + positive) },
+    { ...file, path: 'test/negative.js', content: wrap(preservation + negative) },
+  ];
+  const split = splitRegressionTests('multifile', files, parse);
+  assert.deepEqual(splitRegressionTests('multifile', [...files].reverse(), parse), split);
+  assert.deepEqual(split.files.map(view => view.path), ['test/negative.js', 'test/positive.js']);
+  assert.equal(split.expectedFull, 4);
+  assert.equal(split.expectedPublic, 3);
+  assert.equal(split.expectedHidden, 1);
+  const digest = entries => createHash('sha256').update(JSON.stringify(entries)).digest('hex');
+  assert.equal(split.originalSha256, digest([...files].sort((a, b) => a.path < b.path ? -1 : 1).map(({ path, content }) => ({ path, content }))));
+  assert.equal(split.publicSha256, digest(split.files.map(({ path, content }) => ({ path, content }))));
+  assert.equal(split.hiddenSha256, digest(split.files.map(({ path, hiddenContent }) => ({ path, content: hiddenContent }))));
+  assert.equal(split.files.filter(view => view.hiddenContent.includes(positive) || view.hiddenContent.includes(negative)).length, 1);
+  assert.equal(split.files.filter(view => view.content.includes(positive) || view.content.includes(negative)).length, 1);
+  const run = (field, digest, fix) => {
+    const receipts = split.files.map(view => execute(field === 'original'
+      ? files.find(file => file.path === view.path).content : view[field], digest, fix));
+    return { ...receipts[0], assertions: receipts.reduce((sum, row) => sum + row.assertions, 0),
+      failedAssertions: receipts.reduce((sum, row) => sum + row.failedAssertions, 0),
+      passed: receipts.every(row => row.passed) };
+  };
+  const roles = Object.fromEntries([['reference', value => value], ['baseline', () => 0]].map(([role, fix]) =>
+    [role, Object.fromEntries([['full', 'original', split.originalSha256],
+      ['public', 'content', split.publicSha256], ['hidden', 'hiddenContent', split.hiddenSha256]]
+      .map(([name, field, digest]) => [name, run(field, digest, fix)]))]));
+  assert.equal(qualifyRegressionHoldout(split, roles), true);
+  assert.throws(() => splitRegressionTests('multifile', [files[0], files[0]], parse), /duplicate_regression_path/);
+});
+
+
+test('explicit literal suite wrappers preserve context and reject dynamic identities', () => {
+  const wrapped = source => {
+    const ast = parse(source);
+    ast.program.body[0].expression.callee.name = 'whenHeader';
+    return ast;
+  };
+  const options = { suiteWrappers: ['whenHeader'] };
+  const split = splitRegressionSuiteTest('wrapped', file, wrapped, options);
+  assert.equal(split.expectedFull, 3);
+  assert.equal(split.expectedPublic, 2);
+  assert.equal(split.expectedHidden, 1);
+  assert.throws(() => splitRegressionSuiteTest('wrapped', file, wrapped), /two_changed/);
+  const dynamic = source => {
+    const ast = wrapped(source);
+    ast.program.body[0].expression.arguments[0] = { type: 'Identifier', name: 'environment' };
+    return ast;
+  };
+  assert.throws(() => splitRegressionSuiteTest('wrapped', file, dynamic, options), /unsupported_regression_registration/);
+  assert.throws(() => splitRegressionSuiteTest('wrapped', file, parse, { suiteWrappers: ['test'] }), /invalid_suite_wrappers/);
 });
