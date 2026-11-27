@@ -231,15 +231,24 @@ test('shared components and ledger screens load without browser or account initi
       root, configFile: false, publicDir: false, logLevel: 'error',
       plugins: [{ name: 'component-owner', moduleParsed(info) { modules.add(info.id); } }],
       build: { ssr: true, outDir: output, minify: false, rollupOptions: {
-        input: { components: root + 'src/components.tsx', ledger: root + 'src/screens/users-usage.tsx' }, output: { entryFileNames: '[name].mjs' },
+        input: { components: root + 'src/components.tsx', ledger: root + 'src/screens/users-usage.tsx', retry: root + 'src/console-retry-button.tsx' }, output: { entryFileNames: '[name].mjs' },
       } },
     });
-    for (const name of ['ui-config.ts', 'demo-data.ts', 'console-controller-context.tsx', 'screens/caps.tsx', 'screens/users.tsx']) {
+    for (const name of ['ui-config.ts', 'demo-data.ts', 'console-controller-context.tsx', 'use-console-controller.ts',
+      'screens/login.tsx', 'hooks/use-credential-operations.ts', 'screens/caps.tsx', 'screens/users.tsx']) {
       assert.ok(!modules.has(root + 'src/' + name), 'presentation imports ' + name);
     }
+    for (const name of modules) assert.ok(!name.startsWith(root + 'src/hooks/access/'), 'presentation imports account operations');
     const { UsageScreen } = await import(pathToFileURL(output + '/ledger.mjs'));
     assert.equal(typeof UsageScreen, 'function');
     const { navItems, viewIcon, Metric } = await import(pathToFileURL(output + '/components.mjs'));
+    const { ConsoleRetryContext, ConsoleRetryButton } = await import(pathToFileURL(output + '/retry.mjs'));
+    for (const [busy, pending] of [[false, false], [true, false], [false, true], [true, true]]) {
+      const value = { busy, pending, retry: async () => assert.fail('render must not retry') };
+      const button = createElement(ConsoleRetryButton, { label: 'Retry', pendingLabel: 'Retrying…' });
+      assert.equal(renderToStaticMarkup(createElement(ConsoleRetryContext.Provider, { value }, button)),
+        `<button type="button" class="buttonSecondary consoleRetry" aria-disabled="${busy || pending}" aria-busy="${pending}">${pending ? 'Retrying…' : 'Retry'}</button>`);
+    }
     assert.deepEqual(navItems.map(({ id, label, section }) => [id, label, section]), [
       ['home', 'Dashboard', 'workspace'], ['my-usage', 'My usage', 'workspace'],
       ['catalog', 'Catalog', 'workspace'], ['playground', 'Playground', 'workspace'],
