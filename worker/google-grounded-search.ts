@@ -1,5 +1,5 @@
 import { readGoogleJson } from "./google-json.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const googleGroundedSearchModel = "gemini-3.6-flash";
 const encoder = new TextEncoder(), requestLimit = 128 * 1024, responseLimit = 1024 * 1024;

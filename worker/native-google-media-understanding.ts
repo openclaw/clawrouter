@@ -1,6 +1,6 @@
 import { googleUnderstandingModel, observeGoogleUnderstanding, prepareGoogleUnderstanding } from "./google-media-understanding.ts";
 import { jsonBodyBytes } from "./json-body.ts";
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 import { readNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";

@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 function requireVeo(value: unknown, field: string): asserts value { if (!value) throw new Error(`invalid_google_veo_${field}`); }
 export type GoogleVeoAsset = { kind: "inline"; base64: string; mimeType: string; decodedBytes: number }

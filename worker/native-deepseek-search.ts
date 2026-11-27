@@ -1,6 +1,6 @@
 import { observeDeepSeekSearch, prepareDeepSeekSearch } from "./deepseek-search.ts";
 import { jsonBodyBytes } from "./json-body.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { readNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse, type ValidatedNativeUsage } from "./native-response.ts";
 import { deepSeekSearchCost } from "./pricing.ts";

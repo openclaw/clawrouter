@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { managedCreateAdapter } from "../managed-lifecycle-adapters.ts";
-import { mediaPublicPath } from "../managed-media-json.ts";
+import { mediaPublicPath } from "../media-wire.ts";
 import { falSeedanceModels, prepareFalSeedance } from "../fal-seedance.ts";
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/fal/seedance.json", import.meta.url)));
 const adapter = managedCreateAdapter("fal.queue", "fal.queue_submit");

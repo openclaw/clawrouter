@@ -1,6 +1,7 @@
 import { kieTaskPath, parseKieSubmission, parseKieTask, prepareKieTask, validateKieTaskId } from "./kie-jobs.ts";
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
+import { readMediaJson } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./media-wire.ts";
 
 export const kieManagedAdapter: ManagedLifecycleAdapter = {
   protocol: "kie.jobs", requestFormats: ["kie.job_create"], supportsResult: false, supportsCancel: false,

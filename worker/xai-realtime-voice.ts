@@ -1,4 +1,4 @@
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 
 type Json = Record<string, unknown>;
 type Outcome = "completed" | "failed" | "incomplete" | "cancelled";

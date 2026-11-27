@@ -1,5 +1,5 @@
 import type { ManagedLifecycleAdapter, ManagedObservation, ManagedReadContext } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./media-wire.ts";
 import { canonicalGoogleVeoBytes } from "./provider-google-veo-files.ts";
 import { googleOmniEnvelopeBytes, googleOmniVideos, readGoogleOmniJson, requireOmni } from "./provider-google-omni-files.ts";
 

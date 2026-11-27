@@ -1,5 +1,5 @@
 import type { ManagedObservation, ManagedPublicPaths } from "./managed-lifecycle-types.ts";
-import { canonicalMediaBase64, mediaObject, mediaPublicPath } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject, mediaPublicPath } from "./media-wire.ts";
 import { readNativeJson } from "./native-json.ts";
 
 type Json = Record<string, unknown>;

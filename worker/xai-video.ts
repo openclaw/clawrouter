@@ -1,5 +1,5 @@
 import type { ManagedObservation } from "./managed-lifecycle-types.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 type Json = Record<string, unknown>;
 type Mode = "generate" | "edit" | "extend";

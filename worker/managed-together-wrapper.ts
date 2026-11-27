@@ -1,5 +1,5 @@
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
-import { managedMediaEnvelopeBytes, mediaPublicPath } from "./managed-media-json.ts";
+import { managedMediaEnvelopeBytes, mediaPublicPath } from "./media-wire.ts";
 import { togetherVideoManagedAdapter } from "./managed-together.ts";
 import { readNativeJson } from "./native-json.ts";
 

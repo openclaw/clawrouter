@@ -1,4 +1,4 @@
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 import { createSseFrames } from "./token-usage.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
 import { jsonBodyBytes, utf8Length } from "./json-body.ts";

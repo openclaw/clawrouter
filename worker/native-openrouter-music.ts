@@ -1,7 +1,7 @@
 import { inputRetirement } from "./input-retirement.ts";
 import { jsonBodyBytes, utf8Length } from "./json-body.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { createOpenRouterMusicInspector, openRouterMusicModels, prepareOpenRouterMusic, type OpenRouterMusicContext } from "./openrouter-music.ts";
 import type { ProxySelection } from "./proxy-selection.ts";

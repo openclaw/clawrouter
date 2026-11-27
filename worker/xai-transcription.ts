@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { readNativeJson } from "./native-json.ts";
 import type { TranscriptionUpload } from "./transcription-body.ts";
 

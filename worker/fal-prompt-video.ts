@@ -1,4 +1,4 @@
-import { managedMediaEnvelopeBytes, mediaObject } from "./managed-media-json.ts";
+import { managedMediaEnvelopeBytes, mediaObject } from "./media-wire.ts";
 
 export const falPromptVideoModels = ["fal-ai/minimax/video-01-live", "fal-ai/heygen/v2/video-agent"] as const;
 export function isFalPromptVideoModel(model: string): boolean { return (falPromptVideoModels as readonly string[]).includes(model); }

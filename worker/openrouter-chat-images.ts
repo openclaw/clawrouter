@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { prepareOpenRouterImage, observeOpenRouterImage } from "./openrouter-images.ts";
 import type { OpenRouterImageRequest, OpenRouterImageAsset } from "./openrouter-images.ts";
 import { readNativeJson } from "./native-json.ts";

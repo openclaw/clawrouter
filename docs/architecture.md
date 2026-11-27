@@ -4,6 +4,11 @@ ClawRouter keeps the request path small and provider-neutral. Provider manifests
 compile into one immutable catalog; runtime modules enforce identity, access,
 readiness, retention, budget, forwarding, and accounting in that order.
 
+Shared media wire predicates, base64 normalization and public-path shaping live in
+`worker/media-wire.ts`. Protocol adapters import those dependency-free helpers
+directly. `worker/managed-media-json.ts` owns bounded response reading and Wan
+operation lifetime, including leases, input retirement and physical cleanup.
+
 ## Control plane
 
 `ACCESS_CONTROL` is canonical for policies, proxy credentials, users, policy

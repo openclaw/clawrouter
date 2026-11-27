@@ -1,5 +1,5 @@
 import { assertFalRunDispatch } from "./fal-dispatch.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { readNativeJson } from "./native-json.ts";
 
 export const falMusicModels = ["fal-ai/minimax-music/v2.6", "fal-ai/ace-step/prompt-to-audio", "fal-ai/stable-audio-25/text-to-audio"] as const;

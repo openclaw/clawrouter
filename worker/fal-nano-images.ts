@@ -1,5 +1,5 @@
 import { assertFalRunDispatch } from "./fal-dispatch.ts";
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 import { observeFalImage, readFalImage, type FalImageRequest } from "./fal-images.ts";
 
 export const falNanoImageModels = ["fal-ai/nano-banana", "fal-ai/nano-banana/edit",

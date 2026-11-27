@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const kieWanModels = ["wan/2-6-text-to-video", "wan/2-6-image-to-video"] as const;
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { managedCreateAdapter, managedLifecycleAdapter } from "../managed-lifecycle-adapters.ts";
-import { managedMediaEnvelopeBytes } from "../managed-media-json.ts";
+import { managedMediaEnvelopeBytes } from "../media-wire.ts";
 
 const load = path => JSON.parse(readFileSync(new URL("../../providers/_fixtures/" + path, import.meta.url), "utf8"));
 const contracts = load("media/managed-routes.json");
