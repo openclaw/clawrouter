@@ -233,6 +233,70 @@ for (const previous of [false, true]) {
   });
 }
 
+for (const outcome of ["rejected", "uncertain"] as const) {
+  for (const alternate of [false, true]) {
+    test(`credential feedback: ${outcome} rotation, ${alternate ? "notice and shell" : "notice alone"} share one recovery read`, async ({ page }) => {
+      const state = await member(page);
+      state.keys = [{ credentialId: "studio-laptop", policyId, enabled: true, active: true }];
+      let rotations = 0;
+      await page.route("**/v1/session/credentials/studio-laptop/rotate", route => {
+        expect(route.request().method()).toBe("POST");
+        rotations++;
+        state.failKeys = true; // Metadata reconciliation after the write fails.
+        return outcome === "uncertain" ? route.abort("failed") : route.fulfill({ status: 409,
+          json: { error: { code: "credential_inactive", message: "only an active credential can be rotated" } } });
+      });
+      await page.goto("/dashboard/home");
+      const card = page.locator(".myKeysPanel"), alert = card.getByRole("alert");
+      const notice = card.getByRole("button", { name: "Refresh keys", exact: true });
+      const shell = page.getByRole("button", { name: "Retry refresh", exact: true });
+      await card.getByRole("button", { name: "Renew", exact: true }).click();
+      await expect(card).toContainText("Showing the last known key list");
+      await expect(shell).toBeEnabled();
+      await expect(alert).toBeVisible();
+      const error = await alert.innerText();
+      if (outcome === "uncertain") expect(error).toContain("the server may have applied it");
+      else expect(error).not.toContain("could not be confirmed");
+      const start = state.requests.length, before = state.keyReads;
+      const pending = gate();
+      state.keyGate = pending;
+      try {
+        await notice.press("Enter");
+        await expect.poll(() => state.keyReads).toBe(before + 1);
+        const reading = card.getByRole("button", { name: "Refreshing keys…", exact: true });
+        await expect(reading).toBeDisabled();
+        await expect(reading).toBeFocused();
+        await page.keyboard.press("Enter");
+        if (alternate) {
+          await expect(shell).toBeDisabled();
+          await shell.focus();
+          await page.keyboard.press("Enter");
+        }
+        await page.keyboard.press("Space");
+        await expect(alert).toHaveText(error);
+        pending.release();
+        await expect(notice).toBeEnabled();
+        const focused = alternate ? shell : notice;
+        await expect(focused).toBeFocused();
+        for (const path of ["/v1/session", "/v1/session/credentials", "/v1/session/usage"]) {
+          expect(state.requests.slice(start).filter(r => r.path === path)).toHaveLength(1);
+        }
+        state.keyGate = null;
+        state.failKeys = false;
+        await page.keyboard.press("Enter"); // A new, intentional read is admitted after failure.
+        await expect(card.getByRole("status")).toHaveCount(0);
+        await expect(card.locator(".dashboardPanelMeta")).toHaveText("1/1 enabled");
+        await expect(shell).toHaveCount(0);
+        await expect(alert).toHaveText(error); // A read cannot turn the write into success or erase uncertainty.
+        await expect(card.locator(".issuedKey")).toHaveCount(0);
+        expect(state.keyReads).toBe(before + 2);
+        expect(rotations).toBe(1);
+        expectReadsOnly(state.requests);
+      } finally { pending.release(); state.keyGate = null; }
+    });
+  }
+}
+
 test("a confirmed unassigned member sees a next step instead of an impossible create action", async ({ page }) => {
   const state = await member(page); state.held = false;
   await page.goto("/dashboard/home"); const card = page.locator(".myKeysPanel");

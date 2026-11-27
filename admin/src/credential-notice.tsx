@@ -1,12 +1,13 @@
 import { useId, useState } from "react";
 import { InlineError, InlineNote } from "./components";
+import { ConsoleRetryButton } from "./console-retry-button";
 import type { CredentialOperations } from "./hooks/use-credential-operations";
 
 export type CredentialFeedback = ReturnType<CredentialOperations["forSurface"]>;
 
 export function CredentialNotice({ state }: { state: CredentialFeedback }) {
   return <>
-    {state.error ? <><InlineError message={state.error} /><button type="button" className="buttonSecondary" onClick={() => void state.refresh()}>Refresh keys</button></> : null}
+    {state.error ? <><InlineError message={state.error} /><ConsoleRetryButton label="Refresh keys" pendingLabel="Refreshing keys…" /></> : null}
     {state.notice ? <InlineNote>{state.notice}</InlineNote> : null}
     {state.busy ? <div className="inlineNote" role="status">{state.pendingReveal === "dismissed"
       ? "The one-time secret won’t be shown. Key actions are unavailable until this change finishes."
