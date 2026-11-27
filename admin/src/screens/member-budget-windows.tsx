@@ -26,7 +26,8 @@ export function MemberBudgetWindows({ row, serviceCount }: { row: AdminUsageRow;
       if (!reported(window)) return null;
       const limit = window.limitMicros === undefined && period === "Monthly" ? row.monthlyBudgetMicros : window.limitMicros;
       const { remaining, used, percent } = presentBudget({ ...window, limitMicros: limit }, scope);
-      const unlimited = limit === null && window.override === true;
+      const memberOverride = scope === "principal" && window.override === true;
+      const unlimited = limit === null && memberOverride;
       const limitLabel = limit != null ? formatConfiguredLimit(limit) + " " + period.toLowerCase() + " limit" : unlimited ? "Unlimited" : "Limit unavailable";
       const balance = unlimited ? "No " + period.toLowerCase() + " cap" : limit == null ? "Remaining unavailable" : remaining;
       const rounded = percent === null ? null : Math.round(percent);
@@ -34,7 +35,7 @@ export function MemberBudgetWindows({ row, serviceCount }: { row: AdminUsageRow;
       const reset = window.resetsAt ? Date.parse(window.resetsAt) : NaN;
       return <div className="quotaRow" role="group" aria-label={period} key={period}>
         <span className="quotaIdentity"><strong>{period}</strong><small>{Number.isFinite(reset) ? <>Resets <time dateTime={window.resetsAt}>{resetTime.format(reset)}</time></> : "Reset not reported"}</small></span>
-        <span className="quotaNumbers"><strong>{balance}</strong><small>{limitLabel} · {used}{window.override ? " · member override" : ""}</small></span>
+        <span className="quotaNumbers"><strong>{balance}</strong><small>{limitLabel} · {used}{memberOverride ? " · member override" : ""}</small></span>
         {percent !== null && <><span className={percent >= 90 ? "quotaTrack warning" : "quotaTrack"} aria-hidden="true"><span style={{ width: percent + "%" }} /></span><strong className="quotaPercent">{percentLabel}</strong></>}
       </div>;
     })}

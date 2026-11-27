@@ -11,7 +11,7 @@ for (const role of ['admin', 'user'] as const) test(role + ' sees exact limits w
     daily: {configured:true, ledger:'blocked', limitMicros:0, spentMicros:0, remainingMicros:0, resetsAt:'2026-11-27T00:00:00Z'},
     weekly: {configured:false, override:true, ledger:'unmetered', limitMicros:null, spentMicros:15_001, remainingMicros:null, resetsAt:'2026-11-30T00:00:00Z'},
   };
-  const row: AdminUsageRow = {kid:policyId, policyId, enabled:true, tenantId:'synthetic', providers:[], monthlyBudgetMicros:15_001, budget};
+  const row: AdminUsageRow = {kid:policyId, policyId, enabled:true, tenantId:'synthetic', providers:[], budgetScope:'principal', monthlyBudgetMicros:15_001, budget};
   const usage = {ledger:'ready', daily:[], providers:[], events:[], summary:{requestCount:1,successCount:1,errorCount:0,inputTokens:1,outputTokens:1,totalTokens:2,actualCostMicros:15_001}};
   const payloads: Record<string, unknown> = {
     '/v1/session': {authenticated:true, auth:'cloudflare_access', role, email:'viewer@example.test', tenantId:'synthetic', entitlements:{providers:[], policies:[{policyId,budget}]}},
@@ -84,15 +84,19 @@ test('members see every held policy budget, including an exhausted seventh polic
 test('member budgets distinguish spent, missing and positive weekly balances after the quota read', async ({page}) => {
   const reset = '2026-11-30T00:00:00.000Z';
   const weeklyLimit = 5_000_000_000;
-  const rows: AdminUsageRow[] = [0, null, 2_000_000].map((remainingMicros, index) => {
-    const policyId = ['research', 'tools', 'notebooks'][index];
-    return { kid:policyId, policyId, enabled:true, tenantId:'research', providers:['openai'], budgetScope:'principal',
+  const rows: AdminUsageRow[] = [0, null, 2_000_000, weeklyLimit - 2_000_000].map((remainingMicros, index) => {
+    const policyId = ['research', 'tools', 'notebooks', 'shared'][index];
+    return { kid:policyId, policyId, enabled:true, tenantId:'research', providers:['openai'], budgetScope:policyId === 'shared' ? 'policy' : 'principal',
       monthlyBudgetMicros:null, weeklyBudgetMicros:weeklyLimit,
       budget:{configured:false, ledger:'unmetered', limitMicros:null, spentMicros:null, remainingMicros:null,
         weekly:{configured:true, ledger:remainingMicros === null ? 'unavailable' : 'durable_object', limitMicros:weeklyLimit,
           spentMicros:remainingMicros === null ? null : weeklyLimit - remainingMicros, remainingMicros, resetsAt:reset}},
     };
   });
+  const shared = rows[3];
+  shared.monthlyBudgetMicros = 35_000_000;
+  Object.assign(shared.budget, { configured:true, ledger:'durable_object', limitMicros:35_000_000,
+    spentMicros:5_000_000, remainingMicros:30_000_000, resetsAt:'2026-12-01T00:00:00.000Z' });
   let release!: () => void;
   const pending = new Promise<void>(resolve => { release = resolve; });
   let reads = 0;
@@ -119,7 +123,7 @@ test('member budgets distinguish spent, missing and positive weekly balances aft
     await expect(panel.getByRole('status')).toContainText('Loading usage');
     await expect(panel.getByText('$0.00 remaining', {exact:true})).toHaveCount(0);
   } finally { release(); }
-  const balances = ['$0.00 remaining', 'Remaining unavailable', '$2.00 remaining'];
+  const balances = ['$0.00 remaining', 'Remaining unavailable', '$2.00 remaining', '$4998.00 remaining'];
   for (const [i,row] of rows.entries()) {
     const policy = panel.getByRole('article', {name:row.policyId, exact:true});
     const weekly = policy.getByRole('group', {name:'Weekly', exact:true});
@@ -128,9 +132,19 @@ test('member budgets distinguish spent, missing and positive weekly balances aft
     await expect(weekly.locator('time')).toHaveAttribute('datetime', reset);
     await expect(weekly.locator('time')).toContainText('Nov 30, 2026');
     await expect(weekly.locator('time')).toContainText('00:00 UTC');
-    await expect(policy.getByRole('group', {name:'Monthly', exact:true})).toHaveCount(0);
+    await expect(policy).not.toContainText('member override');
+    const monthly = policy.getByRole('group', {name:'Monthly', exact:true});
+    if (row.budgetScope === 'policy') {
+      await expect(policy).toContainText('Shared policy pool');
+      await expect(monthly).toContainText('$30.00 remaining');
+      await expect(monthly).toContainText('$35.00 monthly limit · $5.00 used');
+      await expect(monthly.locator('time')).toHaveAttribute('datetime', '2026-12-01T00:00:00.000Z');
+    } else {
+      await expect(policy).toContainText('Per principal');
+      await expect(monthly).toHaveCount(0);
+    }
     if (i === 1) await expect(weekly.locator('.quotaPercent')).toHaveCount(0);
-    else await expect(weekly.locator('.quotaPercent')).toHaveText(i === 0 ? '100%' : '>99%');
+    else await expect(weekly.locator('.quotaPercent')).toHaveText(i === 0 ? '100%' : i === 2 ? '>99%' : '<1%');
   }
   await expect(panel).not.toContainText('No cap at this scope');
   expect(reads).toBe(1);
