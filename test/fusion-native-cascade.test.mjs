@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runNativeCascade } from '../scripts/fusion-native-cascade.mjs';
+import { testResult } from '../scripts/fusion-workloads.mjs';
 
 const config = { draftModel: 'provider/cheap', fallbackModel: 'provider/strong', expectedTests: 3 };
 const receipt = passed => ({ artifact: { patch: 'source' }, costMicros: 7,
@@ -205,4 +206,38 @@ test('configuration errors, callback errors and cancellation never dispatch fall
     calls++; controller.abort(Error('cancelled')); return receipt(false);
   } }), /cancelled/);
   assert.equal(calls, 2);
+});
+
+
+test('a parsed passing TAP receipt with skipped tests is incomplete', async () => {
+  const parsed = testResult({ code: 0, stderr: Buffer.alloc(0), stdout: Buffer.from(
+    '# tests 3\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 1\n# todo 0\n') });
+  assert.equal(parsed.valid, true); assert.equal(parsed.passed, true);
+  let calls = 0;
+  await assert.rejects(runNativeCascade({ ...config, invokeAndVerify: async () => {
+    calls++; return { ...receipt(true), tests: { ...parsed, assertions: parsed.tests } };
+  } }), /incomplete_native_verification/);
+  assert.equal(calls, 1);
+});
+
+test('incomplete counters stop every native phase without another model call', async () => {
+  for (const rejectedCall of [1, 2, 3]) for (const key of ['skipped', 'cancelled', 'todo']) {
+    for (const value of [1, -1, 0.5, NaN, '0', null, undefined]) {
+      let calls = 0;
+      await assert.rejects(runNativeCascade({ ...config, fallbackAttempts: 2,
+        invokeAndVerify: async () => {
+          const r = receipt(++calls === rejectedCall);
+          if (calls === rejectedCall) r.tests[key] = value;
+          return r;
+        } }), /incomplete_native_verification/);
+      assert.equal(calls, rejectedCall);
+    }
+  }
+});
+
+test('explicit zero native counters preserve parser prototypes', async () => {
+  class Counters { get skipped() { return 0; } get cancelled() { return 0; } get todo() { return 0; } }
+  const saved = receipt(true); saved.tests = Object.assign(new Counters(), saved.tests);
+  const result = await runNativeCascade({ ...config, invokeAndVerify: async () => saved });
+  assert.equal(result.passed, true); assert.equal(result.checks[0], saved);
 });

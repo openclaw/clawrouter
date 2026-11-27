@@ -103,3 +103,27 @@ test('errors, cancellation and deadline end the workflow without a fallback', as
       invokeAndVerify: () => new Promise(() => {}), compare: async () => agreement(0) }), { name: 'TimeoutError' });
   } finally { clearTimeout(keepAlive); }
 });
+
+
+test('incomplete counters stop draft, peer and fallback before another call', async () => {
+  for (const rejectedPhase of ['draft', 'peer', 'fallback']) for (const key of ['skipped', 'cancelled', 'todo']) {
+    for (const value of [1, -1, 0.5, NaN, '0', null, undefined]) {
+      const calls = [];
+      await assert.rejects(runAgreementCascade({ ...options,
+        invokeAndVerify: async ({ phase }) => {
+          calls.push(phase); const r = receipt(phase);
+          if (phase === rejectedPhase) r.tests[key] = value;
+          return r;
+        }, compare: async () => agreement(1) }), /incomplete_agreement_native_verification/);
+      assert.deepEqual(calls, ['draft', 'peer', 'fallback'].slice(0,
+        ['draft', 'peer', 'fallback'].indexOf(rejectedPhase) + 1));
+    }
+  }
+});
+
+test('explicit zero counters permit agreement and preserve receipt identity', async () => {
+  const saved = receipt('draft'); Object.assign(saved.tests, { skipped: 0, cancelled: 0, todo: 0 });
+  const result = await runAgreementCascade({ ...options,
+    invokeAndVerify: async () => saved, compare: async () => agreement(0) });
+  assert.equal(result.passed, true); assert.equal(result.checks[0], saved);
+});

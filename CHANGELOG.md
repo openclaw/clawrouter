@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Reject supplied skipped, cancelled or todo test counts in caller-side Fusion native and agreement cascades before accepting an artifact or dispatching another model call.
 - Record a fresh-control Fusion repair comparison where all arms pass but the cascade costs more and takes longer than strong-only.
 - Record two failed Fusion cheap-repair follow-ups, including cached-control accounting and a cheaper retrospective skip-repair comparison.
 
