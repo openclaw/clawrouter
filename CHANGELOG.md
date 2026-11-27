@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Document a repeated Fusion comparison on three LRU-cache tasks, including per-round gate failures and a zero-call diagnostic that recovers rejected cheap edits through unique exact-source matches.
+
 - Document Fusion repair experiments: faster paired fallback API calls, but a full-workflow replay still trails cheap-only and fails the latency gate.
 
 - Document a six-task Fusion transfer check: matched strong-only quality and 55.88% lower estimated model cost, but 24.68% more workflow time and a failed latency gate.
