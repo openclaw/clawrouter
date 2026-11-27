@@ -1,4 +1,5 @@
 import { containsPrivate, record } from "./private-codex-config";
+import { accessProgramsRejection, type AccessProgramsRejection } from "./access-programs.ts";
 
 // Wire contracts: codex core/client.rs, core/responses_metadata.rs and codex-api.
 const forwardedHeaders = new Set([
@@ -26,8 +27,7 @@ export type PrivateProtocolPredicate =
   | "protocol.metadata_value_type" | "protocol.metadata_value_limit" | "protocol.turn_metadata"
   | "protocol.stream_options_object" | "protocol.stream_options_keys"
   | "protocol.stream_options_delivery" | "protocol.stream_options_stream"
-  | "protocol.access_programs_object" | "protocol.access_programs_keys"
-  | "protocol.access_programs_type" | "protocol.access_programs_value"
+  | AccessProgramsRejection
   | "protocol.opaque_limit" | "protocol.opaque_identity" | "protocol.opaque_size"
   | "protocol.opaque_selector" | "protocol.opaque_json" | "protocol.opaque_encoding";
 
@@ -71,14 +71,7 @@ export function privateProtocolBodyRejection(body: Record<string, unknown>): Pri
   }
   // This is an upstream access selection, not permission granted by the facade.
   // Preserve the supplied wire token; never manufacture entitlement or a program fallback.
-  const programs = body.access_programs;
-  if (programs != null) {
-    if (!record(programs)) return "protocol.access_programs_object";
-    if (Object.keys(programs).length !== 1) return "protocol.access_programs_keys";
-    if (typeof programs.cyber !== "string") return "protocol.access_programs_type";
-    if (!/^[a-z][a-z0-9_]{0,63}$/.test(programs.cyber)) return "protocol.access_programs_value";
-  }
-  return null;
+  return accessProgramsRejection(body.access_programs);
 }
 
 function parseRoutingHint(value: string, alias: string): { tier?: string } | null {

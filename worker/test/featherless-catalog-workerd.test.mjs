@@ -10,7 +10,7 @@ import worker from './worker/index.ts';
 import { authorityCall } from './worker/authority.ts';
 import { putGrantCredentials } from './worker/grant-credentials.ts';
 import { sha256Hex } from './worker/utils.ts';
-import { snapshot } from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import { bodyBudgetCharged, BodyLease } from './worker/body-budget.ts';
 import { HttpOperation } from './worker/http-operation.ts';
 const originalFetch=globalThis.fetch.bind(globalThis);let fetches=0;const attempts=[];let physicalPending,scanOperation,producerComplete=false,producerCanceled=false;

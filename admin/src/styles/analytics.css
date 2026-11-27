@@ -602,60 +602,79 @@
 }
 
 .providerChart {
-  display: grid;
-  padding: 6px 16px 12px;
+  container-type: inline-size;
+  padding: 0 16px 12px;
 }
 
-.providerChartRow {
-  display: grid;
-  grid-template-columns: minmax(148px, 0.85fr) minmax(90px, 1fr) 58px;
-  align-items: center;
-  gap: 12px;
-  min-height: 55px;
+.providerChart table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: var(--foreground-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.providerChart th,
+.providerChart td {
+  padding: 10px 0 10px 10px;
   border-bottom: 1px solid var(--border);
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 
-.providerChartRow:last-child {
-  border-bottom: 0;
+.providerChart th:first-child {
+  width: 42%;
+  padding-left: 0;
+  text-align: left;
+}
+
+.providerChart thead th {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  vertical-align: bottom;
+}
+
+.providerChart tbody th,
+.providerChart tbody td {
+  vertical-align: top;
+}
+
+.providerChart tbody td,
+.providerChartIdentity strong,
+.providerChartVolume strong {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.providerChart small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.35;
 }
 
 .providerChartIdentity {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: 22px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.providerChartIdentity > span:last-child,
-.providerChartValue {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
+  gap: 6px;
 }
 
 .providerChartIdentity strong,
 .providerChartIdentity small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: block;
 }
 
 .providerChartIdentity strong {
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.providerChartIdentity small,
-.providerChartValue small {
-  color: var(--muted);
-  font-size: 9px;
+  font-weight: 650;
 }
 
 .providerChartMark {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   place-items: center;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -663,71 +682,73 @@
 }
 
 .providerChartMark svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
+}
+
+.providerChartVolume {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6ch;
+  align-items: center;
+  gap: 6px;
 }
 
 .providerChartTrack {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
-  height: 7px;
+  height: 5px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-tag);
   background: var(--track-bg);
 }
 
-.providerChartTrack > span {
-  display: block;
-  height: 100%;
-}
-
-.providerChartSuccess {
+.providerChartSuccess,
+.providerChartLegend i {
   background: var(--chart-primary);
 }
 
-.providerChartErrors {
+.providerChartErrors,
+.providerChartLegend i.errors {
   background: var(--chart-error);
 }
 
-.providerChartValue {
-  justify-items: end;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
+/* Size to the panel, not the viewport: Dashboard and Usage give the same table different widths. */
+@container (max-width: 450px) {
+  .providerChartVolume {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
 
-.providerChartValue strong {
-  color: var(--foreground-strong);
-  font-size: 11px;
-  font-weight: 600;
+  .providerChartTrack {
+    grid-row: 2;
+  }
 }
 
 .providerChartLegend {
   display: flex;
-  align-items: center;
-  gap: 14px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
   padding-top: 10px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .providerChartLegend span {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
 }
 
 .providerChartLegend i {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
-  background: var(--chart-primary);
+  border-radius: var(--radius-tag);
 }
 
-.providerChartLegend i.errors {
-  background: var(--chart-error);
-}
-
-.providerChartLegend .providerChartLegendMeta {
-  margin-left: auto;
+.providerChartLegend small {
+  margin-inline-start: auto;
 }
 
 .chartListEmpty {
@@ -840,17 +861,6 @@
 
   .analyticsPanelControls {
     justify-content: flex-start;
-  }
-
-  .providerChartRow {
-    grid-template-columns: minmax(130px, 1fr) 52px;
-    gap: 9px;
-    padding-block: 8px;
-  }
-
-  .providerChartTrack {
-    grid-column: 1 / -1;
-    grid-row: 2;
   }
 
   .usageTablePanel .tableHead {

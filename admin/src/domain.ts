@@ -16,6 +16,21 @@ import type {
   ServiceOutcome,
 } from "./ui-types";
 
+export function kindLabel(kind: string) {
+  const labels: Record<string, string> = {
+    all: "all",
+    gateway_platform: "gateway",
+    llm: "model",
+    "llm-gateway": "gateway",
+    media: "media",
+    model_provider: "model",
+    oauth_platform: "oauth",
+    search: "search",
+    tool_provider: "tool",
+  };
+  return labels[kind] ?? kind.replace(/_/g, " ");
+}
+
 export interface CredentialSummary {
   credentialId: string;
   policyId: string;
@@ -141,19 +156,6 @@ export function optionalNumber(value: string) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${value} is not a non-negative safe integer`);
   return parsed;
-}
-
-export function optionalCurrencyMicros(value: string) {
-  if (!value.trim()) return undefined;
-  const normalized = value.replace(/[$,\s]/g, "");
-  const parsed = Number(normalized);
-  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${value} is not a valid budget`);
-  return Math.round(parsed * 1_000_000);
-}
-
-export function currencyInput(value: number | null | undefined) {
-  if (value === undefined || value === null) return "";
-  return String(value / 1_000_000);
 }
 
 export function optionalDecimal(value: string) {
@@ -435,7 +437,8 @@ export function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | un
   const provider = form.mode === "model" ? model?.provider : route?.provider;
   if (!provider) return null;
   const access = accessByProvider.get(provider);
-  if (!access?.allowed) return "Cloudflare Access identity is not granted this provider";
+  if (!access) return "Your access to this provider couldn’t be verified. You can keep editing your draft.";
+  if (!access.allowed) return "Cloudflare Access identity is not granted this provider";
   const readiness = readinessByProvider[provider];
   if (!readiness) return "provider readiness is unknown";
   if (!readiness.executable) return readiness.reasons[0] ?? `provider is ${readinessLabel(readiness)}`;

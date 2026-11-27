@@ -31,6 +31,9 @@ capabilities:
   - id: llm.stream
     endpoint: invoke_model_stream
     methods: [POST]
+  - id: llm.embeddings
+    endpoint: embed_text
+    methods: [POST]
 endpoints:
   invoke_model:
     modelPassthrough: {}
@@ -74,12 +77,124 @@ endpoints:
     responseFormat: aws_bedrock.eventstream
     streaming: aws_eventstream
     timeoutMs: 600000
+  embed_text:
+    method: POST
+    path: /model/${model}/invoke
+    pathParams: [model]
+    pathParamStyles:
+      model: opaque_segment
+    headers:
+      content-type: application/json
+      accept: application/json
+    requestFormat: aws_bedrock.invoke
+    responseFormat: aws_bedrock.invoke
+    timeoutMs: 600000
 models:
   entries:
     - id: bedrock/amazon.nova-lite-v1:0
+      displayName: "Amazon Nova Lite v1"
       upstream: amazon.nova-lite-v1:0
       capabilities: [llm.invoke, llm.stream]
       pricingRef: aws-bedrock-model
+    - id: bedrock/amazon.titan-embed-text-v2:0
+      upstream: amazon.titan-embed-text-v2:0
+      capabilities: [llm.embeddings]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          embed_text:
+            sources:
+              - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-titan-text-embeddings-v2.html
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: bedrock/amazon.titan-embed-text-v1
+      upstream: amazon.titan-embed-text-v1
+      capabilities: [llm.embeddings]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          embed_text:
+            sources:
+              - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-titan-embeddings-g1---text.html
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: bedrock/amazon.titan-embed-g1-text-02
+      upstream: amazon.titan-embed-g1-text-02
+      capabilities: [llm.embeddings]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          embed_text:
+            sources:
+              - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-titan-text-embeddings-v2-2.html
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: bedrock/cohere.embed-english-v3
+      upstream: cohere.embed-english-v3
+      capabilities: [llm.embeddings]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          embed_text:
+            sources:
+              - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-cohere-embed-english.html
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: bedrock/cohere.embed-multilingual-v3
+      upstream: cohere.embed-multilingual-v3
+      capabilities: [llm.embeddings]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          embed_text:
+            sources:
+              - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-cohere-embed-multilingual.html
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: bedrock/cohere.embed-v4:0
+      upstream: cohere.embed-v4:0
+      capabilities: [llm.embeddings]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          embed_text:
+            sources:
+              - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-cohere-embed-v4.html
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: bedrock/amazon.nova-2-multimodal-embeddings-v1:0
+      upstream: amazon.nova-2-multimodal-embeddings-v1:0
+      capabilities: [llm.embeddings]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          embed_text:
+            sources:
+              - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-amazon-nova-multimodal-embeddings.html
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: bedrock/us.twelvelabs.marengo-embed-2-7-v1:0
+      upstream: us.twelvelabs.marengo-embed-2-7-v1:0
+      capabilities: [llm.embeddings]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          embed_text:
+            sources:
+              - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-twelvelabs-marengo-embed-v2-7.html
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: bedrock/twelvelabs.marengo-embed-3-0-v1:0
+      upstream: twelvelabs.marengo-embed-3-0-v1:0
+      capabilities: [llm.embeddings]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          embed_text:
+            sources:
+              - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-twelvelabs-marengo-embed-3-0.html
+            checkedAt: "2026-11-04"
+            input: [text]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject, region]

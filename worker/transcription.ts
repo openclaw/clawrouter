@@ -1,24 +1,26 @@
+import { admitAccountingFacts } from "./proxy-accounting.ts";
 import { assertMultipartDestination, multipartRoute, multipartSelection, prepareMultipart, readMultipartResponse } from "./transcription-protocol.ts";
 import { nativeJsonResponse, nativeResponseLease } from "./native-response.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { grantRevision, type PinnedGrant } from "./grant-selection.ts";
+import { grantRevision, type PinnedGrant } from "./grant-eligibility.ts";
 import { accessIdentity } from "./access.ts";
-import { emptyReservation, markBudgetDispatched, reserveBudget, settleBudget, type BudgetReservation } from "./accounting.ts";
+import { emptyReservation, planBudgetReservation, markBudgetDispatched, reserveBudget, settleBudget, type BudgetReservation } from "./accounting.ts";
 import { correlationMetadata } from "./correlation.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { createProxyAccounting } from "./proxy-accounting.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
 import { observeUsage, proxyResponseHeaders } from "./proxy-response.ts";
-import { assertProviderAccess, configuredUpstream, upstreamAuth, modelSupportsEndpoint, providerById, providerModel } from "./providers.ts";
+import { assertProviderAccess, configuredUpstream, upstreamAuth } from "./providers.ts"; import { providerById, providerModel } from "./provider-catalog.ts"; import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { prepareSelected, captureGrantRuntime } from "./proxy.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { softBudget, softBudgetPolicy } from "./soft-budget.ts";
+import { prepareSoftBudget, startSoftBudget, softBudget, softBudgetPolicy } from "./soft-budget.ts";
 import { readBinaryUpload, readBounded, readTranscriptionUpload, transcriptionLimits } from "./transcription-body.ts";
 import { transcriptionUsage } from "./transcription-usage.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
-import { decodePathSegment, errorResponse, HttpError } from "./utils.ts";
+import { decodePathSegment, errorResponse } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 function rawTranscriptionRoute(path: string): { provider: CompiledProvider; endpoint: CompiledEndpoint } | null {
   const match = path.replace(/^\/v1\/playground\//, "/v1/").match(/^\/v1\/(native|proxy)\/([^/]+)(\/.*)$/);
@@ -144,6 +146,9 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
           throw new HttpError(503, "transcription_owner_unavailable", "the original upload credential changed");
       }
       const useSoft = softBudgetPolicy(auth.policy);
+      const softPlan = useSoft ? prepareSoftBudget(auth, selection.capability, prepared.connection, accounting.facts.event.id) : undefined;
+      const preparedPlan = !useSoft ? planBudgetReservation(auth, selection.capability, accounting.cost, prepared.connection) : undefined;
+      admitAccountingFacts(accounting.facts, softPlan?.reservation ?? preparedPlan);
       if (!useSoft) {
         const pending = reserveBudget(env, auth, selection.capability, accounting.cost, prepared.connection, (intent, state) => {
           if (state === "denied") {
@@ -153,7 +158,7 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
           // Own even an uncertain committed leg, not only successful ACKs.
           reservation.reservedMicros = accounting.cost.reserveMicros;
           reservation.reservations.push({ reservationId: intent.request.reservationId, objectName: intent.objectName });
-        });
+        }, { preparedPlan });
         // Cancellation can precede later attempted legs, including a committed
         // leg whose ACK is lost. Own both outcomes through terminal refund.
         context.waitUntil(pending.then(
@@ -209,7 +214,7 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
       }, () => undefined);
       fetchWork.push(fetched); void fetched.catch(() => undefined);
       if (useSoft) {
-        soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error));
+        soft = startSoftBudget(env, softPlan!, error => operation.stop("upstream", error));
         reservation = soft.reservation; context.waitUntil(soft.check);
       }
       response = await operation.wait(pending, "upstream", late => { void discard(late).catch(() => undefined); });

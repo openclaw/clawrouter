@@ -81,6 +81,7 @@ endpoints:
 models:
   entries:
     - id: meta/muse-spark-1.3
+      displayName: "Muse Spark 1.3"
       upstream: muse-spark-1.3
       capabilities: [llm.chat, llm.responses]
       nativeCapabilities:
@@ -92,6 +93,7 @@ models:
             input: [text, image]
             contextWindow: 1048576
     - id: meta/muse-wonder-1.0
+      displayName: "Muse Wonder 1.0"
       upstream: muse-wonder-1.0
       capabilities: [llm.chat, llm.responses]
       nativeCapabilities:
@@ -103,6 +105,7 @@ models:
             input: [text, image]
             contextWindow: 1048576
     - id: meta/muse-spark-1.3-contributor
+      displayName: "Muse Spark 1.3 Contributor"
       upstream: muse-spark-1.3-contributor
       capabilities: [llm.chat, llm.responses]
       nativeCapabilities:
@@ -114,6 +117,7 @@ models:
             input: [text, image]
             contextWindow: 1048576
     - id: meta/muse-spark-1.2
+      displayName: "Muse Spark 1.2"
       upstream: muse-spark-1.2
       capabilities: [llm.chat, llm.responses]
       nativeCapabilities:
@@ -125,6 +129,7 @@ models:
             input: [text, image]
             contextWindow: 1048576
     - id: meta/muse-spark-1.2-contributor
+      displayName: "Muse Spark 1.2 Contributor"
       upstream: muse-spark-1.2-contributor
       capabilities: [llm.chat, llm.responses]
       nativeCapabilities:
@@ -136,6 +141,7 @@ models:
             input: [text, image]
             contextWindow: 1048576
     - id: meta/muse-spark-1.1
+      displayName: "Muse Spark 1.1"
       upstream: muse-spark-1.1
       capabilities: [llm.chat, llm.responses]
       nativeCapabilities:

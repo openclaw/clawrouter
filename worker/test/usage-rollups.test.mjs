@@ -162,6 +162,7 @@ test("the sub-second migration alarm never counts the whole table", async t => {
   assert.ok(migrating > 0, "the fixture must exercise at least one migrating alarm");
   await ledger.alarm();
   assert.ok(counts() > 0, "the idle maintenance alarm still reports table size");
-  assert.equal(f.alarm(), now + 86_400_000);
+  // It chose a report-cell fold target, so it returns when that target's 15-minute cut fence opens.
+  assert.equal(f.alarm(), now + 900_000);
   assert.ok(logs.every(entry => entry.event === "usage_rollup_maintenance" && !JSON.stringify(entry).includes("count-")));
 });

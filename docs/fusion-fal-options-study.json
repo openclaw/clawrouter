@@ -1,0 +1,316 @@
+{
+  "schemaVersion": 1,
+  "study": "Verified cheap execution for a scalar image-option repair",
+  "scope": "One previously model-unexercised historical source repair, three paired trials. One task cluster. No generalization, multi-model rescue or production claim.",
+  "task": {
+    "id": "history-9d814af6f382",
+    "baseCommit": "e5e88eb923e5733c67bc1b3c8e001d513e2e644d",
+    "referenceCommit": "9d814af6f382f8d5a31b93220b187faabed805f6",
+    "sourcePaths": [
+      "worker/fal-gpt-images.ts"
+    ],
+    "testPaths": [
+      "worker/test/fal-gpt-images.test.mjs"
+    ]
+  },
+  "provenance": {
+    "sourceCommit": "47bfbcb7b8a50ffe9a926dbac78d54ad5d4a810d",
+    "protocolSha256": "787a67e7264b55766ca325110b78005d8b86597f47c4f1c56dc60241ed011720",
+    "resultSha256": "ffc8c2043c8759c888bb517cedd3987f10412fac26529bd1f23888af02452919",
+    "terminalAuditSha256": "2d3f47a7b09f41beea5dd2e9aa920f250c8707bb3c4e64efe5b44b6277aacead",
+    "qualificationProtocolSha256": "41c394a6829e43ed585ef97a3c0e69ad208261e2c4d4b28599300e1375640c8c",
+    "qualificationResultSha256": "fdf7812701e52e998eecab191c5e98628453b5626024793a46a82b489d547dea"
+  },
+  "method": {
+    "draftModel": "openai/gpt-6-luna",
+    "draftReasoning": "medium",
+    "draftMaxOutputTokens": 4096,
+    "strongModel": "openai/gpt-6.1-terra",
+    "strongReasoning": "low",
+    "strongMaxOutputTokens": 8192,
+    "comparison": "Alternating arm order, matched two-attempt ceilings, fresh strong fallback after a rejected draft. All calls finish before full grading. Exact edits apply to the original baseline.",
+    "context": "Both arms receive the original source, unchanged media helpers, public wire fixture and public tests.",
+    "qualification": "Preserve every baseline test, append the original extended option test verbatim to the full suite, and append a separate public quality-array rejection test to both suites. Full-only regression assertions cover other enum arrays and null counts. Public reproduction was authored after reading the original regression, not independently authored.",
+    "verification": "Both arms explicitly use the short-circuit public verifier. Failed public tests reject before compilation; accepted candidates must compile. Full grading remains unchanged. No draft failed in this run, so these results do not measure short-circuit rejection savings.",
+    "runtime": "Existing immutable exact-lock sandbox; no downloads or new compute allocation. Original public and full repository suites plus Worker compilation.",
+    "cost": "Integer microUSD estimates from recorded usage and frozen tariffs, not invoices. Cache-neutral normalization prices all input at the base rate.",
+    "elapsed": "Per-arm sequential wall time includes model generation and public verification. The separate full grading phase is excluded consistently from both arms.",
+    "gates": "Full correctness, zero false accepts and at least 20% savings on both cost measures. Development lead additionally requires a successful fallback rescue and elapsed ratio <=1.2. Thresholds unchanged.",
+    "limits": "Three repeats of one selected task do not provide task-level confidence. Source freshness means no match in the searched cached model requests, not exclusion from provider training. Helpers and fixtures may have appeared in earlier tasks. Private protocols/raw proof are retained by hash; this report is not a standalone reproduction bundle."
+  },
+  "qualification": {
+    "referenceFull": {
+      "valid": true,
+      "passed": true,
+      "tests": 9,
+      "failures": 0,
+      "skipped": 0,
+      "compilerPassed": true
+    },
+    "referencePublic": {
+      "valid": true,
+      "passed": true,
+      "tests": 8,
+      "failures": 0,
+      "skipped": 0,
+      "compilerPassed": true
+    },
+    "baseFull": {
+      "valid": true,
+      "passed": false,
+      "tests": 9,
+      "failures": 2,
+      "skipped": 0,
+      "compilerPassed": true
+    },
+    "basePublic": {
+      "valid": true,
+      "passed": false,
+      "tests": 8,
+      "failures": 1,
+      "skipped": 0,
+      "compilerPassed": true
+    }
+  },
+  "records": [
+    {
+      "id": "history-9d814af6f382/repeat-0",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 8069,
+      "attempts": 1,
+      "costMicros": 9715,
+      "elapsedMs": 7863.370917,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 9,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "history-9d814af6f382/repeat-0",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 860,
+      "attempts": 1,
+      "costMicros": 1024,
+      "elapsedMs": 6095.435165999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 9,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "history-9d814af6f382/repeat-1",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 933,
+      "attempts": 1,
+      "costMicros": 341,
+      "elapsedMs": 6912.201209000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 9,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "history-9d814af6f382/repeat-1",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 8069,
+      "attempts": 1,
+      "costMicros": 1813,
+      "elapsedMs": 7599.080083000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 9,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "history-9d814af6f382/repeat-2",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 8069,
+      "attempts": 1,
+      "costMicros": 1813,
+      "elapsedMs": 7730.141542000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 9,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "history-9d814af6f382/repeat-2",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 931,
+      "attempts": 1,
+      "costMicros": 339,
+      "elapsedMs": 7303.623749999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 9,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true
+    }
+  ],
+  "summary": {
+    "strong": {
+      "passed": 3,
+      "costMicros": 13341,
+      "elapsedMs": 23192.592542000002
+    },
+    "cascade": {
+      "passed": 3,
+      "costMicros": 1704,
+      "elapsedMs": 20311.260125
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 0,
+    "escalations": 0,
+    "costRatio": 0.12772655722959297,
+    "elapsedRatio": 0.8757649705705763,
+    "costComparison": {
+      "costBasis": "invoice-and-cache-neutral-v1",
+      "strong": {
+        "costMicros": 13341,
+        "normalizedMicros": 24207
+      },
+      "cascade": {
+        "costMicros": 1704,
+        "normalizedMicros": 2724
+      },
+      "costRatio": 0.12772655722959297,
+      "normalizedCostRatio": 0.11252943363489899,
+      "invoiceCostScreen": true,
+      "normalizedCostScreen": true,
+      "costScreen": true
+    },
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "accounting": {
+    "calls": 6,
+    "newCostMicros": 15045,
+    "cumulativeCostMicros": 312402545,
+    "remainingMicros": 87597455,
+    "campaignCapMicros": 400000000
+  },
+  "decision": {
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false,
+    "accepted": "Task-level evidence for verified small-model execution, with no fallback needed. Keep as a routing candidate; do not promote a universal cheap-first policy.",
+    "reason": "Both arms pass all three full suites. Normalized cost is 88.75% lower and elapsed time 12.42% lower for the cheap path. Zero fallback rescues means the combined development gate remains false; this does not demonstrate collaboration synergy.",
+    "productionGate": "30 unseen real tasks with three trials each, task-clustered uncertainty and unchanged quality/cost/latency controls remain required.",
+    "deployment": "None. No routing default or production configuration changed."
+  }
+}

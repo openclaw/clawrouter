@@ -19,7 +19,8 @@ import { inputRetirement } from "./input-retirement.ts";
 import { jsonBodyTransport } from "./json-body.ts";
 import { BodyLease } from "./body-budget.ts";
 import { hotCacheConfig } from "./hot-cache.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import type { AccessPolicy, Env } from "./types.ts";
 
@@ -127,7 +128,7 @@ export class CopilotCatalogFlow {
   }
 
   private async preparePublic(value: CopilotPublicInput, operation: HttpOperation): Promise<CopilotPublicSeed> {
-    const { providerById } = await import("./providers.ts");
+    const { providerById } = await import("./provider-catalog.ts");
     const compiled = providerById(provider), endpoint = compiled?.endpoints.find(row => row.id === value.route.endpointId);
     if (!compiled || this.active?.operation !== operation) throw unavailable();
     const catalog = value.route.mode === "catalog" || value.route.mode === "models";
@@ -167,7 +168,7 @@ export class CopilotCatalogFlow {
     const active = this.active;
     if (!active || active.publicIdentity !== seed.attestation || !["catalog", "models"].includes(seed.route.mode)) throw unavailable();
     active.operation = operation;
-    const { providerById } = await import("./providers.ts"), compiled = providerById(provider);
+    const { providerById } = await import("./provider-catalog.ts"), compiled = providerById(provider);
     if (!compiled || (await copilotPublicRegistry(compiled)).digest !== seed.registryDigest) throw unavailable();
     const acquired = await this.acquire(seed.selected, active);
     active.catalog = acquired.view;

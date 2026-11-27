@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { localAdminEnvironment } from "../scripts/grant-target.mjs";
+import { accessBytesResponse } from "../worker/test/access-byte-fixture.mjs";
 
 const { default: worker } = await import("../worker/index.ts");
 const { attachGrantCredentialNamespace } = await import("../worker/test/grant-credential-mock.mjs");
@@ -261,6 +262,7 @@ async function scriptFixture(context) {
       async get(key, type) {
         if (Array.isArray(key)) return new Map(await Promise.all(key.map(async (item) => [item, await this.get(item, type)])));
         const value = values.get(key) ?? null;
+        if (type === "stream") return value === null ? null : accessBytesResponse(typeof value === "string" ? value : JSON.stringify(value), "").body;
         return value === null ? null : type === "text" ? typeof value === "string" ? value : JSON.stringify(value) : typeof value === "string" ? JSON.parse(value) : structuredClone(value);
       },
       async put(key, value) { values.set(key, JSON.parse(value)); },
@@ -268,14 +270,16 @@ async function scriptFixture(context) {
     USAGE_QUEUE: { async send() {} },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname, body = JSON.parse(init.body);
-      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture", credential: { enabled: true, secretSha256: hash("proxy-secret-fixture"), policyId: "policy", policyGeneration: "generation" } }, policy: { policyId: "policy", policy: { enabled: true, generation: "generation", providers: ["anthropic"], tenantId: "default", requestCostMicros: 0, retainRequestContent: false } }, owner: null, connections: [{ providerId: "anthropic", enabled: true, monthlyBudgetMicros: null }], pools: { anthropic: await env.grantAuthority.call("resolve", { providerId: "anthropic", policyId: "policy", tenantId: "default", defaultKeys: ["oauth/policy/anthropic", "oauth/tenants/default/anthropic"] }) } });
+      const reply = value => new Headers(init.headers).has("x-clawrouter-identity-admission")
+        ? accessBytesResponse(JSON.stringify(value), "") : Response.json(value);
+      if (path === "/admission/resolve") return reply({ credential: { credentialId: "fixture", credential: { enabled: true, secretSha256: hash("proxy-secret-fixture"), policyId: "policy", policyGeneration: "generation" } }, policy: { policyId: "policy", policy: { enabled: true, generation: "generation", providers: ["anthropic"], tenantId: "default", requestCostMicros: 0, retainRequestContent: false } }, owner: null, connections: [{ providerId: "anthropic", enabled: true, monthlyBudgetMicros: null }], pools: { anthropic: await env.grantAuthority.call("resolve", { providerId: "anthropic", policyId: "policy", tenantId: "default", defaultKeys: ["oauth/policy/anthropic", "oauth/tenants/default/anthropic"] }) } });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential: { enabled: true, secretSha256: hash("proxy-secret-fixture"), policyId: "policy", policyGeneration: "generation" } }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "policy", policy: { enabled: true, generation: "generation", providers: ["anthropic"], tenantId: "default", requestCostMicros: 0, retainRequestContent: false } }], missingPolicyIds: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: "anthropic", enabled: true, monthlyBudgetMicros: null }], missingProviderIds: [] });
       if (path === "/grant-pools/states") return Response.json({ states: {} });
       if (path === "/grant-pools/stats") return Response.json({ stats: {} });
-      if (path === "/grant-pools/resolve") return Response.json(await env.grantAuthority.call("resolve", body));
-      if (path === "/grant-pools/select") return Response.json({ selectedKey: body.candidates[0].key });
+      if (path === "/grant-pools/resolve") return reply(await env.grantAuthority.call("resolve", body));
+      if (path === "/grant-pools/select") return reply({ selectedKey: body.candidates[0].key });
       if (path === "/grant-pools/feedback") return new Response("updated");
       throw new Error(`unexpected authority operation ${path}`);
     } }) },

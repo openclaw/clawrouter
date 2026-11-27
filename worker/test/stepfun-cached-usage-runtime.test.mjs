@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture } from "./managed-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { observeUsage } = await import("../proxy-response.ts");
 const usage = { prompt_tokens: 591, completion_tokens: 120, total_tokens: 711, cached_tokens: 512 };
 const frame = value => `data: ${JSON.stringify(value)}\n\n`;

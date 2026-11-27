@@ -54,7 +54,7 @@ test('grounded workers receive the original declaration without edit access', as
     }, undefined, {
       makeSandbox: async () => ({ close: async () => { closed = true; } }),
       read: async (_box, paths) => paths.map(path => ({ path, content: path === task.sourceContext[0].path ? 'function declaredFormats() {}' : 'export const value = 1;' })),
-      test: async () => ({ passed: true, feedback: '' }),
+      test: async () => ({ valid: true, passed: true, feedback: '' }),
     });
   assert.equal(closed, true);
 });

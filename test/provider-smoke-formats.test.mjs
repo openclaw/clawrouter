@@ -2,11 +2,12 @@ import { sqliteFixture } from "../worker/test/sqlite-storage.mjs";
 import "../worker/test/typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildProviderSmokePlan, runLiveProviderSmokes, summarizePlan } from "../scripts/provider-smoke-plan.mjs";
+import { buildProviderSmokePlan, summarizePlan } from "../scripts/provider-smoke-planning.mjs";
+import { runLiveProviderSmokes } from "../scripts/provider-smoke-plan.mjs";
 import catalog from "../worker/generated/provider-snapshot.json" with { type: "json" };
 
 const { default: handler } = await import("../worker/index.ts");
-const { snapshot } = await import("../worker/providers.ts");
+const { snapshot } = await import("../worker/provider-catalog.ts");
 const { sha256Hex } = await import("../worker/utils.ts");
 const { UsageLedgerObject } = await import("../worker/ledgers.ts");
 
@@ -23,16 +24,22 @@ function renamed(id) {
   return provider;
 }
 
+function universalOnly(provider) {
+  const endpoints = provider.endpoints.filter(endpoint => endpoint.request_format === "cloudflare_ai_gateway.universal");
+  assert.equal(endpoints.length, 1);
+  return { ...provider, endpoints, capabilities: provider.capabilities.filter(capability => capability.endpoint === endpoints[0].id) };
+}
+
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { alibaba: "task", anthropic: "count_tokens", "anthropic-vertex": "messages", "aws-bedrock": "invoke_model", "azure-speech": "speech", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", deepgram: "listen", exa: "search", elevenlabs: "speech", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", parallel: "search", pixverse: "video", replicate: "prediction", runway: "text_task", tavily: "search", voyage: "embeddings", vydra: "job" };
+  const native = { alibaba: "task", anthropic: "count_tokens", "anthropic-vertex": "messages", "aws-bedrock": "invoke_model", "azure-speech": "speech", brave: "search", "cloudflare-ai-gateway": "messages", cohere: "chat_completions", deepgram: "listen", exa: "search", elevenlabs: "speech", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", levanto: "decisions", "liquid-ai": "decisions", parallel: "search", pixverse: "video", radius: "config", replicate: "prediction", runway: "text_task", tavily: "search", typesafe: "decisions", voyage: "embeddings", vydra: "job" };
   assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
   assert.equal(plan.providerCount, catalog.providers.length);
   assert.equal(plan.targetCount, catalog.providers.length);
   for (const { id, target } of plan.providers) {
     assert.equal(target.kind, native[id] ? "manifest_proxy" : "openai_chat", id);
     assert.equal(target.endpoint ?? target.route, native[id] ?? "/v1/chat/completions", id);
-    assert.equal(!!target.unresolved, ["anthropic-vertex", "replicate", "gradium", "elevenlabs", "fal", "kie", "vydra", "alibaba", "pixverse", "runway", "azure-speech", "deepgram"].includes(id), id);
+    assert.equal(!!target.unresolved, ["anthropic-vertex", "replicate", "gradium", "elevenlabs", "fal", "kie", "vydra", "alibaba", "pixverse", "runway", "azure-speech", "deepgram", "levanto", "liquid-ai", "typesafe"].includes(id), id);
   }
   assert.match(summarizePlan(plan), /replicate.*unresolved=.*existing prediction ID/);
   assert.match(summarizePlan(plan), /gradium.*unresolved=.*no smoke request template for gradium.speech/);
@@ -362,16 +369,33 @@ test("unified smoke eligibility uses the selected endpoint's wire contract", () 
   assert.equal(buildProviderSmokePlan({ providers: [openai] }, {}).providers[0].target.kind, "manifest_proxy", "unified dispatch only fills model/deployment path parameters");
 });
 
-test("built-in AWS and Cloudflare overrides never cross into renamed manifests", () => {
+test("bundled Cloudflare Messages smoke does not inherit Universal overrides", () => {
+  const env = { CLOUDFLARE_AI_GATEWAY_SMOKE_MODEL: "owned-universal-model", CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: "fixture-private-inline-key" };
+  const { target } = buildProviderSmokePlan(catalog, env).providers.find(provider => provider.id === "cloudflare-ai-gateway");
+  assert.equal(target.kind, "manifest_proxy");
+  assert.equal(target.route, "/v1/proxy/cloudflare-ai-gateway/messages");
+  assert.equal(target.endpoint, "messages"); assert.equal(target.upstreamMethod, "POST");
+  assert.equal(target.envelope.body.model, "cloudflare-ai-gateway/claude-sonnet-4-6");
+  assert.equal(target.envelope.body.max_tokens, 16);
+  assert.deepEqual(target.envelope.body.messages, [{ role: "user", content: "reply with ok" }]);
+  assert.doesNotMatch(JSON.stringify(target), /owned-universal-model|fixture-private-inline-key|Authorization/);
+  assert.equal(catalog.providers.find(provider => provider.id === "cloudflare-ai-gateway").models[0].id, "cloudflare-ai-gateway/auto");
+});
+
+test("built-in AWS and Cloudflare Universal overrides never cross into renamed manifests", () => {
   const env = {
     CLAWROUTER_SMOKE_BODY_AWS_BEDROCK: JSON.stringify({ fixture: "owned AWS body" }),
     CLOUDFLARE_ACCOUNT_ID: "owned-account", CLOUDFLARE_AI_GATEWAY_ID: "owned-gateway",
     CLOUDFLARE_AI_GATEWAY_SMOKE_MODEL: "owned-model", CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: "fixture-private-inline-key",
   };
-  const builtin = buildProviderSmokePlan(catalog, env);
+  const builtin = buildProviderSmokePlan({ ...catalog, providers: catalog.providers.map(provider => provider.id === "cloudflare-ai-gateway" ? universalOnly(provider) : provider) }, env);
   assert.deepEqual(builtin.providers.find(provider => provider.id === "aws-bedrock").target.envelope.body, { fixture: "owned AWS body" });
   assert.equal(builtin.providers.find(provider => provider.id === "cloudflare-ai-gateway").target.envelope.body[0].headers.Authorization, "Bearer fixture-private-inline-key");
-  const plan = buildProviderSmokePlan({ providers: [renamed("aws-bedrock"), renamed("cloudflare-ai-gateway")] }, env);
+  const renamedGateway = universalOnly(renamed("cloudflare-ai-gateway"));
+  const plan = buildProviderSmokePlan({ providers: [renamed("aws-bedrock"), renamedGateway] }, env);
+  assert.equal(builtin.providers.find(provider => provider.id === "cloudflare-ai-gateway").target.endpoint, "universal");
+  assert.equal(plan.providers[1].target.endpoint, renamedGateway.endpoints[0].id);
+  assert.ok(Array.isArray(plan.providers[1].target.envelope.body));
   const wire = JSON.stringify(plan.providers.map(provider => provider.target));
   for (const value of ["owned AWS body", "owned-account", "owned-gateway", "owned-model", "fixture-private-inline-key"]) assert.ok(!wire.includes(value));
 });

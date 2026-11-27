@@ -26,6 +26,9 @@ adapter:
   stream: provider_sse
   error: cloudflare_error
 capabilities:
+  - id: llm.messages
+    endpoint: messages
+    methods: [POST]
   - id: llm.chat
     endpoint: universal
     methods: [POST]
@@ -33,6 +36,15 @@ capabilities:
     endpoint: universal
     methods: [POST]
 endpoints:
+  messages:
+    path: /anthropic/v1/messages
+    requestFormat: anthropic.messages
+    responseFormat: anthropic.messages
+    streaming: sse
+    headers:
+      anthropic-version: "2023-06-01"
+    requestHeaders: [anthropic-beta]
+    timeoutMs: 600000
   universal:
     path: /
     requestFormat: cloudflare_ai_gateway.universal
@@ -45,6 +57,22 @@ models:
       upstream: auto
       capabilities: [llm.chat, llm.responses]
       pricingRef: cloudflare-ai-gateway-auto
+    - id: cloudflare-ai-gateway/claude-sonnet-4-6
+      upstream: claude-sonnet-4-6
+      capabilities: [llm.messages]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          messages:
+            sources:
+              - https://developers.cloudflare.com/ai-gateway/usage/providers/anthropic/
+              - https://developers.cloudflare.com/ai/models/anthropic/claude-sonnet-4.6/
+              - https://platform.claude.com/docs/en/models/sonnet-4-6/overview
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 200000
+      # Gateway BYOK/Unified Billing and account settings determine actual costs.
+      # Do not inherit first-party Anthropic prices or certify unknown charges.
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

@@ -1,0 +1,640 @@
+{
+  "schema": "fusion-native-cost-pilot-v1",
+  "productionQualified": false,
+  "studies": [
+    {
+      "name": "Pino error serialization",
+      "repository": "pinojs/pino-std-serializers",
+      "oracle": "a8f47a7dbf5ea8cf517d44d65fc74104c917193d",
+      "base": "334a1080acf8ef05bb5bf22c287a1aea47cd0396",
+      "evidence": {
+        "protocolSha256": "740c01ac639ae9900491b7221ec906569b1e4fb5b974b16fdc61653a1bd14e0f",
+        "resultSha256": "db92bdd5facffbb4679a328e1b0eab9ad1ce51fd4723c60d35a2b987c40dd3bf",
+        "auditSha256": "5c0ac2bdc1d85b03ffd7bae65121b8905e4b726aee950cd447be052831b4f6de"
+      },
+      "summary": {
+        "cascade": {
+          "passed": 3,
+          "falseAccepts": 0,
+          "rescues": 0,
+          "costMicros": 1337,
+          "meanWorkflowMs": 4126.569972000001
+        },
+        "strong": {
+          "passed": 3,
+          "falseAccepts": 0,
+          "rescues": 0,
+          "costMicros": 12477,
+          "meanWorkflowMs": 5225.755930666669
+        },
+        "cheap": {
+          "passed": 3,
+          "falseAccepts": 0,
+          "rescues": 0,
+          "costMicros": 1360,
+          "meanWorkflowMs": 3559.348819333334
+        }
+      },
+      "rows": [
+        {
+          "caseIndex": 0,
+          "repeat": 0,
+          "strategy": "cascade",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3827.5895410000003,
+          "costMicros": 463,
+          "fullCount": 20,
+          "steps": [
+            {
+              "directory": "c0/r0/cascade/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 463,
+              "elapsedMs": 2340.400958,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 197
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 19
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 0,
+          "strategy": "strong",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 6409.506917,
+          "costMicros": 4254,
+          "fullCount": 20,
+          "steps": [
+            {
+              "directory": "c0/r0/strong/initial",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 4254,
+              "elapsedMs": 4851.270417,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 122
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 19
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 0,
+          "strategy": "cheap",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3598.295,
+          "costMicros": 461,
+          "fullCount": 20,
+          "steps": [
+            {
+              "directory": "c0/r0/cheap/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 461,
+              "elapsedMs": 2192.825167000001,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 193
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 19
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 1,
+          "strategy": "strong",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 5147.113791000002,
+          "costMicros": 4199,
+          "fullCount": 20,
+          "steps": [
+            {
+              "directory": "c0/r1/strong/initial",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 4199,
+              "elapsedMs": 3638.842708000002,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 111
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 19
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 1,
+          "strategy": "cheap",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3331.542792,
+          "costMicros": 440,
+          "fullCount": 20,
+          "steps": [
+            {
+              "directory": "c0/r1/cheap/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 440,
+              "elapsedMs": 1931.1063749999994,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 150
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 19
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 1,
+          "strategy": "cascade",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3332.709417000002,
+          "costMicros": 449,
+          "fullCount": 20,
+          "steps": [
+            {
+              "directory": "c0/r1/cascade/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 449,
+              "elapsedMs": 1770.4187500000007,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 168
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 19
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 2,
+          "strategy": "cheap",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3748.2086660000023,
+          "costMicros": 459,
+          "fullCount": 20,
+          "steps": [
+            {
+              "directory": "c0/r2/cheap/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 459,
+              "elapsedMs": 2262.978415999998,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 189
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 19
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 2,
+          "strategy": "cascade",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 5219.410958,
+          "costMicros": 425,
+          "fullCount": 20,
+          "steps": [
+            {
+              "directory": "c0/r2/cascade/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 425,
+              "elapsedMs": 3757.374917000001,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 120
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 19
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 2,
+          "strategy": "strong",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 4120.647084000004,
+          "costMicros": 4024,
+          "fullCount": 20,
+          "steps": [
+            {
+              "directory": "c0/r2/strong/initial",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 4024,
+              "elapsedMs": 2588.5136249999996,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 76
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 19
+            }
+          ]
+        }
+      ],
+      "fullCount": 20,
+      "publicCount": 19,
+      "estimatedCostMicros": 15174
+    },
+    {
+      "name": "Warning emission state and spy API",
+      "repository": "fastify/process-warning",
+      "oracle": "11c73b622aa29fc427d85476edb29d64687bcd87",
+      "base": "f5230e58ceb8eec7a1e8d56511fe421903a232dc",
+      "evidence": {
+        "protocolSha256": "dd567ac2a04e0e4ed961824ed76f4ffd03bc1898cc283a687764dbf68a5053e4",
+        "resultSha256": "94faf04d471c4e5010f47593bcc9b254406fa31d582bd330f106f3dfcf35ac21",
+        "auditSha256": "fd504e5184bb75d72584bf4f905fa89a4be884586092994dce61c97866beccb6"
+      },
+      "summary": {
+        "cascade": {
+          "passed": 3,
+          "falseAccepts": 0,
+          "rescues": 2,
+          "costMicros": 16520,
+          "meanWorkflowMs": 16615.33416633333
+        },
+        "strong": {
+          "passed": 3,
+          "falseAccepts": 0,
+          "rescues": 0,
+          "costMicros": 22427,
+          "meanWorkflowMs": 13020.908556
+        },
+        "cheap": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "rescues": 0,
+          "costMicros": 2408,
+          "meanWorkflowMs": 9176.299889000004
+        }
+      },
+      "rows": [
+        {
+          "caseIndex": 0,
+          "repeat": 0,
+          "strategy": "cascade",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 19652.18775,
+          "costMicros": 7551,
+          "fullCount": 6,
+          "steps": [
+            {
+              "directory": "c0/r0/cascade/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 812,
+              "elapsedMs": 7408.654875,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 926
+              },
+              "disposition": "complete",
+              "publicPassed": false,
+              "validArtifact": true,
+              "publicCount": 5
+            },
+            {
+              "directory": "c0/r0/cascade/fallback",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 6739,
+              "elapsedMs": 8583.756582999998,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 650
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 5
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 0,
+          "strategy": "strong",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 15060.725333999999,
+          "costMicros": 8029,
+          "fullCount": 6,
+          "steps": [
+            {
+              "directory": "c0/r0/strong/initial",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 8029,
+              "elapsedMs": 12335.814584,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 908
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 5
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 0,
+          "strategy": "cheap",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 10359.960417000002,
+          "costMicros": 858,
+          "fullCount": 6,
+          "steps": [
+            {
+              "directory": "c0/r0/cheap/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 858,
+              "elapsedMs": 8441.799875000004,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 1017
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 5
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 1,
+          "strategy": "strong",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 10901.883125,
+          "costMicros": 7009,
+          "fullCount": 6,
+          "steps": [
+            {
+              "directory": "c0/r1/strong/initial",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 7009,
+              "elapsedMs": 9440.096542,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 704
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 5
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 1,
+          "strategy": "cheap",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 9173.362250000006,
+          "costMicros": 814,
+          "fullCount": 6,
+          "steps": [
+            {
+              "directory": "c0/r1/cheap/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 814,
+              "elapsedMs": 7253.885625000003,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 929
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 5
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 1,
+          "strategy": "cascade",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 20589.72979099999,
+          "costMicros": 8145,
+          "fullCount": 6,
+          "steps": [
+            {
+              "directory": "c0/r1/cascade/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 756,
+              "elapsedMs": 5884.168040999997,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 814
+              },
+              "disposition": "complete",
+              "publicPassed": false,
+              "validArtifact": true,
+              "publicCount": 5
+            },
+            {
+              "directory": "c0/r1/cascade/fallback",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 7389,
+              "elapsedMs": 11655.29508299999,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 780
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 5
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 2,
+          "strategy": "cheap",
+          "publicPassed": false,
+          "fullPassed": false,
+          "workflowMs": 7995.577000000005,
+          "costMicros": 736,
+          "fullCount": null,
+          "steps": [
+            {
+              "directory": "c0/r2/cheap/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 736,
+              "elapsedMs": 6273.7614170000015,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 774
+              },
+              "disposition": "complete",
+              "publicPassed": false,
+              "validArtifact": true,
+              "publicCount": 5
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 2,
+          "strategy": "cascade",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 9604.084958000007,
+          "costMicros": 824,
+          "fullCount": 6,
+          "steps": [
+            {
+              "directory": "c0/r2/cascade/initial",
+              "model": "openai/gpt-6-luna",
+              "costMicros": 824,
+              "elapsedMs": 7952.86304099999,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 950
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 5
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 2,
+          "strategy": "strong",
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 13100.117209000004,
+          "costMicros": 7389,
+          "fullCount": 6,
+          "steps": [
+            {
+              "directory": "c0/r2/strong/initial",
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 7389,
+              "elapsedMs": 11514.895583999998,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 780
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "validArtifact": true,
+              "publicCount": 5
+            }
+          ]
+        }
+      ],
+      "fullCount": 6,
+      "publicCount": 5,
+      "estimatedCostMicros": 41355
+    }
+  ]
+}

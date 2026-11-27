@@ -1,9 +1,9 @@
 import { isMiniMaxVideoModel, readMiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import { miniMaxApiKeySecret } from "./native-media-credential.ts";
-import type { GrantRequirement } from "./provider-auth.ts";
+import type { GrantRequirement } from "./grant-compatibility.ts";
 import type { UpstreamGrant } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function miniMaxVideoDenied(): never {
   throw new HttpError(403, "minimax_video_authorization_required", "MiniMax video requires original regional video authority");

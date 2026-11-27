@@ -4,6 +4,7 @@ import test from 'node:test';
 const { parseSoftStatus, admitSoftStatusRequest } = await import('../soft-budget-json.ts');
 const { readSoftStatus } = await import('../soft-budget-response.ts');
 const { softBudget, softBudgetPreflight } = await import('../soft-budget.ts');
+const { isAccountingAdmissionFailure } = await import('../json-body.ts');
 
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const turn = () => new Promise(resolve => setImmediate(resolve));
@@ -65,8 +66,9 @@ test('request bounds precede encoding and idFromName, including multibyte and lo
   assert.throws(() => admitSoftStatusRequest('o', policy, window + 'a', '', '1'));
   let io = 0;
   const env = { BUDGET_LEDGER: { idFromName() { io++; throw Error('must not allocate a DO identity'); } } };
-  const b = softBudget(env, { policyId: 'p'.repeat(1025), policy: { monthlyBudgetMicros: 1 } }, 'llm.chat', { providerId: 'openai' }, 'bounded');
-  await b.check; assert.equal(io, 0);
+  assert.throws(() => softBudget(env, { policyId: 'p'.repeat(1025), policy: { monthlyBudgetMicros: 1 } }, 'llm.chat', { providerId: 'openai' }, 'bounded'),
+    error => isAccountingAdmissionFailure(error) && error.status === 503 && error.code === 'accounting_preflight_unavailable');
+  assert.equal(io, 0);
 });
 
 test('status response preserves ok/partial/media/empty URL and clean non-success semantics', async () => {

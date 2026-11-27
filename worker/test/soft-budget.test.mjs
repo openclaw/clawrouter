@@ -13,15 +13,8 @@ const { normalizePolicy } = await import('../admin.ts');
 
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 async function setup(t, options = {}) {
-  const env = usageEnv([], { provider: 'local-openai', retainContent: false, ...options });
+  const env = usageEnv([], { provider: 'local-openai', retainContent: false, ...options, budgetMode: 'soft' });
   env.LOCAL_OPENAI_BASE_URL = 'https://upstream.example.invalid';
-  const authority = env.ACCESS_CONTROL.get();
-  env.ACCESS_CONTROL.get = () => ({ fetch: async (...args) => {
-    const response = await authority.fetch(...args);
-    const value = await response.json();
-    if (value.policy) value.policy.policy.budgetMode = 'soft';
-    return Response.json(value);
-  } });
   const ledger = sqlBudgetNamespace(t), calls = [], events = [], pending = [];
   env.BUDGET_LEDGER = { ...ledger, get: name => ({ fetch: (url, init) => { calls.push(new URL(url).pathname); return ledger.get(name).fetch(url, init); } }) };
   env.USAGE_QUEUE = { send: async event => events.push(event) };
@@ -156,7 +149,7 @@ test('admin-only overrides are audited, survive profile writes, preserve other p
 
 test('soft partial pricing charges known tokens and keeps unpriced basis', async () => {
   const { accountingReceipt } = await import('../proxy-accounting.ts');
-  const { snapshot } = await import('../providers.ts');
+  const { snapshot } = await import('../provider-catalog.ts');
   const model = snapshot.providers.find(p => p.id === 'openai').models.find(m => m.id === 'openai/gpt-6.1-sol');
   const event = accountingReceipt({ model, fixed: null, cost: { reserveMicros: 0, basis: 'unpriced_request', pricingGap: 'hosted_tool_fee' }, requestFormat: 'openai.responses', event: {}, startedAtMs: 0 }, { occurredAtMs: 1, statusCode: 200, status: 'success', billable: true, tokens: { input: 100, output: 20, total: 120, cached: 0, cacheWrite: 0, serviceTier: 'default' }, reservation: { reservations: [], reservedMicros: 0, charges: [] }, contentRef: null });
   assert.ok(event.actual_cost_micros > 0); assert.equal(event.cost_basis, 'unpriced_usage');

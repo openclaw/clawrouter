@@ -1,6 +1,7 @@
-import { type FormEvent, useEffect, useRef } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { ArrowUp, Bot, Bug, MessageSquare, Plus, ServerCog, SlidersHorizontal } from "lucide-react";
 import {
+  errorMessage,
   playgroundAccessEndpoint,
   playgroundBlocker,
   playgroundServicePreset,
@@ -12,13 +13,15 @@ import {
 import { InlineError, InlineNote, PanelTitle } from "../components";
 import {
   type CatalogModel,
-  playgroundRequestPreview,
+  playgroundCurl,
   providerName,
   serviceModelFromForm,
   serviceModelOptions,
   shortModelName,
 } from "../ui-helpers";
 import type { PlaygroundForm, PlaygroundTurn, ProviderAccess, ProviderReadiness, RouteCatalog } from "../ui-types";
+import type { PlaygroundDraftError } from "../hooks/use-playground";
+import { playgroundDraftPayload } from "../playground-draft";
 
 export function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, selectedServiceRoute, accessByProvider, readinessByProvider, requestMode, setRequestMode, turns, selectedTurnId, setSelectedTurnId, error, onRun, onNewConversation, busy }: {
   form: PlaygroundForm;
@@ -34,24 +37,34 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
   turns: PlaygroundTurn[];
   selectedTurnId: string;
   setSelectedTurnId: (id: string) => void;
-  error: string;
+  error: PlaygroundDraftError | null;
   onRun: (event: FormEvent) => void;
   onNewConversation: () => void;
   busy: boolean;
 }) {
   const transcript = useRef<HTMLDivElement>(null);
+  const formElement = useRef<HTMLFormElement>(null);
   const blocker = playgroundBlocker(form, selected, selectedServiceRoute, accessByProvider, readinessByProvider);
   const selectedProvider = form.mode === "model" ? selected?.provider : selectedServiceRoute?.provider;
   const selectedAccess = selectedProvider ? accessByProvider.get(selectedProvider) : undefined;
   const selectedReadiness = selectedProvider ? readinessByProvider[selectedProvider] : undefined;
   const methods = selectedServiceRoute?.methods.length ? selectedServiceRoute.methods : ["POST"];
   const selectedTurn = turns.find((turn) => turn.id === selectedTurnId);
-  const currentRequest = playgroundRequestPreview(form, requestMode, selectedServiceRoute);
 
   useEffect(() => {
     const element = transcript.current;
     element?.scrollTo({ top: element.scrollHeight, behavior: turns.length > 1 ? "smooth" : "auto" });
   }, [busy, turns.length]);
+
+  useEffect(() => {
+    const field = error && formElement.current?.elements.namedItem(error.field);
+    if (field instanceof HTMLElement) field.focus();
+  }, [error]);
+
+  function fieldProps(name: PlaygroundDraftError["field"]) {
+    return { name, "aria-invalid": error?.field === name || undefined, "aria-describedby": error?.field === name ? "playground-draft-error" : undefined };
+  }
+  const fieldError = error && <div id="playground-draft-error"><InlineError message={error.message} /></div>;
 
   const providerIds = Array.from(new Set([
     ...models.map((model) => model.provider),
@@ -67,6 +80,10 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
     ? `model:${form.model}`
     : serviceModelTargets.find((target) => routeKey(target.route) === form.serviceRoute && target.model === selectedServiceModel)?.value
       ?? `service:${form.serviceRoute}`;
+  // A raw service preset can be active even when the picker lists models.
+  // Give the native select its actual value instead of showing the first model.
+  const activeRawRoute = !routeTargets.length && selectedServiceRoute && targetValue === `service:${routeKey(selectedServiceRoute)}`
+    ? selectedServiceRoute : undefined;
 
   function selectProvider(provider: string) {
     const model = models.find((item) => item.provider === provider);
@@ -75,6 +92,16 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
       return;
     }
     const routes = serviceRoutes.filter((item) => item.provider === provider);
+    // Model mode keeps the service fields in the same session-owned form. Resume
+    // edits only for their exact live route; an untouched seed isn't a user choice.
+    const savedRoute = routes.find((route) => routeKey(route) === form.serviceRoute);
+    if (form.mode === "model" && savedRoute) {
+      const seed = playgroundServicePreset(savedRoute);
+      if (form.servicePayload !== seed.servicePayload || form.serviceMethod !== seed.serviceMethod || form.servicePath !== seed.servicePath) {
+        setForm({ ...form, mode: "service" });
+        return;
+      }
+    }
     const target = serviceModelOptions(routes)[0];
     setForm({ ...form, mode: "service", ...playgroundServicePreset(target?.route ?? routes[0], target?.model) });
   }
@@ -94,7 +121,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
     setForm({ ...form, mode: "service", ...playgroundServicePreset(route) });
   }
   return (
-    <form className="playgroundLayout chatPlayground" onSubmit={onRun}>
+    <form ref={formElement} className="playgroundLayout chatPlayground" onSubmit={onRun}>
       <section className="chatWorkspace">
         <header className="chatHeader">
           <div>
@@ -107,14 +134,24 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
         <div className="chatTranscript" ref={transcript} aria-live="polite">
           {!turns.length ? (
             <div className="chatEmpty">
-              <span><Bot aria-hidden="true" /></span>
-              <h2>Test the route as a conversation.</h2>
-              <p>Choose any granted model or service, send a message, then click a response to inspect the exact gateway exchange.</p>
-              <div className="promptSuggestions">
-                {["Explain this service in two sentences.", "Return a concise JSON example.", "What can you help me test?"].map((prompt) => (
-                  <button key={prompt} type="button" onClick={() => setForm({ ...form, mode: "model", prompt })}>{prompt}</button>
-                ))}
-              </div>
+              {form.mode === "service" ? (
+                <>
+                  <span><ServerCog aria-hidden="true" /></span>
+                  <h2>Test the selected service route.</h2>
+                  <p>Edit the JSON request body below. After you send it, select the response to inspect the exchange.</p>
+                </>
+              ) : (
+                <>
+                  <span><Bot aria-hidden="true" /></span>
+                  <h2>Test the route as a conversation.</h2>
+                  <p>Choose any granted model or service, send a message, then click a response to inspect the exact gateway exchange.</p>
+                  <div className="promptSuggestions">
+                    {["Explain this service in two sentences.", "Return a concise JSON example.", "What can you help me test?"].map((prompt) => (
+                      <button key={prompt} type="button" onClick={() => setForm({ ...form, prompt })}>{prompt}</button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           ) : turns.map((turn) => (
             <article key={turn.id} className={`chatExchange ${selectedTurnId === turn.id ? "selected" : ""}`}>
@@ -136,10 +173,11 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
         </div>
 
         <div className="composerDock">
-          {error && !turns.length ? <InlineError message={error} /> : null}
+          {error?.field === "composer" ? fieldError : null}
           {blocker ? <InlineNote>{blocker}</InlineNote> : null}
           <div className="composerShell">
             <textarea
+              {...fieldProps("composer")}
               aria-label={form.mode === "model" ? "Message" : "JSON request body"}
               value={form.mode === "model" ? form.prompt : form.servicePayload}
               onChange={(event) => setForm(form.mode === "model" ? { ...form, prompt: event.target.value } : { ...form, servicePayload: event.target.value })}
@@ -158,12 +196,14 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
                 {providerIds.map((provider) => <option key={provider} value={provider}>{providerName(provider, readinessByProvider)}</option>)}
               </select>
               <select className="modelPicker" aria-label="Model or route" value={targetValue} onChange={(event) => selectTarget(event.target.value)}>
+                {form.mode === "model" && !selected ? <option value={targetValue} disabled>Select a model or route</option> : null}
+                {activeRawRoute ? <option value={targetValue}>{activeRawRoute.endpoint.replaceAll("_", " ")} (route)</option> : null}
                 {providerModels.map((model) => <option key={model.id} value={`model:${model.id}`}>{shortModelName(model.id, activeProvider)}</option>)}
                 {serviceModelTargets.map((target) => <option key={target.value} value={target.value}>{shortModelName(target.model, activeProvider)}</option>)}
                 {routeTargets.map((route) => <option key={routeKey(route)} value={`service:${routeKey(route)}`}>{route.endpoint.replaceAll("_", " ")}</option>)}
               </select>
               <span className="composerStatus"><span className={`connectionDot ${selectedReadiness?.executable ? "ready" : ""}`} />{readinessLabel(selectedReadiness)}</span>
-              <button type="button" className="composerInspect" onClick={() => setSelectedTurnId(selectedTurnId === "setup" ? "" : "setup")}><SlidersHorizontal aria-hidden="true" /><span>Controls</span></button>
+              <button type="button" className="composerInspect" aria-label="Conversation controls" onClick={() => setSelectedTurnId(selectedTurnId === "setup" ? "" : "setup")}><SlidersHorizontal aria-hidden="true" /><span>Controls</span></button>
               <button type="submit" className="composerSend" disabled={busy || Boolean(blocker)} title={blocker ?? "Send message"}><ArrowUp aria-hidden="true" /><span className="srOnly">Send</span></button>
             </div>
           </div>
@@ -188,7 +228,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
               <button type="button" className={requestMode === "json" ? "active" : ""} onClick={() => setRequestMode("json")}>Request</button>
               <button type="button" className={requestMode === "curl" ? "active" : ""} onClick={() => setRequestMode("curl")}>Response</button>
             </div>
-            <pre className="debugPayload">{requestMode === "json" ? selectedTurn.request : selectedTurn.rawResponse}</pre>
+            <pre className="debugPayload" onPointerDown={() => setSelectedTurnId(selectedTurn.id)} onCopy={() => setSelectedTurnId(selectedTurn.id)}>{requestMode === "json" ? selectedTurn.request : selectedTurn.rawResponse}</pre>
           </>
         ) : (
           <>
@@ -199,9 +239,10 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
                   <label><span>Endpoint</span><select value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value as PlaygroundForm["endpoint"] })}>{selected?.capabilities.includes("llm.chat") ? <option value="/v1/chat/completions">chat completions</option> : null}{selected?.capabilities.includes("llm.responses") ? <option value="/v1/responses">responses</option> : null}</select></label>
                   <label><span>System instructions</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
                   <div className="playgroundSettingPair">
-                    <label><span>Max tokens</span><input inputMode="numeric" value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>
-                    <label><span>Temperature</span><input inputMode="decimal" value={playgroundSupportsTemperature(form.model) ? form.temperature : ""} disabled={!playgroundSupportsTemperature(form.model)} placeholder={playgroundSupportsTemperature(form.model) ? undefined : "not supported"} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
+                    <label><span>Max tokens</span><input {...fieldProps("maxTokens")} inputMode="numeric" value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>
+                    <label><span>Temperature</span><input {...fieldProps("temperature")} inputMode="decimal" value={playgroundSupportsTemperature(form.model) ? form.temperature : ""} disabled={!playgroundSupportsTemperature(form.model)} placeholder={playgroundSupportsTemperature(form.model) ? undefined : "not supported"} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
                   </div>
+                  {error && error.field !== "composer" ? fieldError : null}
                 </>
               ) : (
                 <>
@@ -216,13 +257,43 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
               <dt>access</dt><dd>{selectedAccess ? (selectedAccess.allowed ? selectedAccess.policies.join(", ") || "session" : "not granted") : "unknown"}</dd>
               <dt>endpoint</dt><dd>{playgroundAccessEndpoint(form, selectedServiceRoute)}</dd>
             </dl>
-            <details className="requestDrawer">
-              <summary><span><ServerCog className="buttonIcon" aria-hidden="true" /> Preview request</span></summary>
-              <pre>{currentRequest}</pre>
-            </details>
+            <DraftRequestDrawer form={form} mode={requestMode} route={selectedServiceRoute} turns={turns} onInspect={() => setSelectedTurnId("setup")} />
           </>
         )}
       </aside>
     </form>
+  );
+}
+
+function DraftRequestDrawer({ form, mode, route, turns, onInspect }: {
+  form: PlaygroundForm;
+  mode: "json" | "curl";
+  route?: RouteCatalog["manifestProxy"][number];
+  turns: PlaygroundTurn[];
+  onInspect: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  // Don't serialize the full transcript on each keystroke in a closed drawer.
+  function preview() {
+    try {
+      const payload = playgroundDraftPayload(form, route, turns);
+      return mode === "json" ? JSON.stringify(payload, null, 2) : playgroundCurl(form, payload, route);
+    } catch (error) {
+      return errorMessage(error);
+    }
+  }
+  return (
+    <details className="requestDrawer" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary onClick={onInspect}><span><ServerCog className="buttonIcon" aria-hidden="true" /> Preview request</span></summary>
+      {/* Native details reveals the tab stop immediately. Focus can arrive before
+          toggle, so a keyboard user also gets the payload on their next keystroke. */}
+      <pre role="region" aria-label="Draft request payload" tabIndex={0} onFocus={() => setOpen(true)} onKeyDown={event => {
+        if (event.key.toLowerCase() !== "a" || event.ctrlKey === event.metaKey || event.altKey || event.shiftKey || event.nativeEvent.isComposing) return;
+        const selection = event.currentTarget.ownerDocument.getSelection();
+        if (!selection) return;
+        event.preventDefault();
+        selection.selectAllChildren(event.currentTarget);
+      }}>{open ? preview() : null}</pre>
+    </details>
   );
 }

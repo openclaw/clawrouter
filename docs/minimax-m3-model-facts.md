@@ -80,3 +80,56 @@ Chat option. It does not prove default Anthropic, OAuth/portal, CN, dynamic
 discovery, ClawRouter manifest-client selection, video, account entitlement or
 physical pre-header cancellation. Final composed client execution and native
 gates remain required before landing.
+
+
+## Flash on the explicit Chat route
+
+The frozen 2026-11-03 Flash card appends `MiniMax-M3.1-Flash` after the
+existing M2.7, M3 and M2.7-highspeed rows. It uses the same Bearer-authenticated
+Chat endpoint. Input, cached-input and output prices are respectively $0.15,
+$0.015 and $0.60 per million tokens. Its declared text/image/video inputs and
+million-token context do not establish native SDK video support: the pinned
+SDK accepts text and image only. Temperature, top-p and M3 service-tier facts
+are not inherited.
+
+The pinned OpenClaw MiniMax provider defaults to Anthropic/M3. Its Flash
+adaptive-thinking rewrite runs only for Anthropic. The explicit Chat fixture
+keeps the registered provider, public stream entrypoint and captured replay
+provider, and configures Flash's supported Chat effort domain using the SDK's
+existing model compatibility setting:
+
+```json
+{
+  "id": "MiniMax-M3.1-Flash",
+  "compat": {
+    "supportsReasoningEffort": true,
+    "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"]
+  }
+}
+```
+
+Without that explicit Chat domain, the pinned generic Chat client clamps
+`xhigh` and `max` to `high`. The fixture retains separate cases for
+that limitation; it does not claim the unmodified Anthropic catalog is a
+complete Chat configuration. An omitted effort stays absent on the wire,
+leaving the documented provider default of max to the upstream. A synthetic
+upstream can prove omission, not actual vendor execution of that default.
+
+Flash settlement checks use its own tariff and cached-token counters, separate
+from M3's seven-micro fixed-policy cases and unpriced hard-budget denials.
+Incomplete paid errors and cancellation retain their reservation without
+inventing terminal token usage. A full-context media reservation with 16 output
+tokens costs 150,010 micro; missing output limits reserve one million output
+tokens and cost 750,000 micro. These are conservative accounting ceilings,
+not advertised output capabilities.
+
+Both model groups use actual original SDK acquisition/reader/release observation
+and independent Worker/source retirement. The source producer remains owned by
+its request context; bounded yielding pulls do not count as producer completion.
+A canceled Worker read may retain its rejection only when the exact original
+operation first committed caller cancellation, all independent work joined,
+source cancellation returned without expiry, and accounting is client_error.
+Controlled provider errors use their own actual SDK callback/result witness.
+No physical pre-header cancellation, default Anthropic, OAuth, video or live
+vendor/account entitlement claim follows from these fixtures. Fresh hosted
+qualification of the composed head is required.

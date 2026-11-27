@@ -1,0 +1,32 @@
+{
+  "at": "2026-11-18T07:12:22.396Z",
+  "passed": true,
+  "threadId": "01a1ed7e-5bb9-7550-a356-634c01f33ce3",
+  "turns": 5,
+  "requests": 5,
+  "replays": 0,
+  "accountingEvents": 5,
+  "contextPreserved": true,
+  "manualIntervention": "none",
+  "directions": [
+    {
+      "direction": "forward",
+      "activeTurnCompletedAfterClose": true,
+      "closeToHeldTurnCompletionMs": 559,
+      "closeToContextFollowupCompletionMs": 23931,
+      "followupLatencyMs": 1512
+    },
+    {
+      "direction": "recovery",
+      "activeTurnCompletedAfterClose": true,
+      "closeToHeldTurnCompletionMs": 552,
+      "closeToContextFollowupCompletionMs": 22420,
+      "followupLatencyMs": 1512
+    }
+  ],
+  "limits": [
+    "Synthetic upstream with actual official Codex and persisted same conversation",
+    "Local exported controller and fresh-process recovery; no new GitHub Actions qualification",
+    "No production or real-provider requests"
+  ]
+}

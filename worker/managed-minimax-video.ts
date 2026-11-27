@@ -1,7 +1,7 @@
 import { isMiniMaxVideoModel, miniMaxVideoRequiresInline } from "../shared/minimax-video-binding.ts";
 import { miniMaxInlineScalars } from "./minimax-video-inline.ts";
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./media-wire.ts";
 import { miniMaxVideoFileAdapter } from "./managed-minimax-video-files.ts";
 import { isMiniMaxVideoOrigin, prepareMiniMaxVideo, prepareMiniMaxInlineVideoScalars, prepareMiniMaxVideoControl, readMiniMaxVideo,
   validateMiniMaxMediaId } from "./minimax-video.ts";

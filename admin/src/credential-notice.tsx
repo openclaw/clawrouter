@@ -1,28 +1,43 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { InlineError, InlineNote } from "./components";
+import { ConsoleRetryButton } from "./console-retry-button";
 import type { CredentialOperations } from "./hooks/use-credential-operations";
 
 export type CredentialFeedback = ReturnType<CredentialOperations["forSurface"]>;
 
 export function CredentialNotice({ state }: { state: CredentialFeedback }) {
   return <>
-    {state.error ? <><InlineError message={state.error} /><button type="button" className="buttonSecondary" onClick={() => void state.refresh()}>Refresh keys</button></> : null}
+    {state.error ? <><InlineError message={state.error} /><ConsoleRetryButton label="Refresh keys" pendingLabel="Refreshing keys…" /></> : null}
     {state.notice ? <InlineNote>{state.notice}</InlineNote> : null}
-    {state.busy ? <InlineNote>A credential change is still finishing. Key actions are temporarily unavailable.</InlineNote> : null}
-    {state.reveal ? <IssuedCredential key={state.reveal.key} reveal={state.reveal} onDismiss={state.dismiss} /> : state.pendingReveal ? <button type="button" className="buttonSecondary" onClick={state.dismiss}>Dismiss pending secret</button> : null}
+    {state.busy ? <div className="inlineNote" role="status">{state.pendingReveal === "dismissed"
+      ? "The one-time secret won’t be shown. Key actions are unavailable until this change finishes."
+      : "A credential change is still finishing. Key actions are temporarily unavailable."}</div> : null}
+    {state.reveal ? <IssuedCredential key={state.reveal.key} reveal={state.reveal} onDismiss={state.dismiss} /> : state.pendingReveal === "available" ? <button type="button" className="buttonSecondary" onClick={state.dismiss}>Dismiss pending secret</button> : null}
   </>;
 }
 
 function IssuedCredential({ reveal, onDismiss }: { reveal: NonNullable<CredentialFeedback["reveal"]>; onDismiss: () => void }) {
-  const [copyStatus, setCopyStatus] = useState("");
-  async function copy() {
+  const statusId = useId();
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "manual" | "focus-manual">("idle");
+  async function copy(button: HTMLButtonElement) {
     try {
       if (!navigator.clipboard) throw new Error("clipboard unavailable");
       await navigator.clipboard.writeText(reveal.key);
-      setCopyStatus("Copied");
+      setCopyState("copied");
     } catch {
-      setCopyStatus("Copy failed. Select and copy the key manually before dismissing it.");
+      // A delayed permission prompt must not take focus back from another control.
+      setCopyState(document.activeElement === button ? "focus-manual" : "manual");
     }
   }
-  return <div className="issuedKey"><div><span>copy now · shown once · stored nowhere else</span><span>{reveal.credentialId} · {reveal.policyId}</span><code>{reveal.key}</code>{copyStatus ? <span role="status">{copyStatus}</span> : null}</div><div><button type="button" className="buttonSecondary" onClick={() => void copy()}>Copy</button><button type="button" className="buttonSecondary" onClick={onDismiss}>Dismiss</button></div></div>;
+  const manual = copyState === "manual" || copyState === "focus-manual";
+  return <div className="issuedKey"><div>
+    <span>copy now · shown once · stored nowhere else</span><span>{reveal.credentialId} · {reveal.policyId}</span>
+    {manual
+      ? <input aria-label="One-time key" aria-describedby={statusId} readOnly autoFocus={copyState === "focus-manual"} value={reveal.key} onFocus={(event) => event.currentTarget.select()} />
+      : <code>{reveal.key}</code>}
+    {copyState !== "idle" ? <span id={statusId} role="status">{manual ? "Automatic copy unavailable. Use your device’s Copy command before dismissing the key." : "Copied"}</span> : null}
+  </div><div>
+    {!manual ? <button type="button" className="buttonSecondary" onClick={(event) => void copy(event.currentTarget)}>Copy</button> : null}
+    <button type="button" className="buttonSecondary" onClick={onDismiss}>Dismiss</button>
+  </div></div>;
 }

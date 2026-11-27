@@ -89,19 +89,6 @@ export function isCopilotCatalogModelVisible(value: unknown): boolean {
   return model?.model_picker_enabled === true && policy !== "disabled" && policy !== "unconfigured";
 }
 
-export function filterCopilotModels(value: unknown, allowed: (model: string) => boolean): JsonRecord & { data: JsonRecord[] } {
-  const body = record(value);
-  requireCopilot(body && Array.isArray(body.data), "models");
-  const seen = new Set<string>();
-  const data = body.data.filter(value => {
-    const model = record(value);
-    requireCopilot(model && typeof model.id === "string" && model.id.length && !seen.has(model.id), "model");
-    seen.add(model.id);
-    return isCopilotCatalogModelVisible(model) && copilotModelFormats(model).length > 0 && allowed(model.id);
-  });
-  return { ...body, data };
-}
-
 export function copilotCatalogRequest(identity: CopilotIdentity, selectedOwnerBinding: string, githubToken: string, runtimeIdentity: CopilotRuntimeIdentity): Request {
   const headers = buildCopilotRuntimeHeaders(identity, selectedOwnerBinding, runtimeIdentity);
   const base = qualifyApiBase(identity.apiBaseUrl, copilotGithubDomain(identity.githubDomain));

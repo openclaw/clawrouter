@@ -5,7 +5,16 @@
   --chart-primary: var(--accent);
   min-width: 0;
 }
-.personalUsageCanvas { display: grid; gap: 14px; }
+.personalUsageCanvas, .personalKeyOverview { display: grid; gap: 14px; }
+.personalKeyOverview .personalRanksPanel { border: 0; background: none; box-shadow: none; }
+.personalKeyOverview .personalRanksPanel :is(.personalChartHeader, .personalRankList, .personalRankFooter, .personalRankEmpty) { padding-inline: 0; }
+.personalKeyOverview .personalOverviewToolbar { justify-content: flex-start; padding: 0; }
+/* The stacked comparison still has room for the metric switch beside the ranking on tablets. */
+@media (min-width: 721px) {
+  .personalKeyComparison { display: flex; flex-wrap: wrap; align-items: start; column-gap: 16px; }
+  .personalKeyComparison .personalRanksPanel { flex: 1 1 20rem; }
+  .personalKeyComparison .personalChartHeader { padding-top: 0; }
+}
 .personalUsageCanvas > [role="tabpanel"] { min-width: 0; }
 .personalUsageCanvas > [role="tabpanel"][hidden] { display: none; }
 .personalUsageSummary, .personalControls, .personalSection { padding: 18px 20px; min-width: 0; }
@@ -22,6 +31,8 @@
 .personalGlance > div:first-child { padding-left: 0; border-left: 0; }
 .personalGlance dt { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 8px; color: var(--muted); font-size: 12px; min-height: 25px; }
 .personalGlance dd { font-family: var(--font-mono); font-size: clamp(20px, 2vw, 29px); line-height: 1.35; margin: 6px 0; color: var(--ink); letter-spacing: -.055em; overflow-wrap: anywhere; }
+.personalGlance dd > strong, .personalGlance dd > strong + small { display: block; }
+.personalGlance dd > strong + small { margin-top: 6px; }
 .personalGlance .personalGlanceMeta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; color: var(--muted); font-family: var(--font-sans); font-size: 11px; line-height: 1.5; letter-spacing: normal; margin: 0; }
 .personalGlance .personalSubscriptionMetric { border-left-style: dashed; background: var(--surface-muted); margin-left: 4px; padding-right: 10px; }
 .personalSubscriptionMetric dd { font-size: 23px; }
@@ -37,6 +48,20 @@
 .personalHelpContent p { font-family: var(--font-sans); font-size: 12px; color: var(--text); line-height: 1.6; }
 .personalHelpContent p + p { margin-top: 8px; }
 .personalControls { overflow: visible; }
+/* Keep refinements beside the range controls, not a second panel above charts. */
+.personalCompactControls { padding-block: 12px; }
+.personalControlRow { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.personalControlRow > label { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--muted); font-size: 12px; }
+.personalControlRow select { min-width: 0; max-width: 260px; }
+.personalCompactControls > .personalAdvanced { margin-top: 4px; }
+.personalSummaryHeading { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; }
+.personalSummaryHeading .personalRange { margin: 0; }
+.personalSummaryHeading .personalRange[open] { flex-basis: 100%; }
+.personalUsageSummary > .personalSectionHeader { margin-bottom: 8px; }
+.personalUsageSummary .personalAccounting { margin-bottom: 0; }
+.personalAccounting > summary { cursor: pointer; padding-block: 4px; }
+.personalAccounting p { margin: 6px 0; }
+
 .personalControls .personalSectionHeader { margin-bottom: 10px; }
 .personalControls > label { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-right: 20px; white-space: nowrap; }
 .personalControls > label select { min-width: 120px; }
@@ -113,7 +138,8 @@
 .personalTokenStats dt { font-size: 12px; color: var(--muted); }
 .personalTokenStats dd { margin: 6px 0; font-family: var(--font-mono); font-size: 18px; font-weight: 550; overflow-wrap: anywhere; }
 .personalTokenStats dd.personalMetricNote { font-family: var(--font-sans); font-size: 10px; font-weight: 400; margin: 0; color: var(--muted); }
-.personalActivityTable { min-width: 730px !important; }
+.personalActivityWrap { container: personal-activity / inline-size; }
+.personalTable.personalActivityTable { min-width: 730px; }
 .personalActivityTable th[scope="row"] { min-width: 170px; font-weight: 500; }
 .personalActivityTable details > summary { min-height: 30px; padding: 7px 0 3px; color: var(--muted); font-size: 11px; cursor: pointer; }
 .personalActivityTable details[open] { min-width: min(600px, 75vw); }
@@ -124,6 +150,28 @@
 .personalEventDetails dt { color: var(--muted); margin-bottom: 4px; }
 .personalEventDetails dd { margin: 0; overflow-wrap: anywhere; }
 .personalActivityTable a { color: var(--accent); text-decoration: underline; }
+
+/* On narrow panels a call is read vertically. Keep the same disclosure,
+   column associations and page-local Fusion targets at every width. */
+@container personal-activity (max-width: 729px) {
+  .personalTable.personalActivityTable { display: block; min-width: 0; }
+  .personalActivityTable thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .personalActivityTable tbody { display: block; }
+  .personalActivityTable tbody tr {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px;
+    padding-block: 12px; border-bottom: 1px solid var(--line);
+  }
+  .personalActivityTable tbody :is(th[scope="row"], td) { min-width: 0; padding: 0; border: 0; }
+  .personalActivityTable :is(.personalCallTime, th[scope="row"]) { grid-column: 1 / -1; }
+  .personalActivityTable .personalCallTime { color: var(--muted); }
+  .personalActivityTable td[data-label]::before {
+    display: block; content: attr(data-label) / ''; margin-bottom: 4px; color: var(--muted); font-size: 11px;
+  }
+  .personalActivityTable details[open] { min-width: 0; }
+  .personalActivityTable details > summary { min-height: 36px; }
+  .personalActivityTable .personalEventDetails { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .personalPagination { margin-top: 16px; font-size: 12px; }
 @media (max-width: 1100px) {
   .personalChartsGrid { grid-template-columns: minmax(0, 1.2fr) minmax(270px, 1fr); }
@@ -152,6 +200,9 @@
   .personalControls .personalActions { gap: 6px; }
   .personalControls .personalActions button { min-height: 36px; padding-inline: 9px; font-size: 11px; }
   .personalControls > label { margin-right: 10px; }
+  .personalControlRow { gap: 8px; }
+  .personalControlRow > label { flex: 1 1 100%; justify-content: space-between; }
+  .personalControlRow select { max-width: 65%; }
   .personalFilterGrid { grid-template-columns: minmax(0, 1fr); }
   .personalOverviewToolbar { align-items: stretch; }
   .personalMetricSwitch { width: 100%; }

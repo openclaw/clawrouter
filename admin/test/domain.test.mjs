@@ -5,7 +5,6 @@ import {
   credentialOutcome,
   effectiveAccess,
   knownPolicyProviders,
-  optionalCurrencyMicros,
   optionalNumber,
   parseEligibleGrants,
   playgroundAccessEndpoint,
@@ -113,6 +112,9 @@ test("service outcome and playground blocker require both access and readiness",
   const allowed = services[0];
   assert.equal(serviceOutcome(allowed).label, "usable");
   assert.equal(playgroundBlocker(modelForm(), { id: "openai/default", provider: "openai", capabilities: [] }, undefined, new Map([["openai", allowed.access]]), { openai: allowed.readiness }), null);
+
+  // Missing access is not a denial, even if the provider is known to be ready.
+  assert.match(playgroundBlocker(modelForm(), { id: "openai/default", provider: "openai", capabilities: [] }, undefined, new Map(), { openai: allowed.readiness }), /access to this provider couldn’t be verified/);
 
   const denied = { ...allowed, access: { ...allowed.access, allowed: false, policies: [] } };
   assert.equal(serviceOutcome(denied).label, "denied");
@@ -246,7 +248,6 @@ test("service route presets cover every bundled request format family", () => {
 });
 
 test("budget parsing and fallback summaries keep blocked and wildcard states explicit", () => {
-  assert.equal(optionalCurrencyMicros("$1.25"), 1_250_000);
   assert.equal(optionalNumber("0"), 0);
   assert.throws(() => optionalNumber("-1"), /non-negative/);
 

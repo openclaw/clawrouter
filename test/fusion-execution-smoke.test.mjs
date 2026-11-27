@@ -3,6 +3,7 @@ import test from 'node:test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { executionTasks, executionPrompt } from '../benchmarks/fusion/execution-smoke.mjs';
 import { parseModule, gradeCandidate, buildExecutionImage, qualifyExecution, summarizeExecution, runExecutionSmoke, localGenerator } from '../scripts/fusion-execution-smoke.mjs';
 
@@ -90,6 +91,34 @@ test('transport failure checkpoints without persisting generated source or raw e
   } finally { await rm(parent, { recursive: true, force: true }); }
 });
 
+test('grader failures retain generated usage before validation without claiming a result', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'fusion-execution-test-')), out = join(parent, 'run');
+  const task = { id: 'sample', instruction: 'double', reference: x => x * 2, mutant: 'x=>x', visible: [{ args: [1], expected: 2 }], hidden: [{ args: [2], expected: 4 }] };
+  let calls = 0, grades = 0;
+  const content = JSON.stringify({ code: 'export default x => x * 2; // private candidate' });
+  const generator = { pins: [{ model: 'tiny' }, { model: 'small' }], verifyPins: async () => {}, generate: async () => {
+    calls++; return { content, code: JSON.parse(content).code, inputTokens: 17, outputTokens: 23 };
+  } };
+  try {
+    await assert.rejects(runExecutionSmoke({ out, image: 'sha256:' + 'a'.repeat(64), sourceSha: 'b'.repeat(40), tasks: [task], generator,
+      grade: async () => {
+        if (++grades <= 4) return { passed: grades !== 4, outcome: 'qualification' };
+        const saved = JSON.parse(await readFile(join(out, 'execution-smoke.json'), 'utf8'));
+        assert.equal(saved.records[0].status, 'grading');
+        assert.equal(saved.records[0].inputTokens, 17);
+        throw Error('private grader failure');
+      } }), /execution_smoke_incomplete/);
+    const raw = await readFile(join(out, 'execution-smoke.json'), 'utf8'), state = JSON.parse(raw);
+    assert.equal(calls, 1); assert.equal(state.complete, false); assert.equal(state.records.length, 1);
+    assert.equal(state.records[0].outputTokens, 23);
+    assert.equal(state.records[0].responseDigest, createHash('sha256').update(content).digest('hex'));
+    assert.equal(state.records[0].publicPassed, undefined);
+    assert.equal(state.policies, undefined);
+    assert.throws(() => summarizeExecution([task], state.records, ['tiny', 'small']), /invalid_execution_record/);
+    assert.ok(!raw.includes('private candidate')); assert.ok(!raw.includes('private grader failure'));
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
+
 test('candidate output overflow fails that candidate, closes its container, and does not hide infrastructure errors', async () => {
   for (const reason of ['command_output_limit', 'command_timeout']) {
     let calls = 0, closed = 0;
@@ -106,6 +135,94 @@ test('local generator refuses cloud identities and stops on a failed HTTP reques
   let calls = 0;
   await assert.rejects(localGenerator(['x', 'y'], undefined, async () => { calls++; return { ok: false }; }), /transport/);
   assert.equal(calls, 1);
+});
+
+function localRuntimeFixture(info = {}) {
+  const state = { version: '0.40.11', info: { template: '{{ .Prompt }}', capabilities: [], ...info },
+    models: ['tiny', 'small'].map(name => ({ name, digest: 'a'.repeat(64), size: 10 })), chats: 0 };
+  const fetcher = async url => {
+    if (url.endsWith('/api/version')) return Response.json({ version: state.version });
+    if (url.endsWith('/api/tags')) return Response.json({ models: state.models });
+    if (url.endsWith('/api/show')) return Response.json(state.info);
+    state.chats++; throw Error('unexpected_inference');
+  };
+  return { state, fetcher };
+}
+
+test('local pins capture named and legacy renderers without retaining template or default parameter text', async () => {
+  for (const fields of [{}, { parameters: '' }, { renderer: 'qwen3-coder', parser: 'qwen3-coder', template_source: 'renderer_parser', parameters: 'presence_penalty 1.5\n' }]) {
+    const { state, fetcher } = localRuntimeFixture(fields);
+    const generator = await localGenerator(['tiny', 'small'], undefined, fetcher);
+    assert.deepEqual(generator.pins[0].runtime, { serverVersion: '0.40.11', renderer: fields.renderer ?? null,
+      parser: fields.parser ?? null, templateSource: fields.template_source ?? null,
+      templateSha256: createHash('sha256').update(state.info.template).digest('hex'),
+      parametersSha256: fields.parameters === undefined ? null : createHash('sha256').update(fields.parameters).digest('hex') });
+    assert.ok(!JSON.stringify(generator.pins).includes(state.info.template));
+    if (fields.parameters) assert.ok(!JSON.stringify(generator.pins).includes(fields.parameters.trim()));
+    await generator.verifyPins();
+    assert.equal(state.chats, 0);
+  }
+});
+
+test('unchanged weights cannot hide server, renderer, template, default parameter or thinking drift', async () => {
+  for (const mutate of [
+    state => { state.version = '0.40.12'; },
+    state => { state.info.renderer = 'other'; },
+    state => { state.info.parser = 'other'; },
+    state => { state.info.template_source = 'other'; },
+    state => { state.info.template = '{{ .System }}{{ .Prompt }}'; },
+    state => { state.info.parameters = 'presence_penalty 1.5'; },
+    state => { state.info.capabilities = ['thinking']; },
+  ]) {
+    const { state, fetcher } = localRuntimeFixture();
+    const generator = await localGenerator(['tiny', 'small'], undefined, fetcher);
+    mutate(state);
+    await assert.rejects(generator.verifyPins(), /^Error: local_runtime_changed$/);
+    assert.equal(state.chats, 0);
+  }
+});
+
+test('default parameter removal and value changes invalidate local pins', async () => {
+  for (const parameters of [undefined, '', 'presence_penalty 0']) {
+    const { state, fetcher } = localRuntimeFixture({ parameters: 'presence_penalty 1.5' });
+    const generator = await localGenerator(['tiny', 'small'], undefined, fetcher);
+    state.info.parameters = parameters;
+    await assert.rejects(generator.verifyPins(), /^Error: local_runtime_changed$/);
+    assert.equal(state.chats, 0);
+  }
+});
+
+test('invalid runtime metadata fails before inference without echoing source', async () => {
+  for (const mutate of [
+    state => { state.version = null; },
+    state => { state.version = 'private version with spaces'; },
+    state => { delete state.info.template; },
+    state => { state.info.template = ''; },
+    state => { state.info.template = 'x'.repeat(1024 * 1024 + 1); },
+    state => { state.info.renderer = { private: 'metadata' }; },
+    state => { state.info.parser = 'x'.repeat(129); },
+    state => { state.info.template_source = 'private\nsource'; },
+    state => { state.info.parameters = null; },
+    state => { state.info.parameters = { private: 'metadata' }; },
+    state => { state.info.parameters = 'x'.repeat(1024 * 1024 + 1); },
+  ]) {
+    const { state, fetcher } = localRuntimeFixture(); mutate(state);
+    await assert.rejects(localGenerator(['tiny', 'small'], undefined, fetcher), /^Error: unqualified_local_runtime$/);
+    assert.equal(state.chats, 0);
+  }
+});
+
+test('final model validation rejects changed or ambiguous local identities', async () => {
+  for (const mutate of [
+    state => { state.models[0].digest = 'b'.repeat(64); },
+    state => { state.models[0].size++; },
+    state => { state.models[0].remote_host = 'example.test'; },
+    state => { state.models.push({ ...state.models[0] }); },
+  ]) {
+    const { state, fetcher } = localRuntimeFixture();
+    const generator = await localGenerator(['tiny', 'small'], undefined, fetcher); mutate(state);
+    await assert.rejects(generator.verifyPins(), /^Error: model_changed$/);
+  }
 });
 
 test('Docker qualification distinguishes weak public passes from hidden failures and kills hanging code', { skip: !process.env.FUSION_EXECUTION_NODE_IMAGE, timeout: 120000 }, async () => {

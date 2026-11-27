@@ -1,7 +1,7 @@
 import { managedCreateAdapter } from "./managed-lifecycle-adapters.ts";
 import type { ManagedControlAction, ManagedLifecycleAdapter, ManagedPublicPaths } from "./managed-lifecycle-types.ts";
 import type { CompiledEndpoint, CompiledProvider } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function managedRoute(provider: CompiledProvider, create: CompiledEndpoint, pathParams?: Record<string, string>): {
   adapter: ManagedLifecycleAdapter; controls: Partial<Record<ManagedControlAction, CompiledEndpoint>>; retained?: [string, string][];

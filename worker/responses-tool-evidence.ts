@@ -1,5 +1,5 @@
 import type { Token } from "stream-json/core/parser.js";
-import { hostedToolPricingGap } from "./pricing.ts";
+import { hostedToolPricingGap } from "./hosted-tool-pricing.ts";
 
 export type ToolKnowledge = "token_only" | "hosted_tool_fee" | "hosted_tool_usage" | "unknown";
 export const toolEvidenceLimit = 1024;

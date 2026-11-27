@@ -6,8 +6,8 @@ import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, usageEnv } from "./usage-budget-fixture.mjs";
 
 const { default: handler } = await import("../index.ts");
-const { providerById } = await import("../providers.ts");
-const { grantSupports } = await import("../provider-auth.ts");
+const { providerById } = await import("../provider-catalog.ts");
+const { grantSupports } = await import("../grant-compatibility.ts");
 const { operationAffordability } = await import("../operation-budget.ts");
 
 const owners = ["tenant:maintainer_access:owner@example.com", "provider:openai"];

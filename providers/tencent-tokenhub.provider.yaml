@@ -50,9 +50,11 @@ endpoints:
 models:
   entries:
     - id: tencent-tokenhub/deepseek-v4-flash
+      displayName: "DeepSeek V4 Flash"
       upstream: deepseek-v4-flash
       capabilities: [llm.chat]
     - id: tencent-tokenhub/hy3-preview
+      displayName: "HY3 Preview"
       upstream: hy3-preview
       capabilities: [llm.chat]
       availability:
@@ -63,6 +65,7 @@ models:
         checkedAt: "2026-11-03"
         sources: [https://cloud.tencent.com/announce/detail/2391]
     - id: tencent-tokenhub/hy3
+      displayName: "HY3"
       upstream: hy3
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, high]
@@ -82,6 +85,7 @@ models:
             checkedAt: "2026-11-03"
             input: [text]
     - id: tencent-tokenhub/hy4-preview
+      displayName: "HY4 Preview"
       upstream: hy4-preview
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, high]

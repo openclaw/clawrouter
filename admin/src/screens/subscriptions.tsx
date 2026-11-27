@@ -1,3 +1,4 @@
+import { grantRuntimeFresh } from "../../../shared/grant-quota";
 import { GrantRefreshHealth } from "../grant-health";
 import { GrantExpiry } from "../grant-expiry";
 import { Status } from "../components";
@@ -8,6 +9,7 @@ import type { AccessPolicy, ProviderRow, UpstreamGrant } from "../ui-types";
 const number = (value: number) => value.toLocaleString();
 const money = (micros: number) => new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(micros / 1e6);
 const familyLabel = (family: string) => family.charAt(0).toUpperCase() + family.slice(1);
+const freeLabel = (free: number) => `${free > 0 && free < 1 ? "<1" : Math.round(free)}% free`;
 
 export function SubscriptionsScreen({ data, policies, grants, providers, refreshQuota, busy, actionError }: {
   data: ReturnType<typeof useSubscriptions>; policies: AccessPolicy[]; grants: UpstreamGrant[]; providers: ProviderRow[];
@@ -33,8 +35,8 @@ export function SubscriptionsScreen({ data, policies, grants, providers, refresh
       <div className="subscriptionHeadroom">{policy && families.map(family => {
         const headroom = subscriptions.map(grant => modelHeadroom(grant, family, policy));
         const eligible = headroom.filter(row => row.eligible);
-        const known = eligible.flatMap(row => row.free === null ? [] : [row.free]);
-        return <div key={family}><strong>{familyLabel(family)}</strong><span>{eligible.length}/{subscriptions.length} subs eligible</span><small>{known.length ? `Best ${Math.round(Math.max(...known))}% free` : eligible.length ? "Quota not observed" : "No eligible accounts"}</small></div>;
+        const known = eligible.flatMap(row => row.free === null || row.stale ? [] : [row.free]);
+        return <div key={family}><strong>{familyLabel(family)}</strong><span>{eligible.length}/{subscriptions.length} subs eligible</span><small>{known.length ? `Best ${freeLabel(Math.max(...known))}` : eligible.length ? "Quota unknown or stale" : "No eligible accounts"}</small></div>;
       })}</div>
       <div className="subscriptionMetrics"><span><strong>{data.usage ? number(included ?? 0) : "—"}</strong> included requests</span><span><strong>{data.usage ? number(fallback?.requests ?? 0) : "—"}</strong> paid fallback requests</span><span><strong>{data.usage ? money(fallback?.costMicros ?? 0) : "—"}</strong> paid fallback cost</span></div>
       {data.loading ? <p role="status">Loading usage…</p> : null}
@@ -53,12 +55,10 @@ export function SubscriptionsScreen({ data, policies, grants, providers, refresh
         <GrantRefreshHealth grant={grant} />
         <p>{planLabel(grant.account?.rateLimitTier)} · {grant.provider} · {grant.account?.subscriptionStatus ?? "Status unknown"} · {grant.enabled ? "enabled" : "disabled"} · {grant.kind === "api_key" ? "api_key" : "subscription"} lane</p>
         <GrantExpiry grant={grant} />
-        <div className="subscriptionQuota">{grant.quotaWindows.filter(window => window.kind === "subscription").map(window => {
-          const free = quotaFree(window);
-          const label = window.models?.length ? `${window.models.map(familyLabel).join(" / ")} weekly` : window.window === "five_hour" ? "5-hour" : "Weekly";
-          return <div key={window.id}><div className="quotaLabel"><strong>{label}</strong><span>{free === null ? "Unknown" : `${Math.round(free)}% free`}</span></div><progress max={100} value={free ?? 0} aria-label={`${label} percent free`} /><small>{resetLabel(window.resetAt)}{window.resetAt ? <> · <time dateTime={window.resetAt}>{new Date(window.resetAt).toLocaleString()}</time></> : null}</small></div>;
-        })}{!grant.quotaWindows.some(window => window.kind === "subscription") ? <p>Quota not yet observed.</p> : null}</div>
-        <p className="subscriptionEligibility">{policy && grant.provider === "anthropic" && families.map(family => { const value = modelHeadroom(grant, family, policy); return <span key={family}>{familyLabel(family)}: {grant.revokedAt ? "revoked" : value.eligible ? "eligible" : "unavailable"}{value.stale ? " (stale quota)" : value.free === null ? " (quota unknown)" : ""}</span>; })}</p>
+        <div className="subscriptionQuota">{policy && grant.quotaWindows.filter(window => window.kind === "subscription").map(window =>
+          <QuotaReading key={window.id} window={window} observedAt={grant.quotaObservedAt} staleAfterSeconds={policy.grantRouting.staleAfterSeconds} />
+        )}{!grant.quotaWindows.some(window => window.kind === "subscription") ? <p>Quota not yet observed.</p> : null}</div>
+        <p className="subscriptionEligibility">{policy && grant.provider === "anthropic" && families.map(family => { const value = modelHeadroom(grant, family, policy); return <span key={family}>{familyLabel(family)}: {grant.revokedAt ? "revoked" : value.reason?.replaceAll("_", " ") ?? "eligible"}{value.reason === "stale_quota" || value.reason === "quota_unknown" ? "" : value.free === null ? " (quota unknown)" : value.stale ? " (stale quota)" : ""}</span>; })}</p>
         <p>Extra usage: {grant.extraUsage?.enabled ?? grant.account?.extraUsageEnabled ? "enabled" : "disabled / unknown"}{grant.extraUsage ? ` · ${creditMoney(grant.extraUsage.usedCredits, grant.extraUsage.currency)} / ${creditMoney(grant.extraUsage.monthlyLimit, grant.extraUsage.currency)}${grant.extraUsage.spendLimitReached ? " · limit reached" : ""}` : ""}</p>
         <div className="subscriptionMetrics"><span><strong>{data.usage ? number(totals?.requests ?? 0) : "—"}</strong> requests</span><span><strong>{data.usage ? number((totals?.inputTokens ?? 0) + (totals?.outputTokens ?? 0)) : "—"}</strong> tokens</span><span><strong>{data.usage ? money(totals?.costMicros ?? 0) : "—"}</strong> API-equivalent value</span></div>
         <p><small>Last selected: {grant.lastSelectedAt ? new Date(grant.lastSelectedAt).toLocaleString() : "Never"} · Quota observed: {grant.quotaObservedAt ? new Date(grant.quotaObservedAt).toLocaleString() : "Never"}</small></p>
@@ -66,6 +66,21 @@ export function SubscriptionsScreen({ data, policies, grants, providers, refresh
         {grant.revokedAt ? <small> Retired credential; quota probing is disabled.</small> : !canRefresh ? <small> Quota probing is unavailable for this credential; inference headers can still supply quota readings.</small> : null}
       </section>;
     })}</div>
+  </div>;
+}
+
+function QuotaReading({ window, observedAt, staleAfterSeconds }: {
+  window: UpstreamGrant["quotaWindows"][number]; observedAt: UpstreamGrant["quotaObservedAt"]; staleAfterSeconds: number;
+}) {
+  const now = Date.now();
+  const free = quotaFree(window, now);
+  // This row describes one window, not the eligibility of its entire model family.
+  const current = free !== null && grantRuntimeFresh({ observedAt: observedAt ?? "", windows: [window] }, staleAfterSeconds * 1000, now, window.models?.[0]);
+  const label = window.models?.length ? `${window.models.map(familyLabel).join(" / ")} weekly` : window.window === "five_hour" ? "5-hour" : "Weekly";
+  return <div>
+    <div className="quotaLabel"><strong>{label}</strong><span>{free === null ? "Unknown" : current ? freeLabel(free) : `Stale · last reported ${freeLabel(free)}`}</span></div>
+    {current ? <progress max={100} value={free} aria-label={`${label} percent free`} aria-valuetext={freeLabel(free)} /> : null}
+    <small>{resetLabel(window.resetAt, now)}{window.resetAt ? <> · <time dateTime={window.resetAt}>{new Date(window.resetAt).toLocaleString()}</time></> : null}</small>
   </div>;
 }
 

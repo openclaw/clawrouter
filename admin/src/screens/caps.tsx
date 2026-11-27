@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useConsole } from "../console-controller-context";
 import { InlineError, InlineNote } from "../components";
-import { parseBudgetUsd } from "../cost-presentation";
+import { formatConfiguredLimit, formatMicros, parseBudgetUsd } from "../cost-presentation";
+import { dollarInputFromMicros } from "../request-price-input";
 import type { AccessPolicy, AccessUser, BudgetStatus } from "../ui-types";
 
 type WindowName = "daily" | "weekly" | "monthly";
+type CapDraft = { mode: "number"; amount: string } | { mode: "unlimited" | "inherit" };
 const windows: WindowName[] = ["daily", "weekly", "monthly"];
 type Caps = { rows: Array<{ policy: AccessPolicy; members: Array<{ email: string; budget: BudgetStatus }> }>; users: AccessUser[] };
 const field = (window: WindowName) => `${window}BudgetMicros` as const;
-const dollars = (amount: number | null | undefined) => amount == null ? "unlimited" : `$${(amount / 1e6).toFixed(2)}`;
 
 export function CapsView({ onBack }: { onBack: () => void }) {
   const { session, access, request } = useConsole();
@@ -27,11 +28,11 @@ export function CapsView({ onBack }: { onBack: () => void }) {
   }, []);
   if (session.value.role !== "admin") return null;
   const row = data?.rows.find(item => item.policy.policyId === selected) ?? data?.rows[0];
-  async function save(window: WindowName, value: string, email?: string) {
+  async function save(window: WindowName, draft: CapDraft, email?: string) {
     if (!row || !data || pending.current) return;
     const key = field(window);
-    const amount = value === "inherit" ? undefined : value === "unlimited" ? null : parseBudgetUsd(value);
-    if (amount !== undefined && amount !== null && (!value.trim() || !Number.isSafeInteger(amount) || amount < 0)) { setError("Enter non-negative USD with at most six decimal places."); return; }
+    const amount = draft.mode === "number" ? parseBudgetUsd(draft.amount) : draft.mode === "unlimited" ? null : undefined;
+    if (typeof amount === "number" && !Number.isSafeInteger(amount)) { setError("Enter non-negative USD with at most six decimal places."); return; }
     const user = data.users.find(item => item.email === email);
     const { updatedBy: _by, updatedAt: _at, ...current } = user?.budgetOverrides?.[row.policy.policyId] ?? {};
     const values = email ? { ...current, [key]: amount } : { [key]: amount };
@@ -60,9 +61,11 @@ export function CapsView({ onBack }: { onBack: () => void }) {
         <h3>Member caps</h3><div className="capsTable"><table><thead><tr><th>Member</th>{windows.map(window => <th key={window}>{window} spend / cap</th>)}<th>Last changed</th></tr></thead><tbody>{row.members.map(member => {
           const override = data!.users.find(user => user.email === member.email)?.budgetOverrides?.[row.policy.policyId];
           return <tr key={member.email}><th scope="row">{member.email}</th>{windows.map(window => {
-            const key = field(window), inherited = override?.[key] === undefined, cap = inherited ? row.policy[key] : override[key];
+            const key = field(window), memberCap = override?.[key], inherited = memberCap === undefined;
+            const cap = inherited ? row.policy[key] : memberCap;
             const budget = window === "monthly" ? member.budget : member.budget[window];
-            return <td key={window} data-label={`${window} spend / cap`}><p>{budget?.spentMicros == null ? "unknown" : dollars(budget.spentMicros)} / {dollars(cap)}{inherited ? " (inherited)" : " (override)"}</p><CapEditor key={`${row.policy.policyId}-${override?.updatedAt}-${cap}-${inherited}`} label={`${member.email} ${window} cap`} value={inherited ? undefined : cap} inherit disabled={busy} onSave={value => save(window, value, member.email)} /></td>;
+            // Reset this draft only when its policy or stored override changes, not when a sibling saves.
+            return <td key={window} data-label={`${window} spend / cap`}><p>{budget?.spentMicros == null ? "unknown" : formatMicros(budget.spentMicros)} / {cap == null ? "unlimited" : formatConfiguredLimit(cap)}{inherited ? " (inherited)" : " (override)"}</p><CapEditor key={`${row.policy.policyId}:${memberCap}`} label={`${member.email} ${window} cap`} value={memberCap} inherit disabled={busy} onSave={value => save(window, value, member.email)} /></td>;
           })}<td>{override ? `${override.updatedBy} · ${override.updatedAt}` : "Policy default"}</td></tr>;
         })}</tbody></table></div>
       </>}
@@ -70,8 +73,8 @@ export function CapsView({ onBack }: { onBack: () => void }) {
   </section>;
 }
 
-function CapEditor({ label, value, inherit, disabled, onSave }: { label: string; value?: number | null; inherit?: boolean; disabled: boolean; onSave: (value: string) => Promise<void> }) {
-  const [mode, setMode] = useState(value === undefined && inherit ? "inherit" : value == null ? "unlimited" : "number");
-  const [amount, setAmount] = useState(value == null ? "" : String(value / 1e6));
-  return <form className="capEditor" onSubmit={event => { event.preventDefault(); void onSave(mode === "number" ? amount : mode); }}><label><span className={inherit ? "srOnly" : undefined}>{label}</span><select aria-label={`${label} mode`} value={mode} disabled={disabled} onChange={event => setMode(event.target.value)}>{inherit && <option value="inherit">Inherit</option>}<option value="unlimited">Unlimited</option><option value="number">Amount (USD)</option></select></label>{mode === "number" && <input aria-label={`${label} USD`} inputMode="decimal" value={amount} disabled={disabled} onChange={event => setAmount(event.target.value)} />}<button disabled={disabled} type="submit" aria-label={`Save ${label}`}>Save</button></form>;
+function CapEditor({ label, value, inherit, disabled, onSave }: { label: string; value?: number | null; inherit?: boolean; disabled: boolean; onSave: (draft: CapDraft) => Promise<void> }) {
+  const [mode, setMode] = useState<CapDraft["mode"]>(value === undefined && inherit ? "inherit" : value == null ? "unlimited" : "number");
+  const [amount, setAmount] = useState(() => dollarInputFromMicros(value));
+  return <form className="capEditor" onSubmit={event => { event.preventDefault(); void onSave(mode === "number" ? { mode, amount } : { mode }); }}><label><span className={inherit ? "srOnly" : undefined}>{label}</span><select aria-label={`${label} mode`} value={mode} disabled={disabled} onChange={event => setMode(event.target.value as CapDraft["mode"])}>{inherit && <option value="inherit">Inherit</option>}<option value="unlimited">Unlimited</option><option value="number">Amount (USD)</option></select></label>{mode === "number" && <input aria-label={`${label} USD`} inputMode="decimal" value={amount} disabled={disabled} onChange={event => setAmount(event.target.value)} />}<button disabled={disabled} type="submit" aria-label={`Save ${label}`}>Save</button></form>;
 }

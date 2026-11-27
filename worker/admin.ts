@@ -1,5 +1,6 @@
 import { miniMaxSearchBinding } from "../shared/minimax-search-binding.ts";
 import { miniMaxCurrentCnInlineVideoBinding, miniMaxCurrentCnVideoBinding, miniMaxInlineVideoBinding, miniMaxSixModelVideoBinding, miniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
+import {lifecycleCall} from './large-http/lifecycle-client.ts';
 import { minimaxImageBinding, readMiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import { miniMaxImageProjection } from "./minimax-image-credential.ts";
 import { normalizeVertexAnthropicBinding, vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
@@ -14,6 +15,7 @@ import { normalizePolicyTiers } from "./service-tiers.ts";
 import { normalizeLimitHint } from "./policy-limits.ts";
 import { validGrantKey } from "./grant-routing.ts";
 import { authorizeAdmin } from "./access";
+import { completeUsageResponse } from "./usage-report-session.ts";
 import { minimaxMusicBinding, minimaxMusicCoverBinding, minimaxSpeechBinding, readNativeMediaBinding } from "../shared/native-media-binding.ts";
 import { backgroundRecovery } from "./background-recovery.ts";
 import {
@@ -27,28 +29,44 @@ import {
 import { contentRetentionDefault, readRetainedContent } from "./content-retention.ts";
 import { credentialMutationResponse, credentialResponsesFrom } from "./credentials";
 import { correlationRequestId, logCorrelationError } from "./correlation.ts";
-import { currentGrantRuntime, grantCredentialPresent, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, validCredentialBundle, validGrantSegment } from "./grant-selection";
+import { currentGrantRuntime, grantCredentialPresent, grantPriority, grantUsable, grantWeight, validCredentialBundle } from "./grant-eligibility";
+import { grantRoutingPolicy, validGrantSegment } from "./grant-routing";
+import { grantRuntimeStates, grantSelectionStats } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
 import { hasPrimaryCredential, inspectGrantCredentials, putGrantCredentials, revokeGrantCredentials, type GrantRevokeMetadata } from "./grant-credentials.ts";
 import { normalizeFusionConfig } from "./fusion";
 import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
-import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots, grantUsageSnapshot } from "./ledgers";
+import { budgetStatus as policyBudgetStatus, providerBudgetStatus } from "./ledgers";
+import { usageSnapshots, grantUsageSnapshot } from "./usage-ledger-client";
 import { startOAuth } from "./oauth";
 import { miniMaxDeviceAuthorize } from "./minimax-device-admin.ts";
 import { normalizeConnectionMutation } from "./provider-connections.ts";
-import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota, snapshot } from "./providers";
+import { listGrantRecords, listHealth, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota } from "./providers"; import { endpointForPath, modelRoute, snapshot } from "./provider-catalog";
 import type { AdminBootstrapResponse } from "../shared/contracts";
 import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessSession, AssignmentRule, Env, PolicyBinding,
   GrantRuntimeState, ProviderConnection, ProxyCredentialEntry, UpstreamGrant,
 } from "./types";
-import { decodePathSegment, cleanId, errorResponse, HttpError, normalizeEmail, nowIso, privateJson, randomId, readJson, sha256Hex } from "./utils";
+import { decodePathSegment, cleanId, errorResponse, normalizeEmail, nowIso, privateJson, randomId, readJson, sha256Hex } from "./utils";
+import { HttpError } from "./http-error";
 
 export async function adminApi(request: Request, env: Env, path: string): Promise<Response> {
   const authorization = await authorizeAdmin(request, env);
   if (authorization instanceof Response) return authorization;
   try {
+    if (path === "/v1/admin/usage/report" && ["GET","DELETE"].includes(request.method)) return await completeUsageResponse(request,env,"admin",request.method === "DELETE" ? "release" : "report",authorization);
+    if (request.method === "GET" && path === "/v1/admin/usage/events") return await completeUsageResponse(request,env,"admin","events",authorization);
+    if (request.method === "GET" && path === "/v1/admin/usage/validate") return await completeUsageResponse(request,env,"admin","validate",authorization);
+    if (path === "/v1/admin/large-http") {
+      if (!env.LARGE_HTTP_POOL || !env.LARGE_HTTP_TOKEN) return errorResponse("large_runtime_unavailable", "large HTTP runtime is not configured", 503);
+      if (request.method === "GET") return privateJson(await lifecycleCall(env, "snapshot", {}));
+      if (request.method === "POST") {
+        const value = await readJson<{accepting:boolean}>(request, undefined, 1024);
+        const result = await lifecycleCall(env, "admission", value);
+        return privateJson(result, result.status);
+      }
+    }
     if (request.method === "POST" && path === "/v1/admin/usage/recovery") return await backgroundRecovery(request, env);
     if (request.method === "GET" && path === "/v1/admin/content") return getContent(request, env);
     if (request.method === "GET" && path === "/v1/admin/bootstrap") return privateJson(await adminBootstrap(env));
@@ -207,11 +225,11 @@ async function getContent(request: Request, env: Env): Promise<Response> {
 
 async function overview(env: Env) {
   const [policies, credentials, users] = await Promise.all([listPolicies(env), listCredentials(env), listUsers(env)]);
-  return overviewFrom(policies, credentials, users);
+  return overviewFrom(policies, credentialResponsesFrom(policies, credentials, users));
 }
 
-function overviewFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentialEntry[], users: AccessControlUser[]) {
-  const active = credentialResponsesFrom(policies, credentials, users).filter((credential) => credential.active);
+function overviewFrom(policies: AccessPolicyEntry[], credentials: readonly { active: boolean }[]) {
+  const active = credentials.filter((credential) => credential.active);
   return {
     policiesTotal: policies.length, policiesActive: policies.filter((entry) => entry.policy.enabled).length,
     keysTotal: credentials.length, keysActive: active.length,
@@ -224,10 +242,10 @@ function overviewFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentia
 
 async function tenants(env: Env) {
   const [policies, credentials, users] = await Promise.all([listPolicies(env), listCredentials(env), listUsers(env)]);
-  return tenantsFrom(policies, credentials, users);
+  return tenantsFrom(policies, credentialResponsesFrom(policies, credentials, users));
 }
 
-function tenantsFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentialEntry[], users: AccessControlUser[]) {
+function tenantsFrom(policies: AccessPolicyEntry[], credentials: readonly { policyId: string; active: boolean }[]) {
   const groups = new Map<string, { tenantId: string; policies: number; activePolicies: number; keys: number; activeKeys: number; providers: Set<string>; allProviders: boolean; monthlyBudgetMicros: number; requestCostMicros: number }>();
   for (const entry of policies) {
     const id = entry.policy.tenantId ?? "default";
@@ -238,7 +256,7 @@ function tenantsFrom(policies: AccessPolicyEntry[], credentials: ProxyCredential
     groups.set(id, row);
   }
   const byId = new Map(policies.map((entry) => [entry.policyId, entry.policy]));
-  for (const entry of credentialResponsesFrom(policies, credentials, users)) {
+  for (const entry of credentials) {
     const policy = byId.get(entry.policyId); if (!policy) continue;
     const row = groups.get(policy.tenantId ?? "default")!; row.keys += 1; row.activeKeys += Number(entry.active);
   }
@@ -319,9 +337,10 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
   ]);
   const connectionRows = connectionsFrom(storedConnections);
   const connectionResponseRows = await connectionResponses(env, connectionRows);
+  const credentialRows = credentialResponsesFrom(policies, credentials, users);
   return {
     policies: policies.map(policyResponse),
-    credentials: credentialResponsesFrom(policies, credentials, users),
+    credentials: credentialRows,
     connections: connectionResponseRows,
     users: users.map(userResponse),
     bindings,
@@ -329,8 +348,8 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
     grants: await upstreamGrantResponses(env, grants),
     rules,
     fusion,
-    overview: overviewFrom(policies, credentials, users),
-    tenants: tenantsFrom(policies, credentials, users),
+    overview: overviewFrom(policies, credentialRows),
+    tenants: tenantsFrom(policies, credentialRows),
   };
 }
 

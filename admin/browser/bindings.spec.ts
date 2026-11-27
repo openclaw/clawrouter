@@ -42,7 +42,44 @@ async function selectPolicyA(page: Page) {
   await expect(page.getByRole("textbox", { name: "policy id", exact: true })).toHaveValue("policy_a");
 }
 
-async function openAccess(page: Page) {
+for (const phase of ["sending", "refreshing"]) {
+  test(`a binding selected while ${phase} keeps its draft after another binding saves`, async ({ page }) => {
+    const write = Promise.withResolvers<void>(), refresh = Promise.withResolvers<void>();
+    const writes = await openAccess(page, { write: write.promise, refresh: refresh.promise });
+    try {
+      await page.getByRole("tab", { name: /^Bindings/ }).click();
+      await page.locator(".tableRow").filter({ hasText: "maintainers" }).click();
+      const priority = page.getByRole("textbox", { name: "priority", exact: true });
+      const save = page.getByRole("button", { name: "Save binding", exact: true });
+      await priority.fill("7");
+      await save.click();
+      await expect.poll(() => writes.length).toBe(1);
+      if (phase === "refreshing") {
+        const refreshing = page.waitForRequest(request => new URL(request.url()).pathname === "/v1/admin/bootstrap");
+        write.resolve();
+        await refreshing;
+      }
+      await page.locator(".tableRow").filter({ hasText: "reviewers" }).click();
+      await priority.fill("777");
+      write.resolve();
+      refresh.resolve();
+      await expect(save).toBeEnabled();
+      await expect(page.getByRole("textbox", { name: "principal", exact: true })).toHaveValue("reviewers");
+      await expect(priority).toHaveValue("777");
+      await expect(page.locator(".tableRow.selected")).toContainText("reviewers");
+      await expect(page.locator(".tableRow").filter({ hasText: "maintainers" }).locator('[data-label="priority"]')).toHaveText("7");
+      expect(writes).toHaveLength(1);
+      await save.click();
+      await expect.poll(() => writes[1]?.priority).toBe(777);
+      await expect(save).toBeEnabled();
+    } finally {
+      write.resolve();
+      refresh.resolve();
+    }
+  });
+}
+
+async function openAccess(page: Page, gates?: { write: Promise<void>; refresh: Promise<void> }) {
   const writes: PolicyBinding[] = [];
   const policies: AccessPolicy[] = ["policy_b", "policy_a"].map((policyId) => ({
     policyId, enabled: true, providers: [], tenantId: "default", monthlyBudgetMicros: null, budgetScope: "policy", retainRequestContent: false,
@@ -50,7 +87,10 @@ async function openAccess(page: Page) {
   }));
   const bootstrap: AdminBootstrapResponse = {
     policies, credentials: [], connections: [], users: [], grants: [], rules: [], providers: [], tenants: [],
-    bindings: [{ policyId: "policy_b", principalType: "group", principalId: "maintainers", enabled: true, priority: 100 }],
+    bindings: [
+      { policyId: "policy_b", principalType: "group", principalId: "maintainers", enabled: true, priority: 100 },
+      { policyId: "policy_a", principalType: "group", principalId: "reviewers", enabled: true, priority: 100 },
+    ],
     overview: { policiesTotal: 2, policiesActive: 2, tenantsTotal: 1, keysTotal: 0, keysActive: 0, providerCount: 0, openaiCompatibleProviders: 0, manifestRoutes: 0, monthlyBudgetMicros: 0, requestCostMicros: 0 },
     fusion: { version: 1, modelId: "clawrouter/fusion", enabled: false, adviserModels: [], aggregatorModel: "", adviserTimeoutMs: 10_000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 },
   };
@@ -68,10 +108,12 @@ async function openAccess(page: Page) {
       expect(path).toBe("/v1/admin/policy-bindings");
       const binding = route.request().postDataJSON() as PolicyBinding;
       writes.push(binding);
+      await gates?.write;
       bootstrap.bindings = [...bootstrap.bindings.filter((item) => item.policyId !== binding.policyId || item.principalType !== binding.principalType || item.principalId !== binding.principalId), binding];
       await route.fulfill({ json: binding });
       return;
     }
+    if (path === "/v1/admin/bootstrap" && writes.length) await gates?.refresh;
     const body = responses[path];
     await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
   });

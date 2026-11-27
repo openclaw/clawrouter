@@ -1,9 +1,9 @@
+import { grantQuotaExclusionReason, grantCoolingDown, grantQuotaExhausted, grantQuotaRatio, grantQuotaResetAt, grantRuntimeFresh } from "../shared/grant-quota.ts";
 import { vertexSigningCredentialPresent } from "./vertex-anthropic-binding.ts";
-import { validGrantSegment } from "./grant-routing.ts";
-export { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, validGrantSegment } from "./grant-routing.ts";
-import { HttpError } from "./utils.ts";
-import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
-import { grantCoolingDown, grantQuotaExhausted, grantQuotaResetAt, grantRuntimeFresh } from "./grant-quota.ts";
+import { rankingStaleAfterMs, validGrantSegment } from "./grant-routing.ts";
+import { HttpError } from "./http-error.ts";
+import { assertOperationConfiguration } from "./provider-auth.ts";
+import { grantSupports, type GrantRequirement } from "./grant-compatibility.ts";
 import type { Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
 export const REFRESH_MARGIN_MS = 5 * 60_000;
@@ -19,7 +19,7 @@ export interface SelectedGrant {
 export interface GrantSelectionResult {
   selected: SelectedGrant | null;
   hasConfiguredGrant: boolean;
-  // Earliest time a cooling or quota-exhausted pooled grant can serve again.
+  // Earliest possible recovery; retry rechecks all eligibility and freshness.
   retryAt?: string;
 }
 export type PinnedGrant = { key: string | null; revision: string | null } | { key: string; lineage: string };
@@ -49,7 +49,11 @@ export function validCredentialBundle(value: UpstreamGrant["credentials"]): bool
   return value == null || (!Array.isArray(value) && typeof value === "object" && Object.entries(value).every(([name, secret]) => /^[A-Za-z0-9_.-]{1,128}$/.test(name) && typeof secret === "string" && secret.trim().length > 0));
 }
 
-export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean; recovering?: Array<{ entry: SelectedGrant; atMs: number }> }
+// reserveDrain: no grant is above the policy reserve, so `available` holds the
+// grants only that reserve excludes. Choose among them with grantChoices.
+// reserveBand: those grants while some are above the reserve, in case none of
+// those can serve the operation (servingCandidates).
+export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean; recovering?: Array<{ entry: SelectedGrant; atMs: number }>; reserveDrain?: true; reserveBand?: SelectedGrant[] }
 
 // Candidate metadata only. The private owner must still prove its original
 // device/account binding; this does not make generic materialization usable.
@@ -83,38 +87,89 @@ function operationConfigured(grant: UpstreamGrant, env: Env, requirement?: Grant
   catch (error) { if (error instanceof HttpError) return false; throw error; }
 }
 
-export function filterGrantCandidates(providerId: string, candidates: Array<{ key: string; grant: UpstreamGrant | null; runtimeState: GrantRuntimeState | null }>, excludedKeys: ReadonlySet<string>, routing: GrantRoutingPolicy, pinnedKey: string | null | undefined, requirement: GrantRequirement | undefined, nowMs: number, privateCopilot = false): GrantCandidates {
+export function filterGrantCandidates(providerId: string, candidates: Array<{ key: string; grant: UpstreamGrant | null; runtimeState: GrantRuntimeState | null }>, excludedKeys: ReadonlySet<string>, routing: GrantRoutingPolicy, pinnedKey: string | null | undefined, requirement: GrantRequirement | undefined, nowMs: number, privateCopilot = false, onExcluded?: (reason: string) => void): GrantCandidates {
   const configured = candidates.filter((entry): entry is SelectedGrant => !!entry.grant && entry.grant.enabled !== false && (!entry.grant.provider || entry.grant.provider === providerId)
     && (privateCopilot ? providerId === "github-copilot" && copilotPrivateCandidate(entry.grant) : grantCredentialPresent(entry.grant)));
   const eligibilityRestricted = Object.prototype.hasOwnProperty.call(routing.eligibleGrants, providerId);
   const eligibleRefs = routing.eligibleGrants[providerId] ?? [];
   const recovering: Array<{ entry: SelectedGrant; atMs: number }> = [];
+  // An environment fallback, unless pinned to a grant, serves before a drain.
+  const softFloor = !routing.environmentFallback || typeof pinnedKey === "string";
+  let reserveBand: SelectedGrant[] | undefined;
   const available = configured.filter((entry) => {
     // Keep configured-pool presence (and pinned owner error semantics) even
     // when refresh cannot currently produce a dispatchable access token.
-    if (!privateCopilot && pinnedKey === undefined && grantRefreshBlocked(entry.grant, nowMs)) return false;
+    if (!privateCopilot && pinnedKey === undefined && grantRefreshBlocked(entry.grant, nowMs)) { onExcluded?.("credential_refresh_blocked"); return false; }
     if (requirement && !grantSupports(requirement, entry.grant)) return false;
     if (pinnedKey !== undefined && entry.key !== pinnedKey) return false;
-    if (excludedKeys.has(entry.key)) return false;
+    if (excludedKeys.has(entry.key)) { onExcluded?.("already_attempted"); return false; }
     const scope = parseGrantScope(entry.key);
     if (eligibilityRestricted && (!scope || !eligibleRefs.includes(scope.tokenRef))) return false;
     // Stale-deny needs a fresh observation, not elapsed time, to readmit a grant.
-    if (routing.staleState === "deny" && !grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, nowMs, requirement?.model)) return false;
+    if (routing.staleState === "deny" && !grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, nowMs, requirement?.model)) { onExcluded?.("quota_not_fresh"); return false; }
     const subscription = entry.grant.kind === "subscription", reserve = subscription ? routing.includedQuotaReservePercent : 0;
     const cooling = grantCoolingDown(entry.runtimeState, nowMs);
     const exhausted = grantQuotaExhausted(entry.runtimeState, requirement?.model, reserve, subscription, nowMs);
     if (!cooling && !exhausted) return true;
+    // The reserve is a soft floor: a grant it alone excludes still has capacity.
+    const drainable = exhausted && !!reserve && !grantQuotaExhausted(entry.runtimeState, requirement?.model, 0, subscription, nowMs);
+    if (!cooling && drainable) (reserveBand ??= []).push(entry);
+    else onExcluded?.(cooling ? entry.runtimeState!.lastSignal === "authentication" ? "authentication" : "cooldown" : grantQuotaExclusionReason(entry.runtimeState, requirement?.model, reserve, subscription, nowMs)!);
     // Only time-limited exclusions remain. Record when the last one lifts;
     // an exhausted window without a published reset has no known recovery.
     // A failed credential (401/403) is not repaired by waiting out its cooldown.
     if (cooling && entry.runtimeState!.lastSignal === "authentication") return false;
-    const resetAt = exhausted ? grantQuotaResetAt(entry.runtimeState, requirement?.model, reserve, subscription, nowMs) : 0;
+    // Under the soft floor only empty windows wait for their reset, so a cooling
+    // grant the floor can drain recovers when its cooldown ends.
+    const floor = softFloor && (cooling || !drainable) ? 0 : reserve;
+    const resetAt = exhausted && !(cooling && drainable && softFloor) ? grantQuotaResetAt(entry.runtimeState, requirement?.model, floor, subscription, nowMs) : 0;
     const atMs = resetAt == null ? null : Math.max(resetAt, cooling ? Date.parse(entry.runtimeState!.cooldownUntil!) : 0);
     if (atMs != null && (routing.staleState !== "deny" || grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, atMs, requirement?.model))) recovering.push({ entry, atMs });
     return false;
   });
   // Transport filtering must not reopen environment auth for a configured pool.
-  return { available, recovering, hasConfiguredGrant: configured.length > 0 || !!routing.sharedGrants?.[providerId]?.length || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string" };
+  const hasConfiguredGrant = configured.length > 0 || !!routing.sharedGrants?.[providerId]?.length || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string";
+  // Drain only where the pool would otherwise be unavailable: any grant above
+  // the reserve, or a policy environment fallback, still comes first.
+  const drain = reserveBand && !available.length && softFloor ? reserveBand : undefined;
+  if (!drain) for (const entry of reserveBand ?? []) onExcluded?.(grantQuotaExclusionReason(entry.runtimeState, requirement?.model, routing.includedQuotaReservePercent, true, nowMs)!);
+  // Drained grants keep their recovery: it bounds retry only if none is chosen.
+  return drain ? { available: drain, recovering, hasConfiguredGrant, reserveDrain: true }
+    : { available, recovering, hasConfiguredGrant, ...(reserveBand && softFloor ? { reserveBand } : {}) };
+}
+
+// The operation-qualified grants to choose from. A grant above the reserve that
+// cannot serve this operation does not hold back the drain.
+export function servingCandidates(filtered: GrantCandidates, qualify: (entries: SelectedGrant[]) => SelectedGrant[]): { active: SelectedGrant[]; reserveDrain: boolean } {
+  const active = qualify(filtered.available);
+  return active.length || !filtered.reserveBand ? { active, reserveDrain: !!filtered.reserveDrain } : { active: qualify(filtered.reserveBand), reserveDrain: true };
+}
+
+// Strategy input for the selected candidates. A reserve drain keeps only the
+// grants within the policy hysteresis, scaled to the reserve band, of the most
+// remaining, so the strategy spreads the drain instead of emptying one grant
+// first (a threshold cursor stays until another grant has that much more left).
+export function grantChoices(active: SelectedGrant[], routing: GrantRoutingPolicy, nowMs: number, model: string | null | undefined, reserveDrain?: boolean) {
+  const choices = active.map(item => ({ key: item.key, weight: grantWeight(item.grant), remainingRatio: grantQuotaRatio(item.runtimeState, nowMs, choiceStaleAfterMs(routing, reserveDrain), model) }));
+  if (!reserveDrain) return choices;
+  const best = Math.max(-1, ...choices.map(choice => choice.remainingRatio ?? -1)), margin = reserveDrainMargin(routing);
+  return choices.filter(choice => reserveDrainKeeps(choice.remainingRatio, best, margin));
+}
+
+// A drain ranks by the readings that admitted its grants. Under staleState
+// "allow" an aged reading still admits, so it still ranks.
+export function choiceStaleAfterMs(routing: Pick<GrantRoutingPolicy, "strategy" | "staleAfterSeconds">, reserveDrain?: boolean): number {
+  return reserveDrain ? Number.MAX_SAFE_INTEGER : rankingStaleAfterMs(routing);
+}
+
+export function reserveDrainMargin(routing: Pick<GrantRoutingPolicy, "hysteresisPercent" | "includedQuotaReservePercent">): number {
+  return routing.hysteresisPercent * (routing.includedQuotaReservePercent ?? 0) / 10_000;
+}
+
+// Unmeasured ranks below measured, as in the most-remaining strategy.
+export function reserveDrainKeeps(ratio: number | null | undefined, best: number, margin: number): boolean {
+  const value = ratio ?? -1;
+  return value >= best || value + margin > best + 1e-9;
 }
 
 export function currentGrantRuntime(grant: UpstreamGrant, state: GrantRuntimeState | null | undefined): GrantRuntimeState | null {

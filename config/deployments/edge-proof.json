@@ -1,0 +1,15 @@
+{
+  "environment": "edge-proof",
+  "sourceSha": "5cfafe8c8df43102365ec900431b8b3be1dd4eb0",
+  "sourceTree": "6da1d6ea30f74d18730365c875b2978c61f34ce2",
+  "sdkSha": "d8bb939408aa4d2be7df0161748edb52ebf3b1fb",
+  "workerName": "clawrouter-edge-proof",
+  "upstreamWorkerName": "clawrouter-upstream-proof",
+  "policyKvNamespace": "clawrouter-edge-proof-policy",
+  "queueName": "clawrouter-edge-proof-usage",
+  "queueDlqName": "clawrouter-edge-proof-usage-dlq",
+  "compatibilityDate": "2026-06-05",
+  "compatibilityFlags": ["enable_request_signal"],
+  "excluded": ["production", "fakeco", "assets", "r2", "crons", "containers", "large-http", "vendor-credentials"],
+  "limits": { "cases": 8, "callsPerCase": 2, "maximumAdmittedRequests": 16, "requestBytes": 8192, "responseBytes": 32768, "producerMs": 10000, "runMs": 600000, "recordsPerRequest": 256 }
+}

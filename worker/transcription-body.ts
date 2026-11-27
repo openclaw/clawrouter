@@ -1,6 +1,6 @@
 import { HttpOperation } from "./http-operation.ts";
 import { inputRetirement } from "./input-retirement.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Router envelope, deliberately <= the vendor's 25 MB file limit. These are
 // transport/memory limits, NOT audio duration or billable-token bounds.

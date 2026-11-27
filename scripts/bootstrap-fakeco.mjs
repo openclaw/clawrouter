@@ -9,12 +9,8 @@ import {
   fakecoAccessServiceTokenIds,
   verifyPolicyKvNamespaceTarget,
 } from "./deployment-profile.mjs";
-import {
-  buildProviderSmokePlan,
-  compileProviderSnapshot,
-  liveProviderList,
-  selectLiveProviderPlans,
-} from "./provider-smoke-plan.mjs";
+import { buildProviderSmokePlan, liveProviderList, selectLiveProviderPlans } from "./provider-smoke-planning.mjs";
+import { compileProviderSnapshot } from "./provider-smoke-plan.mjs";
 import {
   smokeReadinessTimeoutMs,
   waitForHealth,

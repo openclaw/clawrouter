@@ -1,4 +1,5 @@
-import { effectiveBudgetPolicy } from "./budget-overrides.ts";
+import { admitIdentity, admittedEffectivePolicy, identityPlan } from "./identity-admission.ts";
+import { PolicyCollection, admitEffectivePolicies, admitPolicyIds, policyCollectionFailure } from "./policy-collection.ts";
 import { recordAdmissionDuration } from "./admission-timing.ts";
 import { policyAllowsModel } from "./policy-models.ts";
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
@@ -27,6 +28,15 @@ interface AccessJwtPayload {
 export type AccessVerification = LocalSessionVerification | { readonly kind: "cloudflare_access"; readonly email: string; readonly expiresAtMs: number };
 const verifiedSessions = new WeakMap<AccessSession, AccessVerification>();
 const verifiedIdentities = new WeakMap<AuthorizedIdentity, AccessVerification>();
+// Reporting capabilities retain only digests, never cookies/assertions. This is
+// provenance from the existing successful verifier, not a second auth policy.
+const usageBindings = new WeakMap<AccessSession, string>();
+export async function verifiedUsageBinding(session: AccessSession): Promise<{actor:string;sessionBinding:string}|null> {
+  const local = localSessionVerification(session);
+  const sessionBinding = local ? await sha256Hex(JSON.stringify([session.auth,session.email,session.subject,session.role,local.sessionSha256])) : usageBindings.get(session);
+  if (!sessionBinding) return null;
+  return {actor:await sha256Hex(JSON.stringify([session.auth,session.email,session.subject,session.role])),sessionBinding};
+}
 export function accessIdentityVerification(identity: AuthorizedIdentity): AccessVerification | undefined { return verifiedIdentities.get(identity); }
 
 export async function verifiedAccessSession(request: Request, env: Env): Promise<AccessSession | null> {
@@ -74,10 +84,12 @@ async function cloudflareAccessSession(request: Request, env: Env): Promise<Acce
   };
   currentCaller(request);
   verifiedSessions.set(session, Object.freeze({ kind: "cloudflare_access", email, expiresAtMs: payload.exp! * 1000 }));
+  usageBindings.set(session, await sha256Hex(JSON.stringify([session.auth,email,session.subject,role,assertion])));
+  currentCaller(request);
   return session;
 }
 
-export async function accessIdentity(request: Request, env: Env, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response> {
+export async function accessIdentity(request: Request, env: Env, providerId?: string, requirement?: import("./grant-compatibility").GrantRequirement): Promise<AuthorizedIdentity | Response> {
   const started = performance.now();
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
@@ -86,7 +98,7 @@ export async function accessIdentity(request: Request, env: Env, providerId?: st
   return identity;
 }
 
-export async function accessSessionIdentity(session: AccessSession, env: Env, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response> {
+export async function accessSessionIdentity(session: AccessSession, env: Env, providerId?: string, requirement?: import("./grant-compatibility").GrantRequirement): Promise<AuthorizedIdentity | Response> {
   const started = performance.now();
   const matching = (await sessionPolicies(session, env)).filter((entry) => !providerId || !entry.policy.providers.length || entry.policy.providers.includes(providerId));
   if (!matching.length) return errorResponse("access_policy_required", "this identity has no active access policy", 403);
@@ -103,22 +115,34 @@ export async function accessSessionIdentity(session: AccessSession, env: Env, pr
 }
 
 export function sessionPolicyIdentity(session: AccessSession, entry: AccessPolicyEntry): AuthorizedIdentity {
+  admitIdentity(entry);
+  identityPlan().object(0, field => {
+    for (const key in entry) if (Object.hasOwn(entry, key) && !["credentialId", "principalId", "authType", "contentRetentionDisabled"].includes(key)) field(key, entry[key as keyof AccessPolicyEntry]);
+    field("credentialId", null); field("principalId", session.email); field("authType", "access"); field("contentRetentionDisabled", session.contentRetentionDisabled);
+  });
   const identity: AuthorizedIdentity = { ...entry, credentialId: null, principalId: session.email, authType: "access", contentRetentionDisabled: session.contentRetentionDisabled };
+  admitIdentity(identity);
   const proof = verifiedSessions.get(session) ?? localSessionVerification(session);
   if (proof) verifiedIdentities.set(identity, proof);
   return identity;
 }
 
 export async function sessionPolicies(session: AccessSession, env: Env): Promise<AccessPolicyEntry[]> {
+  const collection = new PolicyCollection(session.email, session.groups);
   const bindings = (await resolveBindings(env, [
     { principalType: "user", principalId: session.email },
     ...session.groups.map((group) => ({ principalType: "group" as const, principalId: group })),
-  ])).filter((binding) => binding.enabled).sort((a, b) => a.priority - b.priority);
-  const entries = await resolvePolicies(env, [...new Set(bindings.map((binding) => binding.policyId))]);
+  ], collection)).filter((binding) => binding.enabled).sort((a, b) => a.priority - b.priority);
+  // Bound distinct referenced IDs before allocating the lookup maps/sets.
+  const ids: string[] = [];
+  for (const binding of bindings) if (!ids.includes(binding.policyId)) { if (ids.length === 2048) throw policyCollectionFailure("limit"); ids.push(binding.policyId); }
+  admitPolicyIds(ids);
+  const entries = await resolvePolicies(env, ids, collection);
+  admitEffectivePolicies(entries, ids, session.budgetOverrides);
   const byId = new Map(entries.map((entry) => [entry.policyId, entry]));
-  return [...new Set(bindings.map((binding) => binding.policyId))].flatMap((id) => {
+  return ids.flatMap((id) => {
     const entry = byId.get(id);
-    return entry?.policy.enabled ? [{ ...entry, policy: effectiveBudgetPolicy(id, entry.policy, session.budgetOverrides) }] : [];
+    return entry?.policy.enabled ? [{ ...entry, policy: admittedEffectivePolicy(id, entry.policy, session.budgetOverrides) }] : [];
   });
 }
 
@@ -135,7 +159,7 @@ export async function authorizeAdmin(request: Request, env: Env): Promise<Access
   const actual = token && expected ? await sha256Hex(token) : null;
   currentCaller(request);
   if (!actual || !expected || !safeEqual(actual, expected)) return errorResponse("admin_unauthorized", "administrator authentication required", 401);
-  return {
+  const tokenSession: AccessSession = {
     authenticated: true,
     auth: "admin_token",
     role: "admin",
@@ -145,6 +169,10 @@ export async function authorizeAdmin(request: Request, env: Env): Promise<Access
     groups: [],
     contentRetentionDisabled: true,
   };
+  // Deliberately credential-wide: admin tokens have no finer human session.
+  usageBindings.set(tokenSession, await sha256Hex(JSON.stringify(['admin_token','admin',actual])));
+  currentCaller(request);
+  return tokenSession;
 }
 
 export function publicSession(session: AccessSession): Omit<AccessSession, "contentRetentionDisabled"> {

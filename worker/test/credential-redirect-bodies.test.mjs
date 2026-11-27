@@ -1,4 +1,4 @@
-import "../../test/helpers/typescript-resolver.mjs";
+import "../../scripts/typescript-resolver.mjs";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import test from "node:test";
@@ -6,7 +6,7 @@ import test from "node:test";
 // OAuth's browser identity/provider fixture supplies configuration only. Fetch
 // is mocked here solely to observe body cancellation; workerd covers real egress.
 registerHooks({ resolve(specifier, context, nextResolve) {
-  if (context.parentURL === new URL("../oauth.ts", import.meta.url).href && ["./access", "./authority", "./providers"].includes(specifier)) {
+  if (context.parentURL === new URL("../oauth.ts", import.meta.url).href && ["./access", "./authority", "./provider-catalog"].includes(specifier)) {
     return { shortCircuit: true, url: new URL("./oauth-token-fetch.mocks.mjs", import.meta.url).href };
   }
   return nextResolve(specifier, context);

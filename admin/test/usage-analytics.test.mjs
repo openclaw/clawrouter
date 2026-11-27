@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { niceChartMaximum, providerChartRows, syntheticUsageTimeline, usageDayMs, usageEventGroups, usageTimeline } from "../src/usage-analytics.ts";
+import { niceChartMaximum, providerChartRows, usageDayMs, usageEventGroups, usageTimeline } from "../src/usage-analytics.ts";
 
 const summary = { requestCount: 10, successCount: 9, errorCount: 1, inputTokens: 80, outputTokens: 20, totalTokens: 100, actualCostMicros: 500 };
 
@@ -37,16 +37,6 @@ test("chart maximum rounds to readable tick intervals", () => {
   assert.equal(niceChartMaximum(1), 4);
   assert.equal(niceChartMaximum(11), 16);
   assert.equal(niceChartMaximum(1_284), 1_600);
-});
-
-test("synthetic usage timelines preserve their scoped summary totals", () => {
-  const timeline = syntheticUsageTimeline(Date.UTC(2026, 5, 24, 18), summary);
-  assert.equal(timeline.length, 30);
-  assert.equal(timeline.reduce((total, point) => total + point.requestCount, 0), summary.requestCount);
-  assert.equal(timeline.reduce((total, point) => total + point.successCount, 0), summary.successCount);
-  assert.equal(timeline.reduce((total, point) => total + point.errorCount, 0), summary.errorCount);
-  assert.equal(timeline.reduce((total, point) => total + point.totalTokens, 0), summary.totalTokens);
-  assert.equal(timeline.reduce((total, point) => total + point.actualCostMicros, 0), summary.actualCostMicros);
 });
 
 test("compound Fusion calls collapse into one request with aggregate cost and wall time", () => {
@@ -103,6 +93,24 @@ test("compound summaries preserve missing timing, fallback sizes and stable call
   assert.equal(untimed.durationMs, null);
 });
 
+test("Other providers keeps the known lower bound separate from an unknown unpriced total", () => {
+  const row = { provider: "first", requestCount: 3, successCount: 2, errorCount: 1, totalTokens: 6, actualCostMicros: 10 };
+  const missing = { ...row, provider: "legacy" };
+  const partial = { ...row, provider: "partial", unpricedRequestCount: 2 };
+  for (const tail of [[missing, partial], [partial, missing]]) {
+    const [first, other] = providerChartRows([row, ...tail], 2);
+    assert.equal(first, row);
+    assert.equal(other.unpricedRequestCount, undefined);
+    assert.equal(other.minimumUnpricedCount, 2);
+    assert.equal(other.requestCount, 6);
+    assert.equal(other.errorCount, 2);
+    assert.equal(other.actualCostMicros, 20);
+  }
+  const [, other] = providerChartRows([row, missing, { ...missing, provider: "second legacy" }], 2);
+  assert.equal(other.unpricedRequestCount, undefined);
+  assert.equal(other.minimumUnpricedCount, 0);
+});
+
 test("unavailable prices remain distinct from known zero and mixed accounted totals", () => {
   const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", provider: "openai", occurred_at_ms: 1_000, actual_cost_micros: 0, reserved_cost_micros: 0, status: "success" };
   const [unknown, knownZero, mixed] = usageEventGroups([
@@ -125,6 +133,4 @@ test("unavailable prices remain distinct from known zero and mixed accounted tot
   assert.equal(other.provider, "other-providers");
   assert.equal(other.unpricedRequestCount, 2);
   assert.equal(other.actualCostMicros, 10);
-  const synthetic = syntheticUsageTimeline(Date.now(), { ...summary, unpricedRequestCount: 3 });
-  assert.equal(synthetic.reduce((total, day) => total + day.unpricedRequestCount, 0), 3);
 });

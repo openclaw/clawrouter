@@ -1,6 +1,6 @@
 import type { ManagedFileAdapter, ManagedFileAction, ManagedFileDescriptor, ManagedFileState } from "./managed-lifecycle-types.ts";
 import { openRouterVideoFiles } from "./managed-openrouter-video-files.ts";
-import { exactMediaParams } from "./managed-media-json.ts";
+import { exactMediaParams } from "./media-wire.ts";
 import { googleOmniVideoModel } from "./managed-google-omni.ts";
 import { googleOmniApiBase, googleOmniEnvelopeBytes, googleOmniFileName, googleOmniVideos,
   prepareGoogleOmniFileControl, readGoogleOmniFileState, readGoogleOmniFile } from "./provider-google-omni-files.ts";

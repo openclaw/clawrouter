@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { prepareNativeBasetenSystemOne } = await import("../native-baseten-systemone.ts");
 const { BASETEN_SYSTEMONE_MODELS: models } = await import("../provider-baseten-systemone.ts");
 const { basetenSystemOneRequest: input, basetenSystemOneResponse: output } = await import("./baseten-systemone-fixtures.ts");
@@ -50,8 +50,9 @@ for (const model of models) test(`native Baseten wrapper binds ${model} without 
 
 test("native Baseten wrapper leaves unrelated formats untouched", () => {
   for (const format of ["openai.decisions", "openai.chat_completions", "liquid.systemone", "typesafe.systemone"]) {
-    const selected = selection(); selected.endpoint.request_format = format; const before = structuredClone(selected);
-    assert.equal(prepareNativeBasetenSystemOne(selected), undefined); assert.deepEqual(selected, before);
+    const selected = selection(); selected.endpoint.request_format = format; const { preparation, ...data } = selected, before = structuredClone(data), keys = Reflect.ownKeys(selected);
+    assert.equal(prepareNativeBasetenSystemOne(selected), undefined);
+    const { preparation: afterPreparation, ...after } = selected; assert.equal(afterPreparation, preparation); assert.deepEqual(Reflect.ownKeys(selected), keys); assert.deepEqual(after, before);
   }
 });
 
@@ -66,8 +67,9 @@ test("native Baseten wrapper rejects mismatched route, provider and selected mod
     s => { s.endpoint.lifecycle = {}; }, s => { s.endpoint.responsesLifecycle = {}; },
     s => { s.endpoint.path_params = ["model"]; }, s => { s.pathParams = { model: "synthetic" }; }, s => { s.endpoint.query = { model: "synthetic" }; },
   ]) {
-    const selected = selection(); change(selected); const before = structuredClone(selected);
-    assert.throws(() => prepareNativeBasetenSystemOne(selected), invalidRoute); assert.deepEqual(selected, before);
+    const selected = selection(); change(selected); const { preparation, ...data } = selected, before = structuredClone(data), keys = Reflect.ownKeys(selected);
+    assert.throws(() => prepareNativeBasetenSystemOne(selected), invalidRoute);
+    const { preparation: afterPreparation, ...after } = selected; assert.equal(afterPreparation, preparation); assert.deepEqual(Reflect.ownKeys(selected), keys); assert.deepEqual(after, before);
   }
 });
 

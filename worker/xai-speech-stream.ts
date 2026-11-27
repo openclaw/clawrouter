@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { prepareXaiSpeech, xaiSpeechFormats } from "./xai-speech.ts";
 
 type Json = Record<string, unknown>;

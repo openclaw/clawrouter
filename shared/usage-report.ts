@@ -20,6 +20,22 @@ export interface UsageMetrics {
   cacheWriteReportedCalls: number;
   reasoningReportedCalls: number;
 }
+/** Ordered fields shared by reporting SQL, reconciliation, and presentation. */
+export function emptyUsageMetrics(): UsageMetrics {
+  return {
+    calls: 0, generationCalls: 0, utilityCalls: 0,
+    successfulCalls: 0, errorCalls: 0, deniedCalls: 0,
+    inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0,
+    inputReportedCalls: 0, outputReportedCalls: 0, cacheReadReportedCalls: 0, cacheWriteReportedCalls: 0, reasoningReportedCalls: 0,
+  };
+}
+export const usageMetricKeys = Object.keys(emptyUsageMetrics()) as Array<keyof UsageMetrics>;
+export const usageTokenFields = [
+  ['inputTokens', 'inputReportedCalls'], ['outputTokens', 'outputReportedCalls'],
+  ['cachedInputTokens', 'cacheReadReportedCalls'], ['cacheWriteInputTokens', 'cacheWriteReportedCalls'],
+  ['reasoningOutputTokens', 'reasoningReportedCalls'],
+] as const satisfies readonly (readonly [keyof UsageMetrics, keyof UsageMetrics])[];
+
 export interface UsageCostSummary {
   lane: UsageCostLane;
   costClass: UsageCostClass;
@@ -81,7 +97,7 @@ export interface PersonalUsageEvent {
   costClass: UsageCostClass;
   reportingCostMicros: number | null;
   estimateReason?: string | null;
-  recordedChargeMicros: number;
+  recordedChargeMicros: number | null;
   costBasis: string | null;
   pricingRef: string | null;
   requestedTier: string | null;
@@ -103,3 +119,37 @@ export interface PersonalUsageEvents {
 // groupBy = model|provider|key; provider/model/key/status/costClass/lane are optional exact filters.
 // /v1/session/usage/report: at most 100 groups, no events.
 // /v1/session/usage/events: limit 1..100 (default 25), opaque cursor, same filters/range.
+
+/** Complete reporting: no private addresses, fences or digests. Existing endpoints
+ * retain their compatibility contract until the separately gated adapters switch. */
+export interface CompleteUsageQuery {
+  from: number; to: number; timezone: string; grain: 'day' | 'minute';
+  groupBy: UsageGroupBy | 'user'; rankBy: 'calls' | 'tokens' | 'recordedAmount'; rankOffset?: number;
+  filters: { user?: string; key?: { kind: 'session' } | { kind: 'credential'; id: string };
+    model?: string; provider?: string; status?: string; lane?: string; costClass?: string };
+}
+export interface UsageAdditives {
+  metrics: UsageMetrics; recordedChargeMicros: number; chargeReportedCalls: number; costs: UsageCostSummary[];
+}
+export interface UsageGroupIdentity { owner: string | null; value: string | null }
+export interface CompleteUsageGroup extends UsageAdditives { identity: UsageGroupIdentity }
+export interface UsageCoverage {
+  authority: 'current_access' | 'admin_retained';
+  scope: 'admin_current_plus_tracked_retired' | 'personal_current_access';
+  discoveredScopeEnumeration: 'complete'; allDiscoveredSourcesAnswered: true; retainedAttributionComplete: true;
+  historicalLocations: 'not_exhaustively_assessed'; formerLocationLateWrites: 'not_bounded';
+  captureAudit: { startedAt: number; verifiedSince: number; captureGapObserved: boolean };
+  effectiveFrom: number; clippedFrom: number | null; capturedBetween: { from: number; to: number };
+}
+export interface CompleteUsageReport extends UsageAdditives {
+  query: CompleteUsageQuery; cut: string | null; coverage: UsageCoverage;
+  buckets: Array<{ start: number; end: number; label: string } & UsageAdditives>;
+  groups: CompleteUsageGroup[]; remainder: UsageAdditives;
+  rank: { exact: true; distinctGroups: number; offset: number; hasMore: boolean };
+}
+export interface CompleteUsageEvent extends PersonalUsageEvent { user: string | null }
+export interface CompleteUsageEvents { events: CompleteUsageEvent[]; nextCursor: string | null; coverage: UsageCoverage }
+export type CompleteUsageOutcome<T> = { kind: 'complete'; value: T } | { kind: 'no_access' }
+  | { kind: 'outside_retained_range'; effectiveFrom: number; requestedTo: number }
+  | { kind: 'restart'; reason: 'authority' | 'mutation' | 'source' | 'expired' | 'evicted' }
+  | { kind: 'unavailable'; reason: 'capacity' | 'source' | 'migration' | 'cancelled' };

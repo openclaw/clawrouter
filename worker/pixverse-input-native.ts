@@ -12,7 +12,8 @@ import { managedPaths } from "./managed-routes.ts";
 import { backgroundCall } from "./http-background.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
-import { errorResponse, HttpError } from "./utils.ts";
+import { errorResponse } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Registered multipart ingress only. Vendor JSON img_id preparation and generic
 // manifest JSON routes never enter this profile or gain input-receipt authority.

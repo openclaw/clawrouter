@@ -1,4 +1,5 @@
 import { type Dispatch, type SetStateAction, useCallback, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { consoleStatusPresentation } from "../status-display";
 import { adminViews, emptySession, initialViewFromPath, viewPaths } from "../ui-config";
 import { isLocalDemoAllowed } from "../ui-helpers";
@@ -23,6 +24,8 @@ export function useSession() {
   const [demoMode, setDemoMode] = useState(false);
   const [scopeEpoch, setScopeEpoch] = useState(0);
   const scopeRef = useRef<SessionScope>({ origin: gatewayOrigin, demo: false, session: emptySession, epoch: 0 });
+  // History gets opaque keys, not service or account details. One key per launched service per scope.
+  const catalogFocus = useRef({ epoch: -1, byService: new Map<string, string>() });
   const statusPresentation = useMemo(() => consoleStatusPresentation(status, demoMode, false, refreshing), [demoMode, status, refreshing]);
   const busy = statusPresentation.tone === "pending";
 
@@ -73,6 +76,25 @@ export function useSession() {
     setView(nextView);
     const nextPath = viewPaths[nextView];
     if (window.location.pathname === nextPath) return;
+    if (view === "catalog" && !replace) {
+      const state = window.history.state ?? {};
+      const button = document.activeElement;
+      const service = nextView === "playground" && button instanceof HTMLButtonElement && button.matches(":focus-visible")
+        ? button.dataset.catalogPlayService : undefined;
+      if (service) {
+        const epoch = scopeRef.current.epoch;
+        if (catalogFocus.current.epoch !== epoch) catalogFocus.current = { epoch, byService: new Map() };
+        const keys = catalogFocus.current.byService;
+        const key = keys.get(service) ?? crypto.getRandomValues(new Uint32Array(4)).join("-");
+        keys.set(service, key);
+        window.history.replaceState({ ...state, catalogLaunchFocus: key }, "");
+      } else if (state.catalogLaunchFocus) {
+        // Leaving the same history entry a different way must not resurrect an earlier launch.
+        const updated = { ...state };
+        delete updated.catalogLaunchFocus;
+        window.history.replaceState(updated, "");
+      }
+    }
     const nextUrl = `${nextPath}${window.location.search}${window.location.hash}`;
     if (replace) window.history.replaceState(null, "", nextUrl);
     else window.history.pushState(null, "", nextUrl);
@@ -84,7 +106,24 @@ export function useSession() {
   }
 
   function syncViewFromPath() {
-    setView(initialViewFromPath());
+    const next = initialViewFromPath();
+    const focused = document.activeElement;
+    // Follow Back/Forward only if focus was tracking the departing page in the nav.
+    const nav = focused?.matches('button[data-console-view][aria-current="page"]') ? focused.closest("nav") : null;
+    const key = window.history.state?.catalogLaunchFocus;
+    if (next === "catalog" && key && !nav && catalogFocus.current.epoch === scopeRef.current.epoch) {
+      // This popstate listener runs outside React. Remount Catalog before looking up the action.
+      flushSync(() => setView(next));
+      const launch = document.querySelector<HTMLButtonElement>("button[data-catalog-play-service]:enabled");
+      const service = launch?.dataset.catalogPlayService;
+      if (document.activeElement === document.body && launch && service && catalogFocus.current.byService.get(service) === key) {
+        launch.focus({ preventScroll: true });
+      }
+      return;
+    }
+    setView(next);
+    const target = nav?.querySelector<HTMLButtonElement>(`button[data-console-view="${next}"]`);
+    if (target && target !== focused) target.focus();
   }
 
   return {

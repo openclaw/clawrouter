@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "study": "atcoder-cheap-repair-probe-v1",
+  "status": "audited",
+  "sourceSha": "fe6b20e1c6d0ade7716016ac326ec75aca179908",
+  "protocolSha256": "437b714c37f84cfbb26b4c44ff037ac10024b20c99b4ac388c6119c8db98cef4",
+  "resultSha256": "5735ff5e1ef4a22bbc1e6634b0ea815b8925dae3155f8faea9996c1e72a018bf",
+  "auditSha256": "6109c5eeaddada2d53631b0b24fb9d5d8ebb1570b0dd7d756ec34874befbcec9",
+  "model": "openai/gpt-6-luna",
+  "draftMaxOutputTokens": 1024,
+  "reasoningEffort": "none",
+  "calls": 6,
+  "totalCostMicros": 1540,
+  "summary": {
+    "fresh": {
+      "passed": 2,
+      "costMicros": 746
+    },
+    "repair": {
+      "passed": 0,
+      "costMicros": 794
+    }
+  },
+  "qualifiedProductionGain": false,
+  "records": [
+    {
+      "id": "lcb-1761b861a0dbcbd5",
+      "arm": "fresh",
+      "disposition": "complete",
+      "costMicros": 167,
+      "modelElapsedMs": 2080.5514160000002,
+      "passed": true,
+      "publicPassed": true,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-1761b861a0dbcbd5",
+      "arm": "repair",
+      "disposition": "complete",
+      "costMicros": 194,
+      "modelElapsedMs": 2027.0320420000003,
+      "passed": false,
+      "publicPassed": false,
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 50,
+        "failures": 0,
+        "errors": 50,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-34a980a7d516da5e",
+      "arm": "repair",
+      "disposition": "complete",
+      "costMicros": 372,
+      "modelElapsedMs": 2891.417875,
+      "passed": false,
+      "publicPassed": false,
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 34,
+        "failures": 17,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 3
+      }
+    },
+    {
+      "id": "lcb-34a980a7d516da5e",
+      "arm": "fresh",
+      "disposition": "complete",
+      "costMicros": 408,
+      "modelElapsedMs": 5146.901792000001,
+      "passed": false,
+      "publicPassed": false,
+      "full": {
+        "valid": false,
+        "passed": false,
+        "tests": 33,
+        "failures": 15,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 3
+      }
+    },
+    {
+      "id": "lcb-17c091672360f911",
+      "arm": "fresh",
+      "disposition": "complete",
+      "costMicros": 171,
+      "modelElapsedMs": 2147.957124999999,
+      "passed": true,
+      "publicPassed": true,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17c091672360f911",
+      "arm": "repair",
+      "disposition": "complete",
+      "costMicros": 228,
+      "modelElapsedMs": 2161.0073749999974,
+      "passed": false,
+      "publicPassed": false,
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 51,
+        "failures": 46,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    }
+  ],
+  "limitations": [
+    "All three complete public-rejected drafts were selected from the preceding exposed-task pilot. The fourth rejected draft was truncated and had no code to repair.",
+    "One sample per arm; this is a cheap-model repair diagnostic, not an executed multi-model cascade or independent task confirmation.",
+    "Fresh and repair share the original problem, model, effort, output cap and graders. Repair additionally receives the rejected code and public acceptance feedback.",
+    "No private feedback was supplied. Model-only timing is not end-to-end workflow latency."
+  ]
+}

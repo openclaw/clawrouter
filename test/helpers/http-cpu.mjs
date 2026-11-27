@@ -11,6 +11,28 @@ import { sha256Hex } from '../../worker/utils.ts';
 import { clearHotCaches, pendingBackgroundWork, setHotCacheClock } from '../../worker/hot-cache.ts';
 const { default: handler } = await import('../../worker/index.ts');
 
+export async function consumeCpuArchive(body) {
+  if (typeof body === 'string') return;
+  const reader = body.getReader(), cleanup = [];
+  let bytes = 0, hasPrimary = false, primary;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      assert.ok(next.value instanceof Uint8Array);
+      assert.ok(next.value.buffer.byteLength <= 32768, 'bounded original archive backing');
+      bytes += next.value.byteLength;
+      assert.ok(bytes <= 8 * 1024 * 1024 + 65536, 'complete admitted archive bytes');
+    }
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    try { await reader.cancel(); } catch (error) { cleanup.push(error); }
+    try { reader.releaseLock(); } catch (error) { cleanup.push(error); }
+  }
+  if (cleanup.length) throw new AggregateError(hasPrimary ? [primary, ...cleanup] : cleanup, 'CPU archive cleanup failed');
+  if (hasPrimary) throw primary;
+}
+
 export async function runHttpCpuCase(t, { provider, credentialBinding, createBody, path, headers = {}, upstream, repetitions, warmups, retention, label, out, assertUsage }) {
   clearHotCaches();
   // Freeze cache age so scheduling cannot turn CPU samples into refresh tests.
@@ -24,7 +46,7 @@ export async function runHttpCpuCase(t, { provider, credentialBinding, createBod
     env.BUDGET_LEDGER = { idFromName: name => name, get: () => ({ fetch: async (url, init) =>
       Response.json(new URL(url).pathname === '/status' ? { spentMicros: 0, remainingMicros: 1e12 } : { charged: true, chargeId: JSON.parse(init.body).chargeId }) }) };
     env.USAGE_QUEUE = { send: async event => { events.push(event); } };
-    env.CONTENT_ARCHIVE = { put: async (_key, bytes) => { assert.equal(typeof bytes, 'string'); archiveWrites++; } };
+    env.CONTENT_ARCHIVE = { put: async (_key, body) => { await consumeCpuArchive(body); archiveWrites++; } };
     const authority = createGrantAuthority(undefined, env);
     env.ACCESS_CONTROL = { idFromName: name => name, get: () => ({ fetch: authority.fetch }) };
     await authorityCall(env, '/policies/initialize-all', [{ policyId: 'maintainer_access', policy: {

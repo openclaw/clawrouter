@@ -1,5 +1,82 @@
+import { openLegacyUsage } from "./fixtures/legacy-usage";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AccessPolicy, AdminBootstrapResponse, AdminUsageRow, PolicyBinding, UsageSnapshot } from "../src/ui-types";
+
+for (const theme of ["light", "dark"] as const) {
+  test(`policy budgets reject inexact dollars before a keyboard save (${theme})`, async ({ page }) => {
+    const state = await fixture(page);
+    await page.emulateMedia({ colorScheme: theme });
+    await open(page);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    const budget = (period: string) => page.getByRole("textbox", { name: new RegExp(`^${period} budget`) });
+    const alert = page.getByRole("tabpanel", { name: /^Policies/ }).getByRole("alert");
+    await budget("daily").fill("0.000001");
+    await budget("monthly").fill("0.0000004");
+    await save(page).press("Enter");
+    await expect(alert).toContainText(/Monthly budget.*\$0\.000001/);
+    await expect(alert).toBeInViewport();
+    await expect(budget("monthly")).toBeFocused();
+    await expect(budget("monthly")).toHaveAttribute("aria-invalid", "true");
+    await expect(budget("monthly")).toHaveAccessibleDescription(/Monthly budget.*\$0\.000001/);
+    await expect(budget("monthly")).toHaveValue("0.0000004");
+    await expect(budget("daily")).toHaveValue("0.000001");
+    await expect(budget("weekly")).toHaveValue("");
+    expect(state.writes).toHaveLength(0);
+
+    await budget("monthly").fill(".00000100");
+    await budget("daily").fill("1.00000100000000001");
+    await budget("daily").press("Enter");
+    await expect(alert).toContainText(/Daily budget.*\$0\.000001/);
+    await expect(budget("daily")).toHaveValue("1.00000100000000001");
+    expect(state.writes).toHaveLength(0);
+
+    await budget("daily").fill("0");
+    await budget("weekly").fill("9007199254.740992");
+    await save(page).press("Enter");
+    await expect(alert).toContainText(/Weekly budget.*9,007,199,254\.740991/);
+    await expect(budget("weekly")).toBeFocused();
+    expect(state.writes).toHaveLength(0);
+
+    await budget("weekly").fill("");
+    await budget("weekly").press("Enter");
+    await expect.poll(() => state.writes.length).toBe(1);
+    expect(state.writes[0].request().postDataJSON()).toMatchObject({ monthlyBudgetMicros: 1, dailyBudgetMicros: 0, weeklyBudgetMicros: null });
+    await state.commit(0);
+    await expect(alert).toHaveCount(0);
+    await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+  });
+}
+
+test("a policy with fractional routing percentages saves from the keyboard without rounding", async ({ page }) => {
+  const state = await fixture(page);
+  Object.assign(state.policies[0].grantRouting, { switchAtUsedPercent: 87.5, hysteresisPercent: 2.25 });
+  await open(page);
+  const threshold = page.getByRole("spinbutton", { name: "switch at used (%)" });
+  const margin = page.getByRole("spinbutton", { name: "switch margin (%)" });
+  // A non-threshold strategy still round-trips these settings on unrelated saves.
+  await expect(threshold).toBeDisabled();
+  await expect(threshold).toHaveValue("87.5");
+  await tenant(page).fill("research");
+  await tenant(page).press("Enter");
+  await expect.poll(() => state.writes.length).toBe(1);
+  expect(state.writes[0].request().postDataJSON()).toMatchObject({ tenantId: "research", grantRouting: { switchAtUsedPercent: 87.5, hysteresisPercent: 2.25 } });
+  await state.commit(0);
+  await expect(row(page, "policy_a").locator('[data-label="tenant"]')).toHaveText("research");
+
+  await page.getByRole("combobox", { name: "selection", exact: true }).selectOption("threshold");
+  await threshold.fill("99.75");
+  await margin.fill("100.1");
+  await save(page).press("Enter");
+  await expect(margin).toBeFocused();
+  expect(await margin.evaluate(input => (input as HTMLInputElement).validity.rangeOverflow)).toBe(true);
+  expect(state.writes).toHaveLength(1);
+  await margin.fill("0.125");
+  await margin.press("Enter");
+  await expect.poll(() => state.writes.length).toBe(2);
+  expect(state.writes[1].request().postDataJSON().grantRouting).toMatchObject({ strategy: "threshold", switchAtUsedPercent: 99.75, hysteresisPercent: 0.125 });
+  await state.commit(1);
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+});
 
 test("request prices display dollars and save existing and edited values as microdollars", async ({ page }) => {
   const state = await fixture(page);
@@ -424,6 +501,81 @@ test("typing the original tenant after a server refresh stays unsaved through an
   await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
 });
 
+test("a new binding keeps its draft when its target disappears and only saves a chosen replacement", async ({ page }) => {
+  const state = await fixture(page);
+  await open(page);
+  await page.getByRole("tab", { name: /^Bindings/ }).click();
+  await page.getByRole("button", { name: "New binding", exact: true }).click();
+  const target = page.getByRole("combobox", { name: "policy", exact: true });
+  const principal = page.getByRole("textbox", { name: "principal", exact: true });
+  const submit = page.getByRole("button", { name: "Save binding", exact: true });
+  await principal.fill("ops-team");
+  await target.selectOption("policy_b");
+  state.policies = [{ ...state.policies[0], enabled: false }];
+  await focus(page, state);
+
+  await expect(target.locator("option:checked")).toHaveText("policy_b · unavailable");
+  await expect(submit).toBeDisabled();
+  await page.getByRole("combobox", { name: "state", exact: true }).selectOption("disabled");
+  await expect(submit).toBeDisabled();
+  await page.getByRole("combobox", { name: "state", exact: true }).selectOption("enabled");
+  await expect(principal).toHaveValue("ops-team");
+  await expect(page.getByText("Choose an available policy to save this binding.")).toBeVisible();
+  await target.selectOption({ label: "policy_a · disabled" });
+  await expect(submit).toBeEnabled();
+  await submit.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => state.bindings).toEqual([{ policyId: "policy_a", principalType: "group", principalId: "ops-team", enabled: true, priority: 100 }]);
+  await expect(row(page, "ops-team").locator('[data-label="state"]')).toHaveText("policy disabled");
+});
+
+for (const restored of [false, true]) {
+  test("an exact disable reaches the server when the locally unavailable policy is " + (restored ? "restored" : "still missing"), async ({ page }) => {
+    const state = await fixture(page);
+    const removed = state.policies.pop()!;
+    await open(page);
+    await page.getByRole("tab", { name: /^Bindings/ }).click();
+    const target = page.getByRole("combobox", { name: "policy", exact: true });
+    const status = page.getByRole("combobox", { name: "state", exact: true });
+    const priority = page.getByRole("textbox", { name: "priority", exact: true });
+    const saveBinding = page.getByRole("button", { name: "Save binding", exact: true });
+    const savedState = row(page, "maintainers").locator('[data-label="state"]');
+    await expect(target.locator("option:checked")).toHaveText("policy_b · unavailable");
+    await expect(saveBinding).toBeDisabled();
+    // Authority may change after this browser read. Do not refresh the local inventory.
+    if (restored) state.policies.push(removed);
+    await status.selectOption("disabled");
+    await priority.fill("7");
+    await expect(saveBinding).toBeDisabled();
+    await saveBinding.evaluate((button: HTMLButtonElement) => button.form!.requestSubmit());
+    expect(state.bindingWrites).toEqual([]);
+    await priority.fill("100");
+    await expect(saveBinding).toBeEnabled();
+    if (restored) {
+      await saveBinding.focus();
+      await page.keyboard.press("Enter");
+    } else {
+      // Even duplicate submits while the response is in flight send one request.
+      await saveBinding.evaluate((button: HTMLButtonElement) => { button.form!.requestSubmit(); button.form!.requestSubmit(); });
+    }
+    const expected = { policyId: "policy_b", principalType: "group", principalId: "maintainers", enabled: false, priority: 100 };
+    await expect.poll(() => state.bindingWrites).toEqual([expected]);
+    if (restored) {
+      await expect(savedState).toHaveText("disabled");
+      await expect(target.locator("option:checked")).toHaveText("policy_b");
+      await expect(page.locator(".inspector .inlineError")).toHaveCount(0);
+    } else {
+      await expect(page.locator(".inspector .inlineError")).toContainText("bound policy does not exist");
+      await expect(savedState).toHaveText("unavailable");
+      await expect(status).toHaveValue("disabled");
+      await expect(target.locator("option:checked")).toHaveText("policy_b · unavailable");
+    }
+    await focus(page, state);
+    await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-09-01T00:01:00.000Z");
+    expect(state.bindingWrites).toEqual([expected]);
+  });
+}
+
 test("sibling saves, failures and refreshes preserve the policy draft and its own error", async ({ page }) => {
   const state = await fixture(page);
   await open(page);
@@ -529,6 +681,7 @@ for (const action of ["Save", "Disable"] as const) {
       await expect.poll(() => state.writes.length).toBe(1);
       state.holdUsage = true;
       await page.getByRole("button", { name: action === "Save" ? "Usage" : "Dashboard", exact: true }).click();
+      if (action === "Save") await openLegacyUsage(page);
       await expect.poll(() => state.ledgers.length).toBe(1);
       expect(state.ledgers[0].body.policies[0]).toMatchObject({ enabled: true, monthlyBudgetMicros: 10_000_000 });
       await page.clock.setFixedTime(new Date("2026-09-01T00:02:00.000Z"));
@@ -557,6 +710,7 @@ for (const action of ["Save", "Disable"] as const) {
       } else {
         await expect(page.locator(".quotaRow").filter({ has: page.getByText("policy_a", { exact: true }) })).toHaveCount(0);
         await page.getByRole("button", { name: "Usage", exact: true }).click();
+        await openLegacyUsage(page);
         await expect(row(page, "policy_a").locator('[data-label="health"]')).toHaveText("revoked");
       }
       expect(state.usageReads).toBe(2);
@@ -574,6 +728,7 @@ for (const outcome of ["success", "bootstrap failure"] as const) {
     await save(page).click();
     await expect.poll(() => state.writes.length).toBe(1);
     await page.getByRole("button", { name: "Usage", exact: true }).click();
+    await openLegacyUsage(page);
     await expect(row(page, "policy_a").locator(".budgetUsage > span > small")).toHaveText(/^\$10\.00(?:\s|$)/);
     await expect(page.locator(".usageFreshness")).toHaveCount(0);
     state.holdUsage = true;
@@ -614,6 +769,7 @@ test("a rejected policy write keeps the pending ledger read and its successful f
   await expect.poll(() => state.writes.length).toBe(1);
   state.holdUsage = true;
   await page.getByRole("button", { name: "Usage", exact: true }).click();
+  await openLegacyUsage(page);
   await expect.poll(() => state.ledgers.length).toBe(1);
   await state.writes[0].fulfill({ status: 503, body: "policy unavailable" });
   await expect(page.locator(".statusBar")).toContainText("policy save failed");
@@ -824,6 +980,7 @@ async function fixture(page: Page) {
   const state = {
     policies, providers, groups: [] as string[], failBinding: false, failBootstrap: false, holdBootstrap: false, holdUsage: false, refreshes: 0, usageReads: 0,
     bindings: [{ policyId: "policy_b", principalType: "group", principalId: "maintainers", enabled: true, priority: 100 }] as PolicyBinding[],
+    bindingWrites: [] as PolicyBinding[],
     writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[],
     ledgers: [] as { route: Route; body: { policies: AdminUsageRow[]; usage: UsageSnapshot } }[],
     async commit(index: number, overrides: Partial<AccessPolicy> = {}) {
@@ -845,8 +1002,10 @@ async function fixture(page: Page) {
     }
     if (path.startsWith("/v1/admin/policies/") && (route.request().method() === "PUT" || (route.request().method() === "POST" && path.endsWith("/revoke")))) { state.writes.push(route); return; }
     if (route.request().method() === "PUT" && path === "/v1/admin/policy-bindings") {
-      if (state.failBinding) { await route.fulfill({ status: 503, json: { error: { message: "binding unavailable" } } }); return; }
       const binding = route.request().postDataJSON() as PolicyBinding;
+      state.bindingWrites.push(binding);
+      if (state.failBinding) { await route.fulfill({ status: 503, json: { error: { message: "binding unavailable" } } }); return; }
+      if (!state.policies.some((policy) => policy.policyId === binding.policyId)) { await route.fulfill({ status: 404, json: { error: { code: "unknown_policy", message: "bound policy does not exist" } } }); return; }
       state.bindings = [binding];
       await route.fulfill({ json: binding });
       return;

@@ -4,7 +4,7 @@ import { jsonBodyStream } from "./json-body.ts";
 import type { RequestCostReceipt } from "./pricing.ts";
 import type { RequestTariff } from "./request-tariff.ts";
 import type { UsageInspection } from "./token-usage.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Internal evidence from a codec-complete native response, bound to the frozen
 // admitted tariff. Neither caller fields nor an upstream invoice populate it.

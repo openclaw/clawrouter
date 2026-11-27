@@ -5,6 +5,11 @@ wire/result fixture is `providers/_fixtures/vydra/jobs.json`. Run
 `node --test worker/test/vydra-jobs.test.mjs` without dependencies. This slice does
 not register provider routes or implement Studio workflow runs.
 
+The `parseVydra*` entry points accept bounded JSON text and check HTTP status.
+Managed responses use the `observeVydra*` entry points after `readMediaJson` has
+checked the response, bounded its bytes and parsed its object. Both paths share
+job and refund validation; the parsed path does not decode the envelope again.
+
 Submit `POST /api/v1/jobs`, retrieve `GET /api/v1/jobs/{id}`, and cancel with
 `DELETE /api/v1/jobs/{id}` at `https://www.vydra.ai` using bearer credentials.
 Pin the original caller/policy/credential/workflow/model lineage and request digest

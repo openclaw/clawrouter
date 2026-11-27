@@ -1,11 +1,12 @@
-import { assertProviderAccess, modelSupportsEndpoint, upstreamAuth } from "./providers.ts";
+import { assertProviderAccess, upstreamAuth } from "./providers.ts"; import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { planBudgetReservation } from "./accounting.ts";
 import { createProxyAccounting } from "./proxy-accounting.ts";
 import { backgroundCall, HttpBackground } from "./http-background.ts";
+import { isAccountingAdmissionFailure } from "./json-body.ts";
 import { continuationScope } from "./http-continuation.ts";
 import { HttpOperation } from "./http-operation.ts";
-import type { BackgroundRecord, ManagedAdmission } from "./background-store.ts";
+import type { BackgroundRecord, ManagedAdmission } from "./background-record.ts";
 import { assertManagedInputLive, inputUnavailable, managedInputMaxBytes, sameManagedInput, type ManagedInputBinding, type ManagedInputReceipt } from "./managed-input-receipt.ts";
 import { assertInputOperationPolicy, encodeInputDispatch, inputBytesDigest, inputPlanDigest, inputRouteDigest } from "./pixverse-input-dispatch.ts";
 import { createPixVerseManagedAdapter, preparePixVerseImagePlan, readPixVerseImageUpload } from "./managed-pixverse.ts";
@@ -13,7 +14,8 @@ import { publicControlAuthorization } from "./response-control-authorization.ts"
 import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
-import { HttpError, randomId, sha256Hex } from "./utils.ts";
+import { randomId, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // The public profile and internal foundation share the same scoped row/outbox.
 export async function allocatePixVerseInput(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity,
@@ -71,6 +73,7 @@ export async function allocatePixVerseInput(request: Request, env: Env, context:
     if (!ack?.allocated || !sameManagedInput(ack.receipt.binding, binding)) inputUnavailable();
     return binding;
   } catch (error) {
+    if (isAccountingAdmissionFailure(error)) throw error;
     // Lost allocation ACK or a concurrent same-key attempt resolves only the
     // already committed row. It never invents a second job or reservation.
     const existing = await lookup();

@@ -136,7 +136,7 @@ test("8192 total physical reads includes empty reads and EOF; 8193 never starts"
   }
 });
 
-test("oversized returned backing, malformed UTF8 and public deadline keep cleanup separate", async () => {
+test("oversized returned backing, malformed UTF8 and successful completion keep cleanup separate", async t => {
   const stream = body(document()), getReader = stream.getReader.bind(stream);
   stream.getReader = options => { const reader = getReader(options); return {
     read: async () => ({ done: false, value: new Uint8Array(new ArrayBuffer(16385), 0, 2) }),
@@ -145,8 +145,33 @@ test("oversized returned backing, malformed UTF8 and public deadline keep cleanu
   const bad = begin(stream); await assert.rejects(bad.result); await bad.retired;
   const malformed = new ReadableStream({ type: "bytes", start(c) { c.enqueue(new Uint8Array([0xff])); c.close(); } });
   const utf = begin(malformed); await assert.rejects(utf.result); await utf.retired;
-  const op = begin(body(document()), { deadlineAt: Date.now() + 30 }); await op.result; await op.retired;
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1000 });
+  const op = begin(body(document()), { deadlineAt: Date.now() + 30 }); await op.result;
+  assert.equal(bodyBudgetCharged(), 96 * MiB);
+  t.mock.timers.tick(30); await op.retired;
   assert.equal(bodyBudgetCharged(), 0); assert.equal(op.snapshot().phase, "retired");
   assert.equal(musicCoverInputLimits.hashPhase + musicCoverInputLimits.slack, 96 * MiB);
   assert.equal(musicCoverInputLimits.remainder.reduce((a, b) => a + b), 655360);
+});
+
+test("public deadline rejects before held read and cancellation retire", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1000 });
+  const read = deferred(), cancel = deferred(), entered = deferred();
+  const stream = body(document()), getReader = stream.getReader.bind(stream); let cancels = 0;
+  stream.getReader = options => {
+    const reader = getReader(options);
+    return {
+      async read(view) { const part = await reader.read(view); entered.resolve(); await read.promise; return part; },
+      async cancel(reason) { cancels++; await reader.cancel(reason); await cancel.promise; },
+      releaseLock() { reader.releaseLock(); },
+    };
+  };
+  const op = begin(stream, { deadlineAt: Date.now() + 30 });
+  try {
+    await entered.promise; t.mock.timers.tick(30); await assert.rejects(op.result, { code: "deadline" });
+    assert.equal(cancels, 1); assert.equal(stream.locked, true); assert.equal(bodyBudgetCharged(), 96 * MiB);
+    cancel.resolve(); await tick(); assert.equal(stream.locked, true); assert.equal(bodyBudgetCharged(), 96 * MiB);
+    read.resolve(); await op.retired;
+    assert.equal(cancels, 1); assert.equal(stream.locked, false); assert.equal(bodyBudgetCharged(), 0);
+  } finally { read.resolve(); cancel.resolve(); await op.discard(); }
 });

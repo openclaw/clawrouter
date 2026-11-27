@@ -1,9 +1,10 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 const { copilotPublicEndpoint, copilotPublicInferenceInput, copilotPublicRelay, CopilotPublicOwner, copilotPublicRegistry, copilotPublicObservation, decodeCopilotPublicObservation } = await import("../copilot-public-proxy.ts");
 const { copilotPrivateCandidate, grantCredentialPresent } = await import("../grant-eligibility.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { HttpOperation } = await import("../http-operation.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
 const { validateSelectedInput } = await import("../proxy-selection.ts");
@@ -14,6 +15,8 @@ const paths = ["/chat/completions", "/responses", "/messages"], capabilities = [
 const profile = { integrationId: "fixture", editorVersion: "Fixture/1", editorPluginVersion: "Fixture/1", userAgent: "Fixture/1", initiator: "agent" };
 function provider() {
   const source = structuredClone(snapshot.providers.find(row => row.id === "openai"));
+  // Reuse the wire template, not OpenAI's provider-specific product identity.
+  delete source.products; delete source.offer_definitions;
   const endpoint = source.endpoints.find(row => row.request_format === formats[0]);
   return { ...source, id: "github-copilot", config_keys: [], optional_config_keys: [], auth: { schemes: [{ type: "oauth", tokenRef: "copilot" }], authorization: null, refresh: null, grantTransports: {} }, routing: { ...source.routing, modelPrefixes: ["github-copilot/"] },
     endpoints: formats.map((format, i) => ({ ...endpoint, id: "api_" + i, path: paths[i], request_format: format, response_format: format,
@@ -78,8 +81,8 @@ test("private owner selection nominates only explicit current policy references 
   const env = { ACCESS_CONTROL: { idFromName: name => name, get: () => ({ async fetch(url, init) {
     assert.equal(new URL(url).pathname, "/grant-pools/resolve"); const body = JSON.parse(init.body);
     assert.ok(body.defaultKeys.every(key => key.startsWith("oauth/fixture/") || key.startsWith("oauth/tenants/default/")));
-    return Response.json({ keys: [], states: {} });
-  } }) }, POLICY_KV: { async get(keys) { assert.ok(keys.length <= 64); requested.push(...keys); return new Map(keys.map(key => [key, records.get(key) ?? null])); } } };
+    return accessBytesResponse(JSON.stringify({ keys: [], states: {} }), "");
+  } }) }, POLICY_KV: { async get(key, type) { assert.equal(type, "stream"); assert.equal(typeof key, "string"); requested.push(key); const value = records.get(key); return value == null ? null : accessBytesResponse(JSON.stringify(value), "").body; } } };
   const routing = { eligibleGrants: { "github-copilot": ["explicit", "../foreign"] } };
   const privateRows = await resolveGrantCandidates("github-copilot", "fixture", "default", "copilot", env, new Set(), routing, undefined, undefined, undefined, true);
   assert.deepEqual(privateRows.available.map(row => row.key), ["oauth/fixture/explicit"]);

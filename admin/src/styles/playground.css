@@ -254,7 +254,9 @@
 }
 
 .composerDock > .inlineNote,
-.composerDock > .inlineError { border-radius: 6px; }
+.composerDock .inlineError { border-radius: var(--radius); }
+
+.playgroundSettingPair input[aria-invalid="true"] { border-color: var(--bad); }
 
 .composerShell {
   overflow: hidden;
@@ -450,6 +452,8 @@
 .requestDrawer pre {
   max-height: 360px;
   border-top: 1px solid var(--line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .inspectorTabs {

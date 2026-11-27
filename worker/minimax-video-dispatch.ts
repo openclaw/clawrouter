@@ -4,18 +4,20 @@ import { miniMaxVideoBindingModel, miniMaxVideoRequiresInline, readMiniMaxVideoB
 import { validateBudgetReservation } from "./accounting.ts";
 import { resolveConnection } from "./authority.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { miniMaxVideoDenied, miniMaxVideoIdentity, miniMaxVideoRequirement } from "./minimax-video-credential.ts";
 import { videoJsonBytes, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { miniMaxApiKeySecret } from "./native-media-credential.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { estimateCost } from "./proxy-accounting.ts";
-import type { GrantRequirement } from "./provider-auth.ts";
+import type { GrantRequirement } from "./grant-compatibility.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import type { AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export async function revalidateMiniMaxVideoOwner(env: Env, auth: AuthorizedIdentity, requirement: GrantRequirement,
   key: string, grant: UpstreamGrant, operation: MiniMaxVideoOperation): Promise<UpstreamGrant> {

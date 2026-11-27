@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -82,7 +83,7 @@ for (const [name, setup, expected] of [
 test('legacy subscription inference retains two authority RPCs and streams JSON before EOF/accounting', async t => {
   const f = await fixture(), key = 'oauth/fixture/anthropic';
   f.records.set(key, { provider: provider.id, kind: 'subscription', enabled: true, credentialStore: 'durable_object', hasAccessToken: true, credentialStatus: 'active', updatedAt: '2026-01-01T00:00:00Z' });
-  f.env.GRANT_CREDENTIALS = { idFromName: name => name, get: () => ({ fetch: async () => Response.json({ grant: { ...f.records.get(key), accessToken: 'synthetic-subscription' }, changed: false, migrated: false }) }) };
+  f.env.GRANT_CREDENTIALS = { idFromName: name => name, get: () => ({ fetch: async () => accessBytesResponse(JSON.stringify({ grant: { ...f.records.get(key), accessToken: 'synthetic-subscription' }, changed: false, migrated: false }), "") }) };
   const eof = Promise.withResolvers(), settlement = Promise.withResolvers();
   f.env.USAGE_QUEUE.send = () => settlement.promise;
   const prefix = '{"content":[{"type":"text","text":"hello"}],';
@@ -122,18 +123,59 @@ test('parsing provider selection first preserves authentication precedence for m
   }
 });
 
-for (const family of ['policies', 'users']) test(`failed ${family} imports cannot mask an incorrect secret`, async t => {
+for (const family of ['policies', 'users']) for (const fault of ['transport', 'staging']) test(`${family} import ${fault} failure preserves authentication and fault classification`, async t => {
   const f = await fixture();
-  t.mock.method(globalThis, 'fetch', () => { throw new Error('unexpected upstream dispatch'); });
-  f.authority.sql.exec(`DELETE FROM ${family === 'policies' ? 'access_policies' : 'access_users'}`);
-  f.authority.sql.exec('DELETE FROM policy_binding_meta WHERE meta_key = ?', `${family}_global_initialized`);
-  f.env.POLICY_KV.get = async () => { throw new Error('synthetic unavailable KV'); };
-  for (const [authorization, expected, code] of [
-    ['Bearer clawrouter-live-fixture-incorrect-secret', 401, 'invalid_proxy_key'],
-    [headers.authorization, 500, 'internal_error'],
+  const report = value => { try { if (typeof t.log === 'function') t.log('admission-fault ' + JSON.stringify(value)); } catch {} };
+  const table = family === 'policies' ? 'access_policies' : 'access_users';
+  const id = family === 'policies' ? 'fixture' : f.credential.principalId;
+  const key = family === 'policies' ? `policies/${id}` : `access/users/${id}`;
+  const marker = `${family}_global_initialized`, reads = [], stages = [];
+  let dispatches = 0;
+  t.mock.method(globalThis, 'fetch', () => { dispatches++; throw new Error('unexpected upstream dispatch'); });
+  f.authority.sql.exec(`DELETE FROM ${table}`);
+  f.authority.sql.exec('DELETE FROM policy_binding_meta WHERE meta_key = ?', marker);
+  const get = f.env.POLICY_KV.get;
+  t.mock.method(f.env.POLICY_KV, 'get', function (readKey, type) {
+    reads.push({ key: readKey, type });
+    if (fault === 'transport' && readKey === key) throw new Error('synthetic unavailable KV');
+    return get.call(this, readKey, type);
+  });
+  if (fault === 'staging') {
+    f.records.set(key, family === 'policies' ? f.policy : { enabled: true });
+    const stage = f.authority.object.stageIdentityRecord;
+    t.mock.method(f.authority.object, 'stageIdentityRecord', function (...args) {
+      if (args[1] === table) {
+        stages.push({ table: args[1], key: args[4], marker: args[6] });
+        throw new Error('synthetic staging failure');
+      }
+      return stage.apply(this, args);
+    });
+  }
+  t.after(async () => {
+    const failures = (await Promise.allSettled(f.pending)).filter(result => result.status === 'rejected');
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'admission fixture background failed');
+  });
+  for (const [authorization, expected, code, attempts] of [
+    ['Bearer clawrouter-live-fixture-incorrect-secret', 401, 'invalid_proxy_key', 0],
+    [headers.authorization, fault === 'transport' ? 503 : 500, fault === 'transport' ? 'identity_admission_unavailable' : 'internal_error', 1],
   ]) {
     const response = await worker.fetch(new Request('https://fixture/v1/messages', { method: 'POST', headers: { ...headers, authorization }, body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', messages: [], max_tokens: 16 }) }), f.env, f.context);
-    assert.equal(response.status, expected); assert.equal(response.headers.get('x-clawrouter-error-code'), code); await response.text();
+    const text = await response.text();
+    const observedCode = response.headers.get('x-clawrouter-error-code');
+    report({ family, fault, branch: attempts ? 'valid' : 'wrong', kvCount: reads.length, stageCount: stages.length, status: response.status,
+      code: ['invalid_proxy_key', 'identity_admission_unavailable', 'internal_error'].includes(observedCode) ? observedCode : 'unexpected' });
+    assert.equal(response.status, expected); assert.equal(response.headers.get('x-clawrouter-error-code'), code);
+    const envelope = JSON.parse(text);
+    assert.equal(envelope.type, 'error');
+    assert.equal(envelope.error.type, expected === 401 ? 'authentication_error' : 'api_error');
+    assert.equal(typeof envelope.error.message, 'string'); assert.ok(envelope.error.message.length > 0);
+    assert.equal(Object.hasOwn(envelope.error, 'code'), false);
+    assert.doesNotMatch(text, /synthetic unavailable KV|synthetic staging failure/);
+    assert.deepEqual(reads, attempts ? [{ key, type: 'stream' }] : []);
+    assert.deepEqual(stages, attempts && fault === 'staging' ? [{ table, key: id, marker }] : []);
+    assert.equal(dispatches, 0);
+    assert.equal([...f.authority.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`)][0].count, 0);
+    assert.equal([...f.authority.sql.exec('SELECT COUNT(*) AS count FROM policy_binding_meta WHERE meta_key = ?', marker)][0].count, 0);
   }
 });
 

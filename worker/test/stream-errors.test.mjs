@@ -1,5 +1,7 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 
 
@@ -173,3 +175,49 @@ test("non-stream upstream errors pass through unchanged", async () => {
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { error: { message: "invalid request", type: "invalid_request", code: 400 } });
 });
+
+// BEGIN inert replay owner tests.
+function inertReplayFunctions() {
+  const source = readFileSync(new URL("../proxy-response.ts", import.meta.url), "utf8");
+  const input = readFileSync(new URL("../input-retirement.ts", import.meta.url), "utf8").replaceAll("export ", "");
+  const replay = source.slice(source.indexOf("const replayRetirements ="), source.indexOf("export interface SseBoundaryCursor"));
+  class InertStream { constructor(source, strategy) { this.source = source; this.strategy = strategy; } }
+  class InertResponse { constructor(body, init) { this.body = body; Object.assign(this, init); } }
+  return new Function("ReadableStream", "Response", stripTypeScriptTypes(input + replay, {mode:"transform"}) + ";return {replayInputOwner,replayResponse,replayRetirements};")(InertStream, InertResponse);
+}
+const replayDeferred = () => { let resolve, reject; const promise = new Promise((yes,no) => { resolve=yes; reject=no; }); return {promise,resolve,reject}; };
+const replayTurns = async () => { for(let i=0;i<12;i++) await Promise.resolve(); };
+for (const readRejects of [false,true]) for (const cancelRejects of [false,true]) test(`inert replay joins original read and cancellation ${readRejects}/${cancelRejects}`,async()=>{
+  const {replayResponse,replayRetirements}=inertReplayFunctions(), read=replayDeferred(), cancel=replayDeferred();
+  let unlocks=0,cancels=0,settled=false;const reason={},bytes={};
+  const reader={read(){assert.equal(this,reader);return read.promise;},cancel(value){assert.equal(this,reader);assert.equal(value,reason);cancels++;return cancel.promise;},releaseLock(){assert.equal(this,reader);unlocks++;}};
+  const response=replayResponse({body:{},status:200,statusText:"OK",headers:{}},reader,[],false);
+  const controller={enqueue(){assert.fail("late data");},close(){assert.fail("late close");},error(){assert.fail("late error");}};
+  const pulling=response.body.source.pull(controller), retiring=response.body.source.cancel(reason);
+  retiring.then(()=>{settled=true;});
+  assert.equal(response.body.source.cancel({}),retiring);assert.equal(cancels,1);assert.equal(unlocks,0);
+  if(cancelRejects)cancel.reject(undefined);else cancel.resolve();await replayTurns();assert.equal(unlocks,0);assert.equal(settled,false);
+  if(readRejects)read.reject(undefined);else read.resolve({done:false,value:bytes});
+  await pulling;await retiring;await replayRetirements.get(response.body);assert.equal(unlocks,1);assert.equal(settled,true);
+});
+test("inert replay keeps synchronous undefined and independent source release failures",async()=>{
+  const {replayInputOwner}=inertReplayFunctions(), predecessor=replayDeferred();let unlocks=0,nested;
+  const owner=replayInputOwner({cancel(){nested=owner.retire("cancel");throw undefined;},releaseLock(){unlocks++;throw undefined;}},predecessor.promise);
+  const retiring=owner.retire("cancel");const caught=retiring.then(()=>assert.fail("failure lost"),error=>error);
+  assert.equal(retiring,nested);await replayTurns();assert.equal(unlocks,0);predecessor.reject(undefined);
+  const error=await caught;assert.ok(error instanceof AggregateError);assert.deepEqual(error.errors,[undefined,undefined,undefined]);assert.equal(unlocks,1);
+});
+test("inert replay preserves original read and independent release undefined",async()=>{
+  const {replayResponse}=inertReplayFunctions();let errorPresent=false,reported,unlocks=0;
+  const response=replayResponse({body:{},status:200,headers:{}},{read(){throw undefined;},cancel(){assert.fail();},releaseLock(){unlocks++;throw undefined;}},[],false);
+  await response.body.source.pull({error(error){errorPresent=true;reported=error;},close(){assert.fail();}});
+  assert.equal(errorPresent,true);assert.ok(reported instanceof AggregateError);assert.deepEqual(reported.errors,[undefined,undefined]);assert.equal(unlocks,1);
+});
+test("inert replay preserves bytes metadata EOF and single release",async()=>{
+  const {replayResponse,replayRetirements}=inertReplayFunctions(), bytes={},headers={},delivered=[];let reads=0,unlocks=0,closed=0;
+  const response=replayResponse({body:{},status:429,statusText:"Held",headers},{read(){reads++;return Promise.resolve({done:true});},cancel(){assert.fail();},releaseLock(){unlocks++;}},[bytes],false);
+  const c={enqueue(v){delivered.push(v);},close(){closed++;},error(){assert.fail();}};
+  await response.body.source.pull(c);await response.body.source.pull(c);await replayRetirements.get(response.body);
+  assert.equal(delivered[0],bytes);assert.equal(response.headers,headers);assert.equal(response.status,429);assert.equal(response.statusText,"Held");assert.equal(reads,1);assert.equal(closed,1);assert.equal(unlocks,1);
+});
+// END inert replay owner tests.

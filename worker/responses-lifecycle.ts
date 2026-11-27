@@ -1,6 +1,6 @@
 import type { CompiledEndpoint, CompiledProvider, ProxyRequestBody } from "./types.ts";
 import { HttpOperation } from "./http-operation.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export type ResponsesControlAction = "retrieve" | "cancel" | "result";
 

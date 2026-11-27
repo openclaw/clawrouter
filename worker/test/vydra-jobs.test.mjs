@@ -1,11 +1,29 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { parseVydraCancelAcknowledgement, parseVydraJob, parseVydraResult, parseVydraSubmission, prepareVydraJob, validateVydraJobId, vydraJobPath, VYDRA_MAX_ENVELOPE_BYTES } from "../vydra-jobs.ts";
+import { observeVydraCancelAcknowledgement, observeVydraJob, observeVydraSubmission, parseVydraCancelAcknowledgement, parseVydraJob, parseVydraResult, parseVydraSubmission, prepareVydraJob, validateVydraJobId, vydraJobPath, VYDRA_MAX_ENVELOPE_BYTES } from "../vydra-jobs.ts";
 
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/vydra/jobs.json", import.meta.url), "utf8"));
 const id = wire.submission.id;
 const parse = body => parseVydraJob(JSON.stringify(body), 200, id);
+
+test("Vydra parsed observations preserve text codec verdicts", () => {
+  const verdict = read => { try { return { value: read() }; } catch (error) { return { error: error.message }; } };
+  const bodies = [wire.submission, ...Object.values(wire.responses), wire.cancel.response, {},
+    ...[undefined, null, 0, 0.5, -1, "150"].map(creditsCharged => ({ ...wire.responses.completed, creditsCharged })),
+    ...[null, {}, [], { applied: "yes" }, { creditsRefunded: -1 }].map(refund => ({ success: true, refund }))];
+  for (const body of bodies) {
+    assert.deepEqual(verdict(() => observeVydraSubmission(body)),
+      verdict(() => parseVydraSubmission(JSON.stringify(body), 200)));
+    assert.deepEqual(verdict(() => observeVydraCancelAcknowledgement(body)),
+      verdict(() => parseVydraCancelAcknowledgement(JSON.stringify(body), 200)));
+    for (const expectedId of [id, "other_job", ""]) {
+      assert.deepEqual(verdict(() => observeVydraJob(body, expectedId)),
+        verdict(() => parseVydraJob(JSON.stringify(body), 200, expectedId)));
+    }
+  }
+  assert.throws(() => parseVydraJob("{", 503, id), /vydra_request_rejected/);
+});
 
 test("Vydra media submission preserves workflow input and rejects callback/Studio contracts", () => {
   assert.deepEqual(prepareVydraJob(wire.request.body), { body: wire.request.body, workflow: "generate_video" });

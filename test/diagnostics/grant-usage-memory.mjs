@@ -14,7 +14,8 @@ const rolling = process.argv[2] === "rolling";
 try {
   worker = await startWorkerdFixture(temporary, `
     export * from "./worker/index.ts";
-    import { UsageLedgerObject as Ledger, usageStub } from "./worker/ledgers.ts";
+    import { UsageLedgerObject as Ledger } from "./worker/ledgers.ts";
+import { usageStub } from "./worker/usage-ledger-client.ts";
     export class UsageLedgerObject extends Ledger {
       constructor(state) { super(state); this.fixtureSql = state.storage.sql; }
       async fetch(request) {

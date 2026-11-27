@@ -3,7 +3,7 @@ import { jsonBodyBytes } from "./json-body.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { prepareOpenRouterSpeech, readOpenRouterSpeech } from "./openrouter-speech.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const modelId = "google/gemini-3.1-flash-tts-preview";
 const outputLimit = 16 * 1024 * 1024, readLimit = 8192;

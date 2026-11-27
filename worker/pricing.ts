@@ -1,4 +1,5 @@
-import type { DeepSeekSearchRequestPricing } from "../shared/request-pricing.ts";
+import { hostedToolPricingGap, claudeSearchTypes } from "./hosted-tool-pricing.ts";
+import type { DeepSeekSearchRequestPricing, ImageRequestPricing, OutcomeRequestPricing } from "../shared/request-pricing.ts";
 import type { ValidatedNativeUsage } from "./native-response.ts";
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
@@ -36,7 +37,6 @@ export function hostedSearchPrice(card: ToolPricing | undefined, body: unknown, 
 // Messages web tools have known tariffs but no qualified cumulative token bound.
 // max_uses caps the search fee, not repeated model-input processing. Never use
 // one context window (or max_content_tokens) to admit a hard-budget server loop.
-const claudeSearchTypes = new Set(["web_search_20250305", "web_search_20260209", "web_search_20260318"]);
 const claudeFetchTypes = new Set(["web_fetch_20250910", "web_fetch_20260209", "web_fetch_20260309", "web_fetch_20260318"]);
 export interface AnthropicWebPrice extends HostedSearchPrice { search: boolean; usageComplete: boolean }
 export function anthropicWebPrice(card: ToolPricing | undefined, body: unknown): AnthropicWebPrice | undefined {
@@ -56,15 +56,7 @@ export function hostedSearchCost(price: HostedSearchPrice | undefined, count: nu
 
 // Source-qualified request component. Shared admission must freeze it alongside
 // the inference bound; declaring it alone does not clear requestPricingGap.
-export interface OutcomeRequestPricing {
-  unit: "request";
-  version: string;
-  effectiveAt: string;
-  source: "https://docs.x.ai/developers/pricing#usage-guidelines-violation-fee";
-  outcome: "xai.responses_violation";
-  maximumAdditionalMicros: 50000;
-  receipt: "xai.usage.cost_in_usd_ticks";
-}
+export type { ImageRequestPricing, OutcomeRequestPricing } from "../shared/request-pricing.ts";
 
 export interface RequestCostReceipt {
   costMicros: number;
@@ -96,17 +88,6 @@ export function deepSeekSearchCost(pricing: Readonly<DeepSeekSearchRequestPricin
     basis: "manifest_request", pricingVersion: pricing.version };
 }
 
-export interface ImageRequestPricing {
-  unit: "image"; protocol: "xai.images"; version: string; effectiveAt: string;
-  source: "https://docs.x.ai/developers/pricing";
-  receipt: "xai.usage.cost_in_usd_ticks";
-  alias: { selectedModel: "grok-imagine-image-quality"; servingModel: "grok-imagine-image-2.0"; quality: "low";
-    effectiveAt: "2026-11-02"; source: "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2" };
-  rates: {
-    "grok-imagine-image": { inputMicrosPerImage: number; outputMicrosPerImage: Record<"1k" | "2k", number> };
-    "grok-imagine-image-2.0": { inputMicrosPerImage: number; outputMicrosPerImage: Record<"low" | "medium", Record<"1k" | "2k", number>> };
-  };
-}
 // Freeze this projection only after prepareXaiImage validates the native body.
 // It carries no prompt, image reference, credential or raw output bytes.
 export type ImageRequestSelection = Pick<XaiImageRequest, "model" | "servingModel" | "mode" | "count" | "inputImages" | "resolution" | "quality" | "qualityBasis">;
@@ -219,6 +200,9 @@ const unpricedGoogleRequestFormats = new Set(["google.grounded_search", "google.
 const unpricedNativeAudioFormats = new Set(["groq.transcription", "mistral.transcription", "xai.stt", "xai.tts"]);
 
 export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge, selectedUpstreamModel?: string | null): PricingGap | null {
+  // GPT Image 2.5 publishes modality rates, not a whole-request reference-input
+  // token ceiling. Byte caps and GPT Image 1/vision formulas do not prove one.
+  if (requestFormat === "openai.images_edits") return "opaque_input_bound";
   // These native uploads have neither a qualified duration bound nor a token tariff.
   // Keep OpenAI's separately qualified soft-token settlement exception separate.
   if (unpricedNativeAudioFormats.has(requestFormat)) return "opaque_input_bound";
@@ -286,41 +270,6 @@ function requestDeclaredTools(body: Record<string, unknown>, requestFormat: stri
   return (Array.isArray(body.tools) ? body.tools : []).concat(inputTools);
 }
 
-// Classify known executable declarations only. A null result does not attest
-// that an unknown or partially observed tool inventory is complete.
-export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: string): "hosted_tool_fee" | "hosted_tool_usage" | null {
-  let usageGap = false;
-  for (const tool of tools) {
-    if (!isObject(tool)) continue;
-    // Inspect protocol declarations, never function names or user JSON schemas.
-    if (requestFormat === "openai.chat_completions" && ["browser_search", "code_interpreter"].includes(String(tool.type))) return "hosted_tool_fee";
-    if (requestFormat === "openai.responses" && typeof tool.type === "string") {
-      if (/^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type) || ["x_search", "file_search", "code_interpreter", "image_generation"].includes(tool.type)) return "hosted_tool_fee";
-      if (tool.type === "shell" && isObject(tool.environment) && ["container_auto", "container_reference"].includes(String(tool.environment.type))) return "hosted_tool_fee";
-      // Hosted search has no qualified cumulative bound; this is not a fee claim.
-      if (["mcp", "programmatic_tool_calling"].includes(tool.type) || tool.type === "tool_search" && tool.execution !== "client") usageGap = true;
-    }
-    if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && /^web_search_\d{8}$/.test(tool.type)) {
-      if (!claudeSearchTypes.has(tool.type)) return "hosted_tool_fee";
-      usageGap = true;
-    }
-    // Anthropic waives execution fees when these web-tool versions are present.
-    // Their search fee, when applicable, is still handled by the branch above.
-    if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && /^code_execution_\d{8}$/.test(tool.type) && !tools.some((candidate) => isObject(candidate) && typeof candidate.type === "string" && /^web_(?:search|fetch)_\d{8}$/.test(candidate.type) && candidate.type.slice(-8) >= "20260209")) return "hosted_tool_fee";
-    // A waived execution fee does not bound accumulated server-loop input.
-    if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && (/^(?:web_fetch|code_execution)_\d{8}$/.test(tool.type) || /^(?:tool_search_tool_regex|tool_search_tool_bm25)(?:_20251119)?$/.test(tool.type) || ["advisor_20260301", "mcp_toolset"].includes(tool.type))) usageGap = true;
-    if (requestFormat === "google.generate_content") {
-      if ([["googleSearch", "google_search"], ["googleSearchRetrieval", "google_search_retrieval"], ["googleMaps", "google_maps"]].some(([camel, proto]) => isObject(googleField(tool, camel, proto)))) return "hosted_tool_fee";
-      // These tools have token charges rather than a flat tool fee, but their
-      // server-side work is not covered by our ordinary prompt/output bounds.
-      if ([["urlContext", "url_context"], ["fileSearch", "file_search"], ["codeExecution", "code_execution"]].some(([camel, proto]) => isObject(googleField(tool, camel, proto)))) usageGap = true;
-      const servers = googleField(tool, "mcpServers", "mcp_servers");
-      if (Array.isArray(servers) && servers.length) usageGap = true;
-    }
-  }
-  return usageGap ? "hosted_tool_usage" : null;
-}
-
 export type PricingEndpoint = Pick<CompiledEndpoint, "request_format" | "outputTokenLimit"> & Partial<Pick<CompiledEndpoint, "id">> & {
   selectedUpstreamModel?: string | null;
 };
@@ -333,7 +282,8 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
     return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
   if (requestPricing && (!qualifiedOutcome(requestPricing) || pricing.unit != null || endpoint?.request_format !== "openai.responses"))
     return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
-  if (pricing.unit === "image_token") return estimateImageCost(pricing, body);
+  if (pricing.unit === "image_token") return endpoint?.request_format === "openai.images_edits" || body.images !== undefined
+    ? { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false } : estimateImageCost(pricing, body);
   if (pricing.unit === "character") {
     // UTF-8 bytes bound code points without assuming an upstream tokenizer.
     // Empty catalog probes retain the full bounded envelope; dispatch validates input.
@@ -399,7 +349,7 @@ export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens, req
   if (unpricedGoogleRequestFormats.has(requestFormat ?? "") || unpricedNativeAudioFormats.has(requestFormat ?? "")) return null;
   if (requestFormat === "google.image_generate" || requestFormat === "google.music_generate"
     || requestFormat === "google.speech_generate_content" || requestFormat === "google.speech_interactions") return null;
-  if (pricing.unit === "image_token") return requestFormat === "openai.images_generations" ? actualImageCost(pricing, tokens) : null;
+  if (pricing.unit === "image_token") return requestFormat === "openai.images_generations" || requestFormat === "openai.images_edits" ? actualImageCost(pricing, tokens) : null;
   if (pricing.unit === "character") return null;
   if (tokens.billable === false) return 0;
   if (requestFormat === "cohere.chat" || tokens.billedTokens !== undefined) {

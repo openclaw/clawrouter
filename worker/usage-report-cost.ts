@@ -14,7 +14,11 @@ export const knownBasisClasses = Object.freeze({
   realtime_input_transcription_usage: "calculated",
 } satisfies Record<string, UsageCostClass>);
 
-const counter = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+export const usageCounter = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+
+export function recordedAccountingAmount(event: UsageEvent): number | null {
+  return Object.hasOwn(event, "actual_cost_micros") ? usageCounter(event.actual_cost_micros) : null;
+}
 
 /** Evidence only: no repricing, reservation settlement, or budget authority. */
 export function reportingCost(event: UsageEvent): { lane: UsageCostLane; costClass: UsageCostClass; amount: number | null } {
@@ -22,20 +26,20 @@ export function reportingCost(event: UsageEvent): { lane: UsageCostLane; costCla
     : event.grant_lane === "api_key" || event.grant_lane === "environment" ? "api" : "unattributed";
   const basis = event.cost_basis;
   const canonicalClass = Object.hasOwn(knownBasisClasses, basis) ? knownBasisClasses[basis as keyof typeof knownBasisClasses] : "unknown";
-  const actual = counter(event.actual_cost_micros);
+  const actual = recordedAccountingAmount(event);
   let costClass: UsageCostClass = actual === null || canonicalClass === "no_charge" && actual !== 0 ? "unknown" : canonicalClass;
   let amount = actual;
   // A retained reservation is not a measured component. Only the producer's
   // explicit marker can establish a partial amount under an unpriced basis.
   // Noncanonical partial/partial_usage labels alone establish nothing.
-  const known = counter(event.reporting_known_cost_micros);
+  const known = usageCounter(event.reporting_known_cost_micros);
   if (costClass === "unknown" && typeof basis === "string" && basis.startsWith("unpriced_")
     && actual !== null && known !== null && known > 0 && known <= actual) {
     costClass = "partial";
     amount = known;
   }
   if (costClass === "unknown") {
-    const estimate = counter(event.reporting_estimated_cost_micros);
+    const estimate = usageCounter(event.reporting_estimated_cost_micros);
     if (actual === 0 && estimate !== null && typeof event.reporting_estimate_reason === "string" && event.reporting_estimate_reason.length > 0) {
       costClass = "estimated";
       amount = estimate;

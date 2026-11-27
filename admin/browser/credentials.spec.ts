@@ -44,6 +44,37 @@ test("personal creation sends a create-only request without selecting an owner",
   expect(Object.keys(state.writes[0].body).sort()).toEqual(["credentialId", "expiresAt", "policyId", "secretSha256", "serviceTiers"]);
 });
 
+for (const surface of ["admin", "personal"] as const) {
+  test(`dismissing a pending ${surface} secret acknowledges dismissal without replaying the write`, async ({ page }) => {
+    const state = await fixture(page);
+    const pending = deferred();
+    state.holdMutation = pending.promise;
+    if (surface === "admin") {
+      await openAdmin(page);
+      await draft(page, "build_runner");
+    } else {
+      state.role = "user";
+      await page.goto("/");
+      await connected(page);
+    }
+    const panel = page.locator(surface === "admin" ? ".inspector" : ".myKeysPanel");
+    const submit = panel.getByRole("button", { name: surface === "admin" ? "Issue credential" : "Renew", exact: true });
+    await submit.click();
+    await expect.poll(() => state.writes.length).toBe(1);
+    const dismiss = panel.getByRole("button", { name: "Dismiss pending secret" });
+    await dismiss.focus();
+    await page.keyboard.press("Enter");
+    await expect(dismiss).toHaveCount(0);
+    await expect(panel.getByRole("status")).toContainText("The one-time secret won’t be shown.");
+    await expect(submit).toBeDisabled();
+    pending.release();
+    await expect(panel).toContainText("The one-time secret was dismissed.");
+    await expect(submit).toBeEnabled();
+    await expect(panel.locator(".issuedKey")).toHaveCount(0);
+    expect(state.writes).toHaveLength(1);
+  });
+}
+
 for (const operation of ["rotate", "revoke"] as const) {
   test(`admin ${operation} consumes the latest policy and evicts a reassigned personal key`, async ({ page }) => {
     const state = await fixture(page);
@@ -77,6 +108,8 @@ test("personal and admin screens share admission, rotate only the hash, and sync
   await page.getByRole("tab", { name: /Credentials/ }).click();
   await page.getByRole("button", { name: /owned_key.*Legacy key/ }).click();
   await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeDisabled();
+  await expect(page.locator(".inspector")).not.toContainText("The one-time secret won’t be shown.");
+  await expect(page.getByRole("button", { name: "Dismiss pending secret" })).toHaveCount(0);
   pending.release();
   await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeEnabled();
   expect(state.writes[0].path).toBe("/v1/session/credentials/owned_key/rotate");
@@ -169,6 +202,8 @@ for (const invalidate of ["dismiss", "leave-return", "resource-tabs"] as const) 
       await page.getByRole("button", { name: "Catalog", exact: true }).click();
       await page.getByRole("button", { name: "Access", exact: true }).click();
     }
+    await expect(page.getByRole("button", { name: "Dismiss pending secret" })).toHaveCount(0);
+    await expect(page.locator(".inspector").getByRole("status")).toContainText("The one-time secret won’t be shown.");
     await page.evaluate(() => (window as HashWindow).releaseHash!());
     await expect(page.getByRole("button", { name: "Issue credential", exact: true })).toBeEnabled();
     expect(state.writes).toHaveLength(0);
@@ -556,21 +591,38 @@ for (const inactive of ["owner", "generation", "policy"] as const) {
   });
 }
 
-test("clipboard failure is visible, Dismiss works by keyboard, and refresh cannot re-reveal", async ({ page }) => {
-  await fixture(page);
+test("a denied clipboard write selects the one-time key for keyboard copy without reissuing it", async ({ page }) => {
+  const state = await fixture(page);
   await page.addInitScript(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("denied"); } } }));
   await openAdmin(page);
   await draft(page, "copy_key");
   await page.getByRole("button", { name: "Issue credential", exact: true }).click();
-  await page.getByRole("button", { name: "Copy", exact: true }).click();
-  await expect(page.locator(".issuedKey")).toContainText("Copy failed");
+  const issued = page.locator(".issuedKey");
+  await issued.getByRole("button", { name: "Copy", exact: true }).press("Enter");
+  const field = issued.getByRole("textbox", { name: "One-time key" });
+  await expect(field).toHaveAccessibleDescription("Automatic copy unavailable. Use your device’s Copy command before dismissing the key.");
+  const hasFullSelection = () => field.evaluate((el: HTMLInputElement) => el.readOnly && /^clawrouter-live-copy_key-[0-9a-f]{48}$/.test(el.value) && el.selectionStart === 0 && el.selectionEnd === el.value.length);
+  await expect(field).toBeFocused();
+  expect(await hasFullSelection()).toBe(true);
+  // Observe native Copy without writing the fixture key to the host clipboard.
+  await field.evaluate(el => el.addEventListener("copy", event => { event.preventDefault(); el.dataset.copyObserved = "true"; }, { once: true }));
+  await page.keyboard.press("ControlOrMeta+c");
+  await expect(field).toHaveAttribute("data-copy-observed", "true");
+  await field.click();
+  expect(await hasFullSelection()).toBe(false);
+  await page.keyboard.press("Tab");
+  await expect(issued.getByRole("button", { name: "Dismiss" })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(field).toBeFocused();
+  expect(await hasFullSelection()).toBe(true);
   expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   const dismiss = page.getByRole("button", { name: "Dismiss", exact: true });
   await dismiss.focus();
   await page.keyboard.press("Enter");
-  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  await expect(issued).toHaveCount(0);
   await focusRefresh(page);
-  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  await expect(issued).toHaveCount(0);
+  expect(state.writes).toHaveLength(1);
   expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   for (const theme of ["light", "dark"] as const) {
     if (theme === "dark") await page.getByRole("switch", { name: "Light mode", exact: true }).click();
@@ -579,6 +631,28 @@ test("clipboard failure is visible, Dismiss works by keyboard, and refresh canno
     await expect.poll(() => button.evaluate((element) => getComputedStyle(element.querySelector("span")!).color === getComputedStyle(element).color)).toBe(true);
     expect((await new AxeBuilder({ page }).include(".tableSectionHeader").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   }
+});
+
+test("a late clipboard denial does not steal focus from Dismiss in My keys", async ({ page }) => {
+  const state = await fixture(page);
+  type ClipboardWindow = Window & { denyCopy?: () => void };
+  await page.addInitScript(() => Object.defineProperty(navigator, "clipboard", { value: {
+    writeText: () => new Promise<void>((_resolve, reject) => { (window as ClipboardWindow).denyCopy = () => reject(new Error("denied")); }),
+  } }));
+  await page.goto("/");
+  await connected(page);
+  await page.getByRole("button", { name: "Create key", exact: true }).click();
+  const issued = page.locator(".myKeysPanel .issuedKey");
+  await issued.getByRole("button", { name: "Copy", exact: true }).press("Enter");
+  await page.keyboard.press("Tab");
+  const dismiss = issued.getByRole("button", { name: "Dismiss", exact: true });
+  await expect(dismiss).toBeFocused();
+  await page.evaluate(() => (window as ClipboardWindow).denyCopy!());
+  await expect(issued.getByRole("textbox", { name: "One-time key" })).toBeVisible();
+  await expect(dismiss).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(issued).toHaveCount(0);
+  expect(state.writes).toHaveLength(1);
 });
 
 type HashWindow = Window & { releaseHash?: () => void };
@@ -626,7 +700,11 @@ async function fixture(page: Page) {
     if (request.method() === "POST" || request.method() === "PUT") {
       const body = request.postData() ? request.postDataJSON() : {};
       state.writes.push({ path, method: request.method(), body });
-      if (state.reject) { await route.fulfill({ status: state.rejectStatus, json: { error: { code: state.reject, message: state.reject } } }); return; }
+      if (state.reject) {
+        if (state.holdMutation) await state.holdMutation;
+        await route.fulfill({ status: state.rejectStatus, json: { error: { code: state.reject, message: state.reject } } });
+        return;
+      }
       const create = path.endsWith("/credentials");
       const credentialId = create ? body.credentialId : decodeURIComponent(path.split("/").at(request.method() === "PUT" ? -1 : -2)!);
       const prior = state.credentials.find((item) => item.credentialId === credentialId);
@@ -790,6 +868,54 @@ for (const availability of ["active", "revoked", "expired", "lost-policy"] as co
     await card.getByRole("button", { name: "Save name", exact: true }).click();
     await expect(card.locator(".myKeysList strong")).toHaveText("owned_key");
     expect(state.writes[1].body).toEqual({ name: null });
+  });
+}
+
+for (const moveFocus of [false, true]) {
+  test(`rejected member rename ${moveFocus ? "respects a later focus choice" : "accepts a keyboard correction in place"}`, async ({ page }) => {
+    const state = await fixture(page);
+    state.role = "user";
+    state.credentials.push({ ...state.credentials[0], credentialId: "studio_key", name: "Studio" });
+    const rejection = deferred();
+    state.reject = "credential_rename_rejected";
+    state.holdMutation = rejection.promise;
+    await page.goto("/");
+    await connected(page);
+    const card = page.locator(".myKeysPanel");
+    const row = card.locator(".myKeysList article").filter({ hasText: "studio_key" });
+    await row.getByRole("button", { name: "Rename", exact: true }).press("Enter");
+    const name = row.getByRole("textbox", { name: "Key name", exact: true });
+    await expect(name).toBeFocused();
+    await name.fill("Nightly");
+    await page.keyboard.press("Enter");
+    const write = { path: "/v1/session/credentials/studio_key/rename", method: "POST", body: { name: "Nightly" } };
+    await expect.poll(() => state.writes).toEqual([write]);
+    await expect(row.getByRole("button", { name: "Save name", exact: true })).toBeDisabled();
+    await page.keyboard.press("Enter");
+    await page.keyboard.type(" ignored");
+    await page.keyboard.press("Enter");
+    await expect(name).toHaveValue("Nightly");
+    expect(state.writes).toEqual([write]);
+    const other = card.getByRole("textbox", { name: "Name (optional)", exact: true });
+    if (moveFocus) await other.click();
+    rejection.release();
+    await expect(card).toContainText("credential_rename_rejected");
+    await expect(name).toBeEditable();
+    await expect(moveFocus ? other : name).toBeFocused();
+    if (moveFocus) {
+      await page.keyboard.type("New laptop");
+      await expect(name).toHaveValue("Nightly");
+      await expect(other).toHaveValue("New laptop");
+      expect(state.writes).toEqual([write]);
+      return;
+    }
+    await page.keyboard.type(" runner");
+    await expect(name).toHaveValue("Nightly runner");
+    expect(state.writes).toEqual([write]);
+    state.reject = "";
+    await page.keyboard.press("Enter");
+    await expect(row.locator("strong")).toHaveText("Nightly runner");
+    expect(state.writes).toEqual([write, { ...write, body: { name: "Nightly runner" } }]);
   });
 }
 

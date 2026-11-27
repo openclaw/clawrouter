@@ -3,7 +3,7 @@ import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 import { configureVertex, vertexBody, vertexJson, vertexSse, vertexModelId } from "./vertex-runtime-fixture.mjs";
 import { syntheticVertexKey, signingBinding, tokenBody } from "./vertex-jwt-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { inspectGrantCredentials, revokeGrantCredentials } = await import("../grant-credentials.ts");
 const { overrideHotCacheConfig, HOT_CACHE_DISABLED } = await import("../hot-cache.ts");

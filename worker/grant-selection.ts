@@ -1,18 +1,24 @@
-import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
-import { HttpError } from "./utils.ts";
+import { canonicalFreshIdentityRouting, admitIdentity, admitIdentityCount, identitySourceBudget, readIdentityKv } from "./identity-admission.ts";
+import { grantSupports, type GrantRequirement } from "./grant-compatibility.ts";
+import { HttpError } from "./http-error.ts";
 import { authorityCall, type AdmissionPool } from "./authority.ts";
-import { grantQuotaRatio } from "./grant-quota.ts";
-export * from "./grant-eligibility.ts";
-import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantWeight, grantPriority, poolRetryAt, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
+import { grantQuotaRatio } from "../shared/grant-quota.ts";
+import { rankingStaleAfterMs } from "./grant-routing.ts";
+import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy } from "./grant-routing.ts";
+import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantChoices, grantWeight, grantPriority, poolRetryAt, servingCandidates, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
 export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array<{ entry: T; candidates: GrantCandidates }>, requirement?: GrantRequirement): { entry: T; candidates: GrantCandidates } | undefined {
+  admitIdentity(pools); admitIdentityCount(pools.length, 128);
+  let total = 0; for (const pool of pools) { admitIdentityCount(pool.candidates.available.length, 256); total += pool.candidates.available.length; } admitIdentityCount(total, 1024);
   const compatible = pools.map(({ entry, candidates }) => ({
     entry,
     candidates: { ...candidates, available: candidates.available.filter(({ grant }) => !requirement || grantSupports(requirement, grant)) },
   }));
   // Policy order is decided by grant/transport availability, never affordability.
-  return compatible.find(({ candidates }) => candidates.available.length > 0) ?? compatible[0];
+  // A policy draining its reserve yields to one with a grant above its reserve.
+  return compatible.find(({ candidates }) => candidates.available.length > 0 && !candidates.reserveDrain)
+    ?? compatible.find(({ candidates }) => candidates.available.length > 0) ?? compatible[0];
 }
 
 export async function policyGrantCandidates<T extends AccessPolicyEntry>(entry: T, providerId: string, env: Env, tokenRef = providerId, requirement?: GrantRequirement, admittedPool?: AdmissionPool) {
@@ -23,24 +29,14 @@ export async function policyGrantCandidates<T extends AccessPolicyEntry>(entry: 
 
 export async function selectProviderPolicy(entries: AccessPolicyEntry[], providerId: string, env: Env, requirement?: GrantRequirement): Promise<AccessPolicyEntry> {
   const tokenRef = requirement?.provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? providerId;
+  let draining: AccessPolicyEntry | undefined;
   for (const entry of entries) {
     const pool = await policyGrantCandidates(entry, providerId, env, tokenRef, requirement);
-    if (selectPolicyCandidates([pool], requirement)!.candidates.available.length) return entry;
+    const { candidates } = selectPolicyCandidates([pool], requirement)!;
+    if (candidates.available.length && !candidates.reserveDrain) return entry;
+    if (candidates.available.length) draining ??= entry;
   }
-  return entries[0];
-}
-
-export async function selectGrant(
-  providerId: string,
-  policyId: string,
-  tenantId: string,
-  defaultTokenRef: string,
-  env: Env,
-  excludedKeys: ReadonlySet<string> = new Set(),
-  routing: GrantRoutingPolicy = DEFAULT_GRANT_ROUTING,
-  stickyHash: string | null = null,
-): Promise<SelectedGrant | null> {
-  return (await resolveGrantSelection(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, stickyHash)).selected;
+  return draining ?? entries[0];
 }
 
 export async function resolveGrantSelection(
@@ -57,21 +53,23 @@ export async function resolveGrantSelection(
   requirement?: GrantRequirement,
   admittedPool?: AdmissionPool,
 ): Promise<GrantSelectionResult> {
-  routing = grantRoutingPolicy(routing);
+  admitIdentity(routing, "record");
+  routing = canonicalFreshIdentityRouting(grantRoutingPolicy(routing));
   const candidates = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement, admittedPool);
-  const { available, hasConfiguredGrant } = candidates;
+  const { hasConfiguredGrant } = candidates;
   const nowMs = Date.now();
-  const active = activeOperationCandidates(available, env, requirement);
+  const { active, reserveDrain } = servingCandidates(candidates, entries => activeOperationCandidates(entries, env, requirement));
+  const choices = grantChoices(active, routing, nowMs, requirement?.model, reserveDrain);
   let selected: SelectedGrant | null = null;
-  if (active.length && !recordSelection) selected = active[0];
-  else if (active.length) {
+  if (choices.length && !recordSelection) selected = active.find((entry) => entry.key === choices[0].key) ?? null;
+  else if (choices.length) {
     const choice = await authorityCall<{ selectedKey: string }>(env, "/grant-pools/select", {
       poolKey: `${encodeURIComponent(providerId)}/${encodeURIComponent(policyId)}/${encodeURIComponent(tenantId)}`,
       strategy: routing.strategy,
       stickyHash,
       switchAtUsedPercent: routing.switchAtUsedPercent,
       hysteresisPercent: routing.hysteresisPercent,
-      candidates: active.map((entry) => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, nowMs, routing.staleAfterSeconds * 1_000, requirement?.model) })),
+      candidates: choices,
     });
     selected = active.find((entry) => entry.key === choice.selectedKey) ?? null;
   }
@@ -86,7 +84,10 @@ export async function resolveGrantCandidates(
   admittedPool?: AdmissionPool,
   privateCopilot = false,
 ): Promise<GrantCandidates> {
-  routing = grantRoutingPolicy(routing);
+  admitIdentity(routing, "record");
+  routing = canonicalFreshIdentityRouting(grantRoutingPolicy(routing));
+  const source = identitySourceBudget();
+  if (privateCopilot) admitIdentityCount((routing.eligibleGrants[providerId] ?? []).length * 2 + 2, 256);
   const defaultKeys = [
     `oauth/${policyId}/${defaultTokenRef}`,
     `oauth/tenants/${tenantId}/${defaultTokenRef}`,
@@ -98,17 +99,14 @@ export async function resolveGrantCandidates(
       `oauth/${policyId}/${ref}`, `oauth/tenants/${tenantId}/${ref}`,
     ]) : []),
   ];
-  const pool = admittedPool ?? await authorityCall<{ keys: string[]; states?: Record<string, GrantRuntimeState> }>(env, "/grant-pools/resolve", { providerId, policyId, tenantId, defaultKeys });
+  const pool = admittedPool ?? await authorityCall<{ keys: string[]; states?: Record<string, GrantRuntimeState> }>(env, "/grant-pools/resolve", { providerId, policyId, tenantId, defaultKeys }, "policy-bindings", undefined, undefined, undefined, undefined, undefined, source);
   if (admittedPool?.unavailable) throw new Error("admission pool resolution failed");
   if (privateCopilot && (providerId !== "github-copilot" || pool.keys.length > 128)) throw new HttpError(503, "copilot_owner_unavailable", "Original Copilot owner unavailable");
+  admitIdentity(pool); admitIdentityCount(defaultKeys.length + pool.keys.length, 256);
   const keys = [...new Set([...defaultKeys, ...pool.keys])];
   if (privateCopilot && keys.length > 128) throw new HttpError(503, "copilot_owner_unavailable", "Original Copilot owner unavailable");
-  const grants = !privateCopilot && keys.length ? await env.POLICY_KV.get<UpstreamGrant>(keys, "json") : new Map<string, UpstreamGrant | null>();
-  if (privateCopilot) {
-    for (let offset = 0; offset < keys.length; offset += 64) {
-      for (const [key, value] of await env.POLICY_KV.get<UpstreamGrant>(keys.slice(offset, offset + 64), "json")) grants.set(key, value);
-    }
-  }
+  const grants = new Map<string, UpstreamGrant | null>();
+  for (const key of keys) grants.set(key, await readIdentityKv<UpstreamGrant>(() => env.POLICY_KV.get(key, "stream"), source));
   const nowMs = Date.now();
   const candidates: Array<{ key: string; grant: UpstreamGrant | null; runtimeState: GrantRuntimeState | null }> = keys
     .map((key) => {
@@ -123,7 +121,8 @@ export async function resolveGrantCandidates(
 // owner through model qualification. Never retry a different owner after read.
 export async function selectCopilotPublicGrant(policyId: string, policy: import("./types.ts").AccessPolicy, env: Env,
   tokenRef: string, stickyHash: string | null = null): Promise<SelectedGrant> {
-  const routing = grantRoutingPolicy(policy.grantRouting), tenant = policy.tenantId ?? "default";
+  admitIdentity(policy.grantRouting ?? DEFAULT_GRANT_ROUTING, "record");
+  const routing = canonicalFreshIdentityRouting(grantRoutingPolicy(policy.grantRouting)), tenant = policy.tenantId ?? "default";
   const candidates = await resolveGrantCandidates("github-copilot", policyId, tenant, tokenRef, env, new Set(), routing, undefined, undefined, undefined, true);
   const scoped = candidates.available.filter(entry => entry.key.startsWith(`oauth/${policyId}/`) || entry.key.startsWith(`oauth/tenants/${tenant}/`));
   const priority = scoped.length ? Math.min(...scoped.map(entry => grantPriority(entry.grant))) : null;
@@ -132,7 +131,7 @@ export async function selectCopilotPublicGrant(policyId: string, policy: import(
   const choice = await authorityCall<{ selectedKey: string }>(env, "/grant-pools/select", {
     poolKey: `${encodeURIComponent("github-copilot")}/${encodeURIComponent(policyId)}/${encodeURIComponent(tenant)}`,
     strategy: routing.strategy, stickyHash, switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent,
-    candidates: available.map(entry => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, Date.now(), routing.staleAfterSeconds * 1_000) })),
+    candidates: available.map(entry => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, Date.now(), rankingStaleAfterMs(routing)) })),
   });
   const selected = available.find(entry => entry.key === choice.selectedKey);
   if (!selected) throw new HttpError(503, "copilot_owner_unavailable", "Original Copilot owner unavailable");

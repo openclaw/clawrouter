@@ -1,0 +1,556 @@
+{
+  "schemaVersion": 1,
+  "study": "runtime-context-and-critic-screen-v1",
+  "status": "audited",
+  "priorComparison": "https://github.com/openclaw/clawrouter/pull/1285",
+  "scope": "Post-hoc development on the same five previously exposed tasks. Two saved-candidate critic screens followed by one fresh matched generation comparison. Not independent confirmation.",
+  "contextPolicy": {
+    "baselineOnly": true,
+    "oneHop": true,
+    "staticRuntimeImportsOnly": true,
+    "excludes": [
+      "type-only imports",
+      "dynamic imports",
+      "external packages"
+    ],
+    "replacesPartialExcerpts": true,
+    "perFileMaxBytes": 100000,
+    "totalMaxBytes": 180000,
+    "additions": [
+      {
+        "id": "history-481861424a42",
+        "files": [
+          {
+            "path": "worker/managed-fal.ts",
+            "revision": "e39a38b695e112e4f3abb0cb7616e4ed3f604411",
+            "bytes": 4379,
+            "sha256": "d47226b38ce7abb3037d8e0da0ff7f6288e52f7a4bae8c606d34919a9ed443fd"
+          },
+          {
+            "path": "worker/managed-kie.ts",
+            "revision": "e39a38b695e112e4f3abb0cb7616e4ed3f604411",
+            "bytes": 2521,
+            "sha256": "9aba33c7724e7f88ea5286351b3184f8348e1a2c384f8e8fc92273c1a174bd66"
+          },
+          {
+            "path": "worker/managed-replicate.ts",
+            "revision": "e39a38b695e112e4f3abb0cb7616e4ed3f604411",
+            "bytes": 2614,
+            "sha256": "6b3dc6f2ad2a486272144f300d915b0ae459b6124807465e4055d23bc2f02942"
+          },
+          {
+            "path": "worker/managed-together-wrapper.ts",
+            "revision": "e39a38b695e112e4f3abb0cb7616e4ed3f604411",
+            "bytes": 2167,
+            "sha256": "4e5b4401b2211a55b2b5efb6561d39e64db9e3454e4f279f3349f56ac7dc6982"
+          },
+          {
+            "path": "worker/managed-vydra.ts",
+            "revision": "e39a38b695e112e4f3abb0cb7616e4ed3f604411",
+            "bytes": 2483,
+            "sha256": "a7edc4fde1a55da404720337d233ec9c00ac15061cb1784ca24e567915e3535f"
+          }
+        ]
+      },
+      {
+        "id": "history-51f7465f9d56",
+        "files": [
+          {
+            "path": "worker/request-origin.ts",
+            "revision": "2c81bcac4d555326d7c1c7c877be5166c8646528",
+            "bytes": 1835,
+            "sha256": "0293c9bc693d92d44238c2c61ef59e70fff955c85a56f1ff145ea58a849a7f9b"
+          },
+          {
+            "path": "worker/utils.ts",
+            "revision": "2c81bcac4d555326d7c1c7c877be5166c8646528",
+            "bytes": 12795,
+            "sha256": "c8e8d40d3d7c453e4c09c623e1c3ebcaa5da1a74e288e293742044241660ac52"
+          }
+        ]
+      },
+      {
+        "id": "history-aa4e7fdf1d79",
+        "files": []
+      },
+      {
+        "id": "history-de8f1a6212d1",
+        "files": []
+      },
+      {
+        "id": "history-f90917132267",
+        "files": [
+          {
+            "path": "worker/input-retirement.ts",
+            "revision": "eeb722c6af5256d8dc58738b6749345d82faf6c0",
+            "bytes": 2662,
+            "sha256": "c45aae187f62373f288b96f99287913ba08f29bd1ad3b1c6bc6d8f26ce890c10"
+          }
+        ]
+      }
+    ]
+  },
+  "critics": [
+    {
+      "study": "existing-cohort-critic-v1",
+      "sourceSha": "ede7072a101575479b522d3b4921d6fbbe2a80ce",
+      "protocolSha256": "d11e60da921bfb6461603efcbd974484a415d31c6520402644db57c7c0e64510",
+      "auditSha256": "975e78ee474eb33a84a606962c1e4161c81c2d445c5de691d2c6d5c2df62c417",
+      "model": "openai/gpt-6-luna",
+      "calls": 5,
+      "totalCostMicros": 11393,
+      "metrics": {
+        "acceptedCorrect": 4,
+        "falseRejects": 0,
+        "rejectedIncorrect": 0,
+        "falseAccepts": 1,
+        "invalid": 0,
+        "uncertain": 0,
+        "usefulScreen": false,
+        "qualifiedFusionGain": false
+      },
+      "rows": [
+        {
+          "id": "history-aa4e7fdf1d79",
+          "verdict": "accept",
+          "correct": true,
+          "costMicros": 2030,
+          "elapsedMs": 5571.614541999999
+        },
+        {
+          "id": "history-de8f1a6212d1",
+          "verdict": "accept",
+          "correct": true,
+          "costMicros": 1524,
+          "elapsedMs": 3795.72275
+        },
+        {
+          "id": "history-f90917132267",
+          "verdict": "accept",
+          "correct": true,
+          "costMicros": 3247,
+          "elapsedMs": 13529.073167000002
+        },
+        {
+          "id": "history-51f7465f9d56",
+          "verdict": "accept",
+          "correct": false,
+          "costMicros": 2706,
+          "elapsedMs": 12305.272874999999
+        },
+        {
+          "id": "history-481861424a42",
+          "verdict": "accept",
+          "correct": true,
+          "costMicros": 1886,
+          "elapsedMs": 4177.512416999998
+        }
+      ]
+    },
+    {
+      "study": "existing-cohort-direct-critic-v1",
+      "sourceSha": "d4bcf78b8cf54215fe681905692a51e71d68d9d6",
+      "protocolSha256": "e5331682623909ee43f9b2216d5b635e744b63cd24c1162a8e9fe5dcbd6a3eb4",
+      "auditSha256": "84deea609f45d2db1c3a26f5b8812c6212a18ba99c9fcdd2ea0e3b743b3faa3e",
+      "model": "openai/gpt-6-luna",
+      "calls": 5,
+      "totalCostMicros": 9667,
+      "metrics": {
+        "acceptedCorrect": 4,
+        "falseRejects": 0,
+        "rejectedIncorrect": 0,
+        "falseAccepts": 1,
+        "invalid": 0,
+        "uncertain": 0,
+        "usefulScreen": false,
+        "qualifiedFusionGain": false
+      },
+      "rows": [
+        {
+          "id": "history-481861424a42",
+          "verdict": "accept",
+          "correct": true,
+          "costMicros": 2473,
+          "elapsedMs": 7219.395624999999
+        },
+        {
+          "id": "history-f90917132267",
+          "verdict": "accept",
+          "correct": true,
+          "costMicros": 3221,
+          "elapsedMs": 12184.154292
+        },
+        {
+          "id": "history-de8f1a6212d1",
+          "verdict": "accept",
+          "correct": true,
+          "costMicros": 387,
+          "elapsedMs": 6548.164583000002
+        },
+        {
+          "id": "history-aa4e7fdf1d79",
+          "verdict": "accept",
+          "correct": true,
+          "costMicros": 494,
+          "elapsedMs": 7193.877249999998
+        },
+        {
+          "id": "history-51f7465f9d56",
+          "verdict": "accept",
+          "correct": false,
+          "costMicros": 3092,
+          "elapsedMs": 11754.458875000004
+        }
+      ]
+    }
+  ],
+  "generation": {
+    "study": "existing-runtime-context-live-v1",
+    "sourceSha": "8eb209e700427ffe2a486809307b1a09c52b4de2",
+    "protocolSha256": "bcbff134a88bd4ae5b7d5f0594243b05c2d9463d99406b6b99bc085764814c29",
+    "auditSha256": "ea19472a081e853845d6c52d7b454b1dfa8ed04bd3e964306ab00e412da8d52a",
+    "calls": 11,
+    "totalCostMicros": 131767,
+    "summary": {
+      "strong": {
+        "passed": 4,
+        "costMicros": 107502,
+        "elapsedMs": 113588.906501
+      },
+      "cascade": {
+        "passed": 4,
+        "costMicros": 24265,
+        "elapsedMs": 99426.66250099998
+      },
+      "falseAccepts": 1,
+      "strongLosses": 0,
+      "rescues": 1,
+      "escalations": 1,
+      "costRatio": 0.22571673085151905,
+      "elapsedRatio": 0.8753201836670965,
+      "qualityMatchedCostScreen": false,
+      "liveDevelopmentLead": false,
+      "qualifiedProductionGain": false
+    },
+    "rows": [
+      {
+        "id": "history-481861424a42",
+        "strategy": "strong",
+        "artifactSha256": "7467eed361e8028ce09c6c0c3af4eaa5dcd3b761825fb0b457380138ed39251a",
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 22923,
+        "elapsedMs": 8707.453209,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 13,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        },
+        "passed": true
+      },
+      {
+        "id": "history-481861424a42",
+        "strategy": "cascade",
+        "artifactSha256": "6372d0b4ef7de70b2cb19c8e6a7dd2db30a72f2a2e12ed66d6ac63617c2a11d2",
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 2293,
+        "elapsedMs": 6296.801874999999,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 13,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        },
+        "passed": true
+      },
+      {
+        "id": "history-51f7465f9d56",
+        "strategy": "cascade",
+        "artifactSha256": "90944b956a1daf0c66823b0367bac6da8bd97fda9ff5c5e58f7aad0f6316b217",
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 2878,
+        "elapsedMs": 11695.057708999999,
+        "full": {
+          "valid": true,
+          "passed": false,
+          "tests": 50,
+          "failures": 1,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [
+              "56934fdce8a716baa0cc1bde5df00f00b4a96c5e6acafd2f588e44b041f2fe10"
+            ],
+            "truncated": false
+          },
+          "exitCode": 1,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        },
+        "passed": false
+      },
+      {
+        "id": "history-51f7465f9d56",
+        "strategy": "strong",
+        "artifactSha256": "cb39ce93e50ddc9347da5d73c9671f6a5d812d359faac3ea022acce1013e3f13",
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 29021,
+        "elapsedMs": 19821.803167,
+        "full": {
+          "valid": true,
+          "passed": false,
+          "tests": 50,
+          "failures": 1,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [
+              "56934fdce8a716baa0cc1bde5df00f00b4a96c5e6acafd2f588e44b041f2fe10"
+            ],
+            "truncated": false
+          },
+          "exitCode": 1,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        },
+        "passed": false
+      },
+      {
+        "id": "history-aa4e7fdf1d79",
+        "strategy": "strong",
+        "artifactSha256": "d8fa555bccf9e8179f5c2050ff9c886d2d59bd8742e9eec2229d4af919e5a356",
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 14060,
+        "elapsedMs": 34579.270083,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 11,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        },
+        "passed": true
+      },
+      {
+        "id": "history-aa4e7fdf1d79",
+        "strategy": "cascade",
+        "artifactSha256": "78c740179f095e809d2af77d1fc8bef5f46bcdfb04320ba328413975da43b553",
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 1418,
+        "elapsedMs": 18519.19520799999,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 11,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        },
+        "passed": true
+      },
+      {
+        "id": "history-de8f1a6212d1",
+        "strategy": "cascade",
+        "artifactSha256": "5c691015b65b612be74d72388ce78b319499e540038dd1684ebd221abf962e0e",
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 625,
+        "elapsedMs": 10025.479292000004,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 7,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        },
+        "passed": true
+      },
+      {
+        "id": "history-de8f1a6212d1",
+        "strategy": "strong",
+        "artifactSha256": "6f58a3fc70b8504a1b5acdc5ccadb7122ded8df442df52aa4930a8b1b26de9e4",
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 6255,
+        "elapsedMs": 17102.898667,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 7,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        },
+        "passed": true
+      },
+      {
+        "id": "history-f90917132267",
+        "strategy": "strong",
+        "artifactSha256": "f1f714e3f6b8f48c4424f4f370e1e05c170d3596590e1e3cef22440ac23171b0",
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 35243,
+        "elapsedMs": 33377.481375,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 11,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        },
+        "passed": true
+      },
+      {
+        "id": "history-f90917132267",
+        "strategy": "cascade",
+        "artifactSha256": "4b2ee454221323f3a9e65607cb0078728cb7a492d409a4e3500e7e64a11ee78b",
+        "publicPassed": true,
+        "escalated": true,
+        "attempts": 2,
+        "costMicros": 17051,
+        "elapsedMs": 52890.128417,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 11,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        },
+        "passed": true
+      }
+    ]
+  },
+  "interpretation": [
+    "Both tiny-critic screens accepted the same incorrect candidate; neither qualifies as a useful acceptance gate.",
+    "With dependency context supplied at generation time, both strategies still pass four of five full grades. The same MiniMax cancellation case returns HTTP 500 where the withheld test expects 503.",
+    "The fresh matched comparison costs 77.4% less and takes 12.5% less measured elapsed time with tiny-first routing, but the required all-task quality gate fails.",
+    "The amount of any causal benefit from added context is not established by one exposed repetition. The previous comparison is not a randomized context control.",
+    "Do not activate a production policy or claim an independent quality gain from these results."
+  ],
+  "limitations": [
+    "Five exposed tasks, one fresh repetition per generation arm.",
+    "Only the supplied immutable tasks, runtimes, public checks and full grades are measured.",
+    "No cross-family collaboration tested.",
+    "No production traffic, deployment or default configuration changed.",
+    "The original 30 unseen tasks by three trials requirement remains unsatisfied."
+  ]
+}

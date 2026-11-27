@@ -1,60 +1,15 @@
-import { isKeyedModelDiscovery, readKeyedModelDiscovery } from "./keyed-model-discovery.ts";
-import { publicCatalogProvider } from "./public-model-discovery-formats.ts";
-import { modelExecutable } from "../shared/route-catalog.ts";
+import { readKeyedModelDiscovery } from "./keyed-model-discovery.ts";
+import { isKeyedModelDiscovery, REQUESTY_MODELS_FORMAT } from "./model-discovery-formats.ts";
+import { discoveryAllows } from "./model-discovery-request.ts";
+import { filterRadiusCatalog } from "./provider-radius.ts";
 import { filterOllamaModels } from "./provider-ollama.ts";
 import { filterSyntheticModels } from "./synthetic-model-catalog.ts";
-import { REQUESTY_MODELS_FORMAT, filterRequestyModels, readRequestyModels } from "./requesty-model-catalog.ts";
+import { filterRequestyModels, readRequestyModels } from "./requesty-model-catalog.ts";
 import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
 import { inputRetirement } from "./input-retirement.ts";
-import type { AccessPolicy, CompiledEndpoint, CompiledModel, CompiledProvider } from "./types.ts";
+import type { AccessPolicy, CompiledEndpoint, CompiledProvider } from "./types.ts";
 import type { HttpOperation } from "./http-operation.ts";
-import { HttpError } from "./utils.ts";
-
-// These formats are metadata, not inference or a permission to delete models.
-export function isModelDiscovery(endpoint: Pick<CompiledEndpoint, "request_format">): boolean {
-  return endpoint.request_format === REQUESTY_MODELS_FORMAT || endpoint.request_format === "featherless.catalog" || publicCatalogProvider(endpoint.request_format) !== null || isKeyedModelDiscovery(endpoint.request_format) || ["openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
-}
-export function discoveryModelId(provider: CompiledProvider, upstream: string): string {
-  return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;
-}
-export function discoveryAllows(policy: AccessPolicy, provider: CompiledProvider, upstream: string): boolean {
-  return modelExecutable(provider, { id: discoveryModelId(provider, upstream), upstream })
-    && (policy.models == null || policy.models.includes(discoveryModelId(provider, upstream)));
-}
-export function prepareModelDiscovery(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, pathParams: Record<string, string>): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
-  if (Object.keys(body).length) throw new HttpError(400, "invalid_model_discovery", "model discovery does not accept a request body");
-  if (Object.keys(pathParams).some(name => !endpoint.path_params.includes(name))) throw new HttpError(400, "invalid_model_discovery", "unknown discovery path parameter");
-  const id = pathParams.model_id;
-  if (endpoint.path_params.includes("model_id") && (typeof id !== "string" || !id.length || id.length > 512 || /[\u0000-\u001f\u007f]/.test(id))) throw new HttpError(400, "invalid_model_id", "a bounded nonempty model_id is required");
-  if (id && !modelExecutable(provider, { id: discoveryModelId(provider, id), upstream: id }))
-    throw new HttpError(400, "model_unavailable", "the selected model identity is stopped");
-  // Metadata pricing must never inherit the selected model's inference tariff.
-  const model: CompiledModel | null = id ? { id: discoveryModelId(provider, id), upstream: id, capabilities: [], pricing: null, pricing_ref: null } : null;
-  return { model, body: {}, pathParams };
-}
-export function discoveryQuery(params: URLSearchParams | Record<string, unknown>): Record<string, unknown> {
-  if (!(params instanceof URLSearchParams)) return params;
-  const query: Record<string, unknown> = {};
-  params.forEach((value, name) => { query[name] = name === "lifecycle[]" ? params.getAll(name) : value; });
-  return query;
-}
-export function validateDiscoveryQuery(provider: CompiledProvider, endpoint: CompiledEndpoint, policy: AccessPolicy, query: Record<string, unknown>): void {
-  if (query.lifecycle !== undefined && Array.isArray(query.lifecycle)) {
-    if (query["lifecycle[]"] !== undefined) throw new HttpError(400, "invalid_model_discovery_query", "use one lifecycle query representation");
-    query["lifecycle[]"] = query.lifecycle; delete query.lifecycle;
-  }
-  for (const [name, value] of Object.entries(query)) {
-    if (endpoint.request_format !== "anthropic.models" || endpoint.path_params.length || !["after_id", "before_id", "limit", "lifecycle[]"].includes(name)) throw new HttpError(400, "invalid_model_discovery_query", "unsupported model discovery query parameter");
-    if (name === "lifecycle[]") {
-      const values = Array.isArray(value) ? value : [value];
-      if (!values.length || values.length > 3 || values.some(v => typeof v !== "string" || !["active", "deprecated", "retired"].includes(v))) throw new HttpError(400, "invalid_model_discovery_query", "invalid model lifecycle filter");
-    } else if (name === "limit") {
-      if (!["string", "number"].includes(typeof value) || !/^\d+$/.test(String(value)) || Number(value) < 1 || Number(value) > 1000) throw new HttpError(400, "invalid_model_discovery_query", "model list limit must be between 1 and 1000");
-    } else if (typeof value !== "string" || !value.length || value.length > 512) throw new HttpError(400, "invalid_model_discovery_query", "invalid model list cursor");
-    else if (!discoveryAllows(policy, provider, value)) throw new HttpError(403, "model_not_allowed", "model list cursor is not allowed by this policy");
-  }
-  if (query.after_id != null && query.before_id != null) throw new HttpError(400, "invalid_model_discovery_query", "use only one model list cursor direction");
-}
+import { HttpError } from "./http-error.ts";
 
 function metadataResponse(value: unknown, response: Response): Response {
   const headers = new Headers(response.headers);
@@ -114,15 +69,32 @@ async function readMetadata(response: Response, operation: HttpOperation, boundR
 // Filtered pages expose only permitted model IDs, including first/last cursors.
 // An all-hidden page is scanned internally on the SAME selected grant; never
 // repick/fail over to a different account to manufacture a combined inventory.
-export async function modelDiscoveryResponse(response: Response, provider: CompiledProvider, endpoint: CompiledEndpoint, policy: AccessPolicy, query: Record<string, unknown>, operation: HttpOperation, next: (cursor: string, before: boolean) => Promise<Response>, refreshPolicy?: () => Promise<AccessPolicy>, registerInput?: NativeJsonInputHooks["registerInput"]): Promise<Response> {
+export async function modelDiscoveryResponse(response: Response, provider: CompiledProvider, endpoint: CompiledEndpoint, policy: AccessPolicy, query: Record<string, unknown>, operation: HttpOperation, next: (cursor: string, before: boolean) => Promise<Response>, refreshPolicy?: () => Promise<AccessPolicy>, registerInput?: NativeJsonInputHooks["registerInput"], trustedBaseUrl?: string): Promise<Response> {
   let restricted = policy.models != null;
   const seen = new Set<string>();
   for (let pages = 0; pages < 32; pages++) {
+    if (endpoint.request_format === "radius.config") {
+      if (!refreshPolicy || !trustedBaseUrl || response.status !== 200) {
+        await discardMetadata(response, registerInput); throw malformed();
+      }
+      const metadata = await readMetadata(response, operation, true, registerInput);
+      let filtered;
+      try { filtered = filterRadiusCatalog(metadata, trustedBaseUrl, id => discoveryAllows(policy, provider, id)); }
+      catch { throw malformed(); }
+      policy = await refreshPolicy(); operation.signal.throwIfAborted();
+      return metadataResponse(filterRadiusCatalog(filtered, trustedBaseUrl, id => discoveryAllows(policy, provider, id)), response);
+    }
     if (endpoint.request_format === REQUESTY_MODELS_FORMAT) {
       if (!refreshPolicy) { await discardMetadata(response, registerInput); throw malformed(); }
       const metadata = await readRequestyModels(response, operation.signal, id => discoveryAllows(policy, provider, id), registerInput);
       policy = await refreshPolicy();
       return metadataResponse(filterRequestyModels(metadata, id => discoveryAllows(policy, provider, id)), response);
+    }
+    // Private catalogs never publish an upstream error payload, even when the
+    // caller is unrestricted and an original-owner refresh is available.
+    if (isKeyedModelDiscovery(endpoint.request_format) && !response.ok) {
+      await discardMetadata(response, registerInput);
+      throw new HttpError(response.status >= 400 ? response.status : 502, "model_discovery_rejected", "upstream rejected model discovery");
     }
     if (refreshPolicy && response.status !== 200) {
       if (response.status < 400) {
@@ -136,10 +108,6 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       if (!restricted) return metadataResponse(metadata, response);
       throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
     }
-    if (isKeyedModelDiscovery(endpoint.request_format) && !response.ok) {
-      await discardMetadata(response, registerInput);
-      throw new HttpError(response.status >= 400 ? response.status : 502, "model_discovery_rejected", "upstream rejected model discovery");
-    }
     if (!response.ok) {
       if (response.status >= 300 && response.status < 400) {
         await discardMetadata(response, registerInput);
@@ -150,8 +118,13 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
     }
     if (isKeyedModelDiscovery(endpoint.request_format)) {
+      if (!refreshPolicy) { await discardMetadata(response, registerInput); throw malformed(); }
       const metadata = await readKeyedModelDiscovery(endpoint.request_format, response, operation.signal, id => discoveryAllows(policy, provider, id));
-      return metadataResponse(metadata, response);
+      // The native reader has completed EOF and retirement before authority.
+      // Join the original refresh, not merely an abort race with that task.
+      policy = await refreshPolicy();
+      operation.signal.throwIfAborted();
+      return metadataResponse({ ...metadata, data: metadata.data.filter(model => discoveryAllows(policy, provider, model.id)) }, response);
     }
     if (endpoint.request_format === "synthetic.models") {
       const metadata = await readNativeJson(response, operation.signal, 2 * 1024 * 1024,

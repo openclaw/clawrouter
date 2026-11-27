@@ -6,7 +6,7 @@ import test from "node:test";
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { default: worker } = await import("../index.ts");
-const { listHealth, snapshot } = await import("../providers.ts");
+const { listHealth } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
 test("Worker catalog reads known health in one bulk request without a KV listing", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   const keys = snapshot.providers.map(({ id }) => `health/providers/${id}`);
@@ -325,6 +325,42 @@ test("zero-cost Fusion offers stay exact with unavailable observations but confi
   }
 });
 
+for (const [providerId, modelId, displayName] of [
+  ["openai", "openai/gpt-6.1-sol", "GPT-6.1 Sol"],
+  ["anthropic", "anthropic/claude-opus-5-5", "Claude Opus 5.5"],
+]) test(`${providerId} display names reach client catalogs and model lists without changing identity or scope`, async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.providers = [providerId];
+  fixture.policy.models = [modelId];
+  fixture.connections.splice(0, fixture.connections.length, { providerId, enabled: true });
+  fixture.records.set("oauth/fixture/named-model", { provider: providerId, kind: "api_key", credential: "fixture-api-key", enabled: true });
+  for (const mode of ["key", "session"]) {
+    for (const handler of [catalogResponse, ...(mode === "session" ? [sessionResponse, entitlementResponse] : [])]) {
+      const response = await handler(fixture.request(mode), fixture.env);
+      assert.equal(response.status, 200);
+      const body = await response.json(), catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+      const provider = catalog.providers.find(({ id }) => id === providerId);
+      assert.deepEqual(provider.models.map(({ id }) => id), [modelId]);
+      const [model] = provider.models;
+      assert.equal(model.displayName, displayName);
+      assert.equal(model.upstream, snapshot.model_index[modelId].upstream);
+      assert.deepEqual(model.pricing, snapshot.model_index[modelId].pricing);
+      assert.ok(provider.offers.some(offer => offer.modelId === modelId));
+      assert.ok(provider.offers.every(offer => offer.modelId === null || offer.modelId === modelId));
+    }
+    for (const anthropic of [false, ...(providerId === "anthropic" ? [true] : [])]) {
+      const request = fixture.request(mode);
+      if (anthropic) request.headers.set("anthropic-version", "2023-06-01");
+      const response = await modelsResponse(request, fixture.env);
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.deepEqual(body.data.map(({ id }) => id), [modelId]);
+      assert.equal(body.data[0].display_name, displayName);
+    }
+  }
+});
+
 test("authorized model metadata preserves declared reasoning efforts without adding sibling metadata", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
@@ -504,6 +540,10 @@ test("Azure discovery keeps explicit native routes while hiding an unresolved de
     assert.deepEqual(view.routes.map(({ endpoint }) => endpoint), ["chat_completions", "embeddings", "responses"]);
     assert.deepEqual(view.models.map(({ id }) => id), configured ? ["azure-openai/deployment"] : []);
     assert.deepEqual(models.data.map(({ id }) => id), view.models.map(({ id }) => id));
+    if (configured) {
+      assert.equal("displayName" in view.models[0], false);
+      assert.equal(models.data[0].display_name, "Azure OpenAI · azure-openai/deployment");
+    }
   }
 });
 
@@ -629,8 +669,11 @@ for (const providerId of ["anthropic", "openai"]) test(`temporary grant cooldown
         if (phase === "before") { baseline.set(mode, inventory); baselineOffers.set(mode, view.offers); }
         assert.ok(view.models.length > 0, `${phase} ${mode}: keep registered models`);
         if (providerId === "anthropic") {
-          assert.equal(view.models.length, 10);
+          assert.deepEqual(view.models.map(({ id }) => id).sort(),
+            snapshot.providers.find(({ id }) => id === providerId).models.map(({ id }) => id).sort(),
+            "API-key discovery preserves every compiled Anthropic identity exactly once");
           assert.ok(view.models.some(({ id }) => id === "anthropic/claude-opus-5-5"));
+          assert.ok(view.models.some(({ id }) => id === "anthropic/claude-fable-5-2"));
           assert.equal(view.routes.length, 4);
         } else {
           assert.ok(view.models.some(({ id }) => id === "openai/gpt-6-astra"));
@@ -845,7 +888,8 @@ test("merged compact, transcription and hosted-search catalog preserve distinct 
   for (const [mode, balance, realtimeEligible, searchAdmission] of [
     ["reserve", 4358143, false, "pricing_required"],
     ["reserve", 4358144, true, "pricing_required"],
-    ["soft", 4358144, false, "admitted"],
+    ["soft", 4358144, true, "admitted"],
+    ["soft", 1, true, "admitted"],
   ]) {
     fixture.policy.budgetMode = mode; remaining = balance;
     const response = await worker.fetch(fixture.request("key"), fixture.env, {});
@@ -856,7 +900,7 @@ test("merged compact, transcription and hosted-search catalog preserve distinct 
     const realtime = provider.offers.find(row => row.modelId === "openai/gpt-realtime-2.1" && row.route === "/v1/native/openai/v1/realtime" && row.transport === "websocket");
     assert.ok(realtime); assert.equal(realtime.eligible, realtimeEligible);
     assert.equal(realtime.affordability, realtimeEligible ? "exact-covered" : "exact-blocked");
-    assert.equal(realtime.reasonCode, realtimeEligible ? undefined : mode === "soft" ? "realtime_hard_budget_required" : "budget_exhausted");
+    assert.equal(realtime.reasonCode, realtimeEligible ? undefined : "budget_exhausted");
     assert.equal(realtime.hostedToolAdmission, undefined);
     const compact = provider.offers.find(row => row.modelId === "openai/gpt-6-astra" && row.route === "/v1/responses/compact" && row.transport === "http");
     assert.ok(compact, "manifest composition must retain the merged unary compaction endpoint and registered model");
@@ -886,7 +930,11 @@ async function fusionDiscoveryFixture(t, { bindings } = {}) {
   const env = {
     OPENAI_API_KEY: "fixture-environment-key", CLAWROUTER_LOCAL_AUTH: "enabled",
     POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, records.get(item) ?? null])) : records.get(key) ?? null; },
+      async get(key, type) {
+        if (Array.isArray(key)) return new Map(key.map((item) => [item, records.get(item) ?? null]));
+        const value = records.get(key) ?? null;
+        return value !== null && type === "stream" ? accessCertsResponse(value, "").body : value;
+      },
       async list({ prefix }) {
         assert.equal(prefix, "health/providers/", "discovery only lists saved provider health, never grant credentials");
         calls.push({ path: "kv-list", body: { prefix } });

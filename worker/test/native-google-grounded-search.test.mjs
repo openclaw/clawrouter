@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { prepareNativeGoogleGroundedSearch } = await import("../native-google-grounded-search.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
@@ -113,6 +113,7 @@ test("grounded search enforces exact JSON size and complete HTTP200 UTF-8 length
   await assert.rejects(read(new Response(exact + " ", { headers })));
   for (const length of ["-1", "1.5", "bad", String(limit + 1), String(Buffer.byteLength(text) - 1), String(Buffer.byteLength(text) + 1)])
     await assert.rejects(read(new Response(text, { headers: { ...headers, "content-length": length } })));
+  for (const encoding of ["identity", " Identity "]) assert.ok(await read(new Response(text, { headers: { ...headers, "content-encoding": encoding, "content-length": String(Buffer.byteLength(text)) } })));
   await assert.rejects(read(new Response(text, { headers: { ...headers, "content-encoding": "identity", "content-length": "1" } })));
   for (const status of [202, 206, 302, 422, 500]) await assert.rejects(read(response(payload(), {}, status)));
   for (const extra of [{ "content-type": "text/plain" }, { "content-range": "bytes 0-1/100" }, { "content-encoding": "gzip" }]) await assert.rejects(read(response(payload(), extra)));

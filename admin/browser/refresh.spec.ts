@@ -1,3 +1,4 @@
+import { openLegacyUsage } from "./fixtures/legacy-usage";
 import { expect, test, type Page } from "@playwright/test";
 import type { AccessPolicy, AccessUser, AdminBootstrapResponse, AdminUsageRow, UsageAuditEvent, UsageSnapshot } from "../src/ui-types";
 
@@ -5,6 +6,7 @@ test("unavailable usage shows unknown spend and policy limits, then recovers", a
   const state = await fixture(page);
   state.failUsage = true;
   await page.goto("/dashboard/usage");
+  await openLegacyUsage(page);
   await expect(page.locator(".usageFreshness")).toContainText("Spend and remaining balances are unknown");
   await expect(page.locator(".usageSummaryGrid .metric strong")).toHaveText(["—", "—", "—", "—"]);
   await expect(page.getByText("No request audit events recorded yet.")).toHaveCount(0);
@@ -43,6 +45,7 @@ test("Usage renders recorded cost bases and partial Fusion without reclassifying
   ];
   Object.assign(state.usage.usage.summary, { requestCount: 1_000, actualCostMicros: 2_000_000, unpricedRequestCount: 2 });
   await page.goto("/dashboard/usage");
+  await openLegacyUsage(page);
   await expect(page.locator(".auditCost strong")).toHaveText([...cases.map(([, , value]) => value), "≥$1.00 accounted; 1 unpriced"]);
   await expect(page.locator(".auditCost small")).toHaveText([...cases.map(([, , , label]) => label), "accounted spend"]);
   const spend = page.locator(".usageSummaryGrid .metric").filter({ has: page.getByText("accounted spend", { exact: true }) });
@@ -94,6 +97,7 @@ test("policy and principal budget views show used reservations separately from r
       breakdown: [{ principal: "member@example.com", configured: true, ledger: "ready", limitMicros: 10_000_000, spentMicros: 2_000_000, remainingMicros: 8_000_000 }] },
   });
   await page.goto("/dashboard/usage");
+  await openLegacyUsage(page);
   await expect(page.locator(".budgetUsage").first()).toContainText("$2.00 used");
   await expect(page.locator(".budgetUsage").first()).toContainText("$8.00 remaining · Shared policy pool");
   await expect(page.locator(".budgetUsage").nth(1)).toContainText("Separate balance per principal");
@@ -105,6 +109,79 @@ test("policy and principal budget views show used reservations separately from r
   await expect(page.locator(".quotaPercent").nth(1)).toHaveText("—");
 });
 
+for (const phase of ["initial", "background"] as const) {
+  test(`${phase} refresh failure leads with its impact and keeps Retry available`, async ({ page }) => {
+    const state = await fixture(page);
+    state.failBootstrap = phase === "initial";
+    await page.goto("/dashboard/catalog");
+    if (phase === "background") {
+      await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+      state.failBootstrap = true;
+      await focusRefresh(page, "2026-07-06T12:01:00.000Z");
+    }
+    const bar = page.locator(".statusBar");
+    const impact = phase === "initial" ? "Some console data is unavailable." : "Displayed data may be out of date.";
+    await expect(bar.getByText(impact, { exact: true })).toBeVisible();
+    const message = await bar.innerText();
+    expect(message.indexOf(impact)).toBeLessThan(message.indexOf("reporting offline"));
+    await expect(bar.getByText("connected", { exact: true })).toHaveCount(0);
+    state.failBootstrap = false;
+    await bar.getByRole("button", { name: "Retry refresh" }).click();
+    await expect(bar).toHaveCount(0);
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  });
+}
+
+for (const role of ["admin", "user"] as const) {
+  test(`${role} reports only its own prior usage read as stale`, async ({ page }) => {
+    const state = await fixture(page);
+    state.role = role;
+    state.failUsage = true;
+    await page.goto("/dashboard/catalog");
+    // Catalog metadata can succeed before a member quota or lazy admin ledger read.
+    await expect(page.locator(".connectionMeta time")).toBeVisible();
+    if (role === "admin") await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    const bar = page.locator(".statusBar");
+    const resource = role === "admin" ? "Usage" : "Quota";
+    await expect(bar).toContainText(`${resource} data is unavailable.`);
+    await expect(bar).not.toContainText("out of date");
+    state.failUsage = false;
+    await bar.getByRole("button", { name: "Retry refresh" }).click();
+    await expect(bar).toHaveCount(0);
+    state.failUsage = true;
+    await focusRefresh(page, "2026-07-06T12:01:00.000Z");
+    await expect(bar).toContainText(`${resource} data may be out of date.`);
+    // A new identity may not reuse the old identity's successful snapshot.
+    state.email = "replacement@example.com";
+    await focusRefresh(page, "2026-07-06T12:02:00.000Z");
+    await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
+    await expect(bar).toContainText(`${resource} data is unavailable.`);
+    await expect(bar).not.toContainText("out of date");
+  });
+}
+
+test("a long refresh diagnostic follows Retry at 320px without a scroll", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 720 });
+  const state = await fixture(page);
+  state.failBootstrap = true;
+  state.reportingDiagnostic = "Diagnostic: " + "R".repeat(500);
+  await page.goto("/dashboard/catalog");
+  const bar = page.locator(".statusBar");
+  const retry = bar.getByRole("button", { name: "Retry refresh" });
+  await expect(bar).toContainText(state.reportingDiagnostic);
+  await page.evaluate(() => document.fonts.ready);
+  await expect(retry).toBeInViewport({ ratio: 1 });
+  const detail = bar.locator("p").filter({ hasText: state.reportingDiagnostic });
+  await expect(detail).toBeVisible();
+  const detailBox = (await detail.boundingBox())!;
+  const retryBox = (await retry.boundingBox())!;
+  expect(retryBox.y + retryBox.height).toBeLessThanOrEqual(detailBox.y);
+  expect(detailBox.x + detailBox.width).toBeLessThanOrEqual(320);
+  state.failBootstrap = false;
+  await retry.click();
+  await expect(bar).toHaveCount(0);
+});
+
 for (const principal of ["initial", "changed"] as const) {
   test(`bootstrap failure shows unknown usage for the ${principal} principal`, async ({ page }) => {
     const state = await fixture(page);
@@ -114,11 +191,11 @@ for (const principal of ["initial", "changed"] as const) {
       state.email = "second@example.com";
     }
     state.failBootstrap = true;
-    if (principal === "initial") await page.goto("/dashboard/usage");
+    if (principal === "initial") { await page.goto("/dashboard/usage"); await openLegacyUsage(page); }
     else await focusRefresh(page, "2026-07-06T12:01:00.000Z");
     await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
     await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
-    if (principal === "changed") await page.getByRole("button", { name: "Usage", exact: true }).click();
+    if (principal === "changed") { await page.getByRole("button", { name: "Usage", exact: true }).click(); await openLegacyUsage(page); }
     await expect(page.locator(".usageFreshness")).toContainText("Spend and remaining balances are unknown");
     await expect(page.locator(".usageSummaryGrid .metric strong")).toHaveText(["—", "—", "—", "—"]);
     await expect(page.getByRole("button", { name: "Retry refresh" })).toBeEnabled();
@@ -348,7 +425,7 @@ async function focusRefresh(page: Page, time: string) {
 async function fixture(page: Page) {
   await page.clock.setFixedTime(new Date("2026-07-06T12:00:00.000Z"));
   const state = {
-    failUsage: false, failBootstrap: false, failCredentials: false, failAfterWrite: false,
+    failUsage: false, failBootstrap: false, failCredentials: false, failAfterWrite: false, reportingDiagnostic: "reporting offline",
     role: "admin", email: "admin@example.com", writes: 0, usageReads: 0, bootstrapReads: 0, sessionReads: 0,
     usage: structuredClone(usage),
     holdUsage: null as Promise<void> | null,
@@ -386,7 +463,7 @@ async function fixture(page: Page) {
     if ((path === "/v1/admin/bootstrap" && state.failBootstrap)
       || (path === "/v1/session/credentials" && state.failCredentials)
       || (path === "/v1/session/usage" && state.role === "user" && state.failUsage)) {
-      await route.fulfill({ status: 503, body: "reporting offline" });
+      await route.fulfill({ status: 503, body: state.reportingDiagnostic });
       return;
     }
     const responses: Record<string, unknown> = {

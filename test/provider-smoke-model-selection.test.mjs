@@ -2,7 +2,7 @@ import "../worker/test/typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildProviderSmokePlan } from "../scripts/provider-smoke-plan.mjs";
+import { buildProviderSmokePlan } from "../scripts/provider-smoke-planning.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 const {
   concreteOpenAiSelection,

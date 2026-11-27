@@ -67,6 +67,11 @@ billing:
   `clawrouter-openai-*` to a provider without users setting `base_url`.
 - `routing.modelPrefixes` maps model names like `openai/gpt-4.1-mini` to the
   provider snapshot.
+- `models.entries[].displayName` is an optional, non-blank human-readable label,
+  such as `Claude Opus 5.5`. Declare it beside the model ID; the compiler carries
+  it into the snapshot and client catalog without changing routing, upstream IDs,
+  or pricing. Leave it absent for opaque or configured model placeholders. Clients
+  retain their existing fallback for unnamed models.
 - A model's `capabilities` map it to endpoints through the provider's capability
   declarations. Native route catalogs include only models for that endpoint;
   known models are rejected on incompatible endpoints before dispatch.

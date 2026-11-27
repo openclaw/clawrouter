@@ -9,12 +9,12 @@ import { imageBody, imageResult, imageModel } from "./minimax-image-runtime-fixt
 const router = `
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import worker from './worker/index.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import {authorityCall} from './worker/authority.ts';
 import {inspectGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {BodyLease,bodyBudgetCharged} from './worker/body-budget.ts';
-import {usageStub} from './worker/ledgers.ts';
+import { usageStub } from './worker/usage-ledger-client.ts';
 import {configureImage,imageModel} from './worker/test/minimax-image-runtime-fixture.mjs';
 configureImage(snapshot.providers.find(p=>p.id==='minimax'));
 let initialized,fetches=0,pending=new Set(),mode='',capacityAtFetch=0,readStarted=0,canceled=0,activeReads=0,aborted=false,capacityDuringCleanup=-1;

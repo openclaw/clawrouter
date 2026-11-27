@@ -3,7 +3,7 @@ import { credentialExpiry } from "./credential-lifecycle.ts";
 import { normalizeCredentialName } from "./credential-name.ts";
 import type { CredentialMutation } from "./authority-contracts.ts";
 import type { ProxyCredential, AccessPolicy, Env } from "./types";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { normalizeCopilotPublicIdentity, readCopilotPublicIdentity } from "./copilot-public-identity.ts";
 
 // Called after authority checks ownership, actor state and required policy holdings.

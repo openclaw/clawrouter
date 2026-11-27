@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { grantSupports, assertOperationConfiguration } from "../provider-auth.ts";
+import { assertOperationConfiguration } from "../provider-auth.ts";
+import { grantSupports } from "../grant-compatibility.ts";
 import { backgroundResponse, requireEmptyResponseControlBody, responsesControl, responsesControlQuery } from "../responses-lifecycle.ts";
 
 const endpoint = (id, path, method = "POST") => ({ id, path, method, path_params: method === "GET" ? ["response_id"] : [], headers: {}, query: {}, request_format: "openai.responses", response_format: "openai.responses" });

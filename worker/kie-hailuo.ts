@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const kieHailuoModels = [
   "hailuo/02-text-to-video-standard", "hailuo/02-image-to-video-standard",

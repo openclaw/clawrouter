@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const mistralRealtimeModel = "voxtral-mini-transcribe-realtime-2602";
 export const mistralRealtimePath = "/v1/audio/transcriptions/realtime";

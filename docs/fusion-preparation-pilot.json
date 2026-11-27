@@ -1,0 +1,1367 @@
+{
+  "schema": "fusion-preparation-pilot-v1",
+  "productionQualified": false,
+  "studies": [
+    {
+      "kind": "conditional-feedback",
+      "productionQualified": false,
+      "evidence": {
+        "protocolSha256": "d53fd4b907f6af322523e2c7fb9ed3032ada1e7b90c5bf5d3b95cc630008df9f",
+        "resultSha256": "f9c2ead110840cd6130c82ad89a79f9725b213a685495f0649151ee87da015c2",
+        "auditSha256": "20516d208bb1b3bbbb7fb88bf32f1f4393a1e56fc5597b7a93e12fbebecdf24f"
+      },
+      "summary": {
+        "fresh": {
+          "passed": 5,
+          "validArtifacts": 7,
+          "falseAccepts": 0,
+          "costMicros": 7069,
+          "meanApiMs": 6565.032657333333
+        },
+        "label": {
+          "passed": 3,
+          "validArtifacts": 8,
+          "falseAccepts": 0,
+          "costMicros": 7326,
+          "meanApiMs": 5915.095847222223
+        },
+        "details": {
+          "passed": 4,
+          "validArtifacts": 9,
+          "falseAccepts": 0,
+          "costMicros": 7705,
+          "meanApiMs": 5888.923213111111
+        }
+      },
+      "rows": [
+        {
+          "initialIndex": 0,
+          "round": 0,
+          "arm": "fresh",
+          "costMicros": 760,
+          "apiMs": 6227.4304170000005,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": false
+        },
+        {
+          "initialIndex": 0,
+          "round": 0,
+          "arm": "label",
+          "costMicros": 849,
+          "apiMs": 6321.4932499999995,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 0,
+          "round": 0,
+          "arm": "details",
+          "costMicros": 911,
+          "apiMs": 6079.944709000001,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 5
+        },
+        {
+          "initialIndex": 0,
+          "round": 1,
+          "arm": "label",
+          "costMicros": 802,
+          "apiMs": 7014.790374999997,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 5
+        },
+        {
+          "initialIndex": 0,
+          "round": 1,
+          "arm": "details",
+          "costMicros": 829,
+          "apiMs": 5219.677042000003,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 5
+        },
+        {
+          "initialIndex": 0,
+          "round": 1,
+          "arm": "fresh",
+          "costMicros": 767,
+          "apiMs": 6161.825416,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 0,
+          "round": 2,
+          "arm": "details",
+          "costMicros": 876,
+          "apiMs": 6117.342583000005,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 5
+        },
+        {
+          "initialIndex": 0,
+          "round": 2,
+          "arm": "fresh",
+          "costMicros": 744,
+          "apiMs": 6142.596458,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 0,
+          "round": 2,
+          "arm": "label",
+          "costMicros": 786,
+          "apiMs": 4992.634583999999,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 5
+        },
+        {
+          "initialIndex": 1,
+          "round": 0,
+          "arm": "label",
+          "costMicros": 859,
+          "apiMs": 6966.004457999996,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 5
+        },
+        {
+          "initialIndex": 1,
+          "round": 0,
+          "arm": "details",
+          "costMicros": 821,
+          "apiMs": 5617.782040999999,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 5
+        },
+        {
+          "initialIndex": 1,
+          "round": 0,
+          "arm": "fresh",
+          "costMicros": 797,
+          "apiMs": 6599.7261249999865,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 5
+        },
+        {
+          "initialIndex": 1,
+          "round": 1,
+          "arm": "details",
+          "costMicros": 855,
+          "apiMs": 5617.988499999992,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 1,
+          "round": 1,
+          "arm": "fresh",
+          "costMicros": 799,
+          "apiMs": 7182.06362500001,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 1,
+          "round": 1,
+          "arm": "label",
+          "costMicros": 820,
+          "apiMs": 5713.172999999995,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 1,
+          "round": 2,
+          "arm": "fresh",
+          "costMicros": 783,
+          "apiMs": 6599.833790999997,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 1,
+          "round": 2,
+          "arm": "label",
+          "costMicros": 777,
+          "apiMs": 5160.283958,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 4
+        },
+        {
+          "initialIndex": 1,
+          "round": 2,
+          "arm": "details",
+          "costMicros": 848,
+          "apiMs": 5369.627124999999,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 2,
+          "round": 0,
+          "arm": "details",
+          "costMicros": 817,
+          "apiMs": 5937.899084000004,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 2,
+          "round": 0,
+          "arm": "fresh",
+          "costMicros": 855,
+          "apiMs": 7292.644333000004,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 2,
+          "round": 0,
+          "arm": "label",
+          "costMicros": 876,
+          "apiMs": 6152.255958000009,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": false
+        },
+        {
+          "initialIndex": 2,
+          "round": 1,
+          "arm": "fresh",
+          "costMicros": 813,
+          "apiMs": 6847.039292000001,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 4
+        },
+        {
+          "initialIndex": 2,
+          "round": 1,
+          "arm": "label",
+          "costMicros": 743,
+          "apiMs": 5339.114375000005,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 5
+        },
+        {
+          "initialIndex": 2,
+          "round": 1,
+          "arm": "details",
+          "costMicros": 820,
+          "apiMs": 5788.551124999998,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": true,
+          "publicCount": 5
+        },
+        {
+          "initialIndex": 2,
+          "round": 2,
+          "arm": "label",
+          "costMicros": 814,
+          "apiMs": 5576.1126670000085,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 2,
+          "round": 2,
+          "arm": "details",
+          "costMicros": 928,
+          "apiMs": 7251.496708999999,
+          "publicPassed": true,
+          "passed": true,
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "initialIndex": 2,
+          "round": 2,
+          "arm": "fresh",
+          "costMicros": 751,
+          "apiMs": 6032.1344589999935,
+          "publicPassed": false,
+          "passed": false,
+          "validArtifact": false
+        }
+      ]
+    },
+    {
+      "kind": "preparation-overlap",
+      "productionQualified": false,
+      "evidence": {
+        "protocolSha256": "2cf100df2c02bb8d22ec542f5a13957e704cb3ae5060e3d4a884ddc2f112da80",
+        "resultSha256": "da3cd30c235aa61373e1525c10fda01b70651ddef826a651e3f85b45624f91e5",
+        "auditSha256": "90b1e5b20cf97b0f4b76101a4a11b750dd5fab8a1d3bcda5073fc3fb96bdd902"
+      },
+      "summary": {
+        "sequential": {
+          "passed": 6,
+          "falseAccepts": 0,
+          "costMicros": 3603,
+          "meanWorkflowMs": 5666.247777833333,
+          "meanApiMs": 4024.7938331666664
+        },
+        "overlap": {
+          "passed": 5,
+          "falseAccepts": 0,
+          "costMicros": 3726,
+          "meanWorkflowMs": 5373.1447775,
+          "meanApiMs": 4265.905736000001
+        }
+      },
+      "rows": [
+        {
+          "caseIndex": 0,
+          "repeat": 0,
+          "arm": "sequential",
+          "costMicros": 448,
+          "elapsedMs": 1994.497625,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3789.544625,
+          "timing": {
+            "generationStartMs": 0.017125000000021373,
+            "generationEndMs": 2910.36975,
+            "preparationStartMs": 2910.379584,
+            "preparationEndMs": 3419.362834,
+            "verificationStartMs": 3419.36525,
+            "verificationEndMs": 3632.615209,
+            "cleanupStartMs": 3632.6167920000003,
+            "cleanupEndMs": 3789.524
+          },
+          "validArtifact": true,
+          "publicCount": 19,
+          "fullCount": 20
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 0,
+          "arm": "overlap",
+          "costMicros": 466,
+          "elapsedMs": 1943.341625,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3159.5435830000006,
+          "timing": {
+            "preparationStartMs": 0.0020000000004074536,
+            "generationStartMs": 0.1341660000007323,
+            "preparationEndMs": 437.6590410000008,
+            "generationEndMs": 2785.5313750000005,
+            "verificationStartMs": 2785.5586250000006,
+            "verificationEndMs": 2989.7388330000003,
+            "cleanupStartMs": 2989.743125,
+            "cleanupEndMs": 3159.532166
+          },
+          "validArtifact": true,
+          "publicCount": 19,
+          "fullCount": 20
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 1,
+          "arm": "overlap",
+          "costMicros": 435,
+          "elapsedMs": 1473.54425,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 2476.0130830000007,
+          "timing": {
+            "preparationStartMs": 0.001457999999729509,
+            "generationStartMs": 0.11691599999994651,
+            "preparationEndMs": 451.60699999999997,
+            "generationEndMs": 2142.3067500000006,
+            "verificationStartMs": 2142.3097499999994,
+            "verificationEndMs": 2341.364791000001,
+            "cleanupStartMs": 2341.3656249999995,
+            "cleanupEndMs": 2476.006624999999
+          },
+          "validArtifact": true,
+          "publicCount": 19,
+          "fullCount": 20
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 1,
+          "arm": "sequential",
+          "costMicros": 442,
+          "elapsedMs": 1611.431125000001,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3140.0355420000014,
+          "timing": {
+            "generationStartMs": 0.00045900000077381264,
+            "generationEndMs": 2328.9987500000007,
+            "preparationStartMs": 2328.999667,
+            "preparationEndMs": 2794.3059170000015,
+            "verificationStartMs": 2794.3072920000013,
+            "verificationEndMs": 2999.6322920000002,
+            "cleanupStartMs": 2999.633334,
+            "cleanupEndMs": 3140.028375
+          },
+          "validArtifact": true,
+          "publicCount": 19,
+          "fullCount": 20
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 2,
+          "arm": "sequential",
+          "costMicros": 439,
+          "elapsedMs": 1680.7162079999998,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3361.132916999999,
+          "timing": {
+            "generationStartMs": 0.0006249999987630872,
+            "generationEndMs": 2450.6376249999994,
+            "preparationStartMs": 2450.6386669999993,
+            "preparationEndMs": 3058.3639169999988,
+            "verificationStartMs": 3058.365249999999,
+            "verificationEndMs": 3262.6547089999985,
+            "cleanupStartMs": 3262.655666999999,
+            "cleanupEndMs": 3361.126541999998
+          },
+          "validArtifact": true,
+          "publicCount": 19,
+          "fullCount": 20
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 2,
+          "arm": "overlap",
+          "costMicros": 459,
+          "elapsedMs": 2199.1511660000033,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3145.2789169999996,
+          "timing": {
+            "preparationStartMs": 0.0020000000004074536,
+            "generationStartMs": 0.10758400000122492,
+            "preparationEndMs": 602.2770840000012,
+            "generationEndMs": 2816.8644590000004,
+            "verificationStartMs": 2816.8675839999996,
+            "verificationEndMs": 3028.3899999999994,
+            "cleanupStartMs": 3028.3917919999985,
+            "cleanupEndMs": 3145.2721249999995
+          },
+          "validArtifact": true,
+          "publicCount": 19,
+          "fullCount": 20
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 0,
+          "arm": "overlap",
+          "costMicros": 790,
+          "elapsedMs": 6764.144,
+          "publicPassed": false,
+          "fullPassed": false,
+          "workflowMs": 7948.52275,
+          "timing": {
+            "preparationStartMs": 0.001374999999825377,
+            "generationStartMs": 0.1569999999992433,
+            "preparationEndMs": 473.45524999999907,
+            "generationEndMs": 7556.314249999999,
+            "verificationStartMs": 7556.317290999999,
+            "verificationEndMs": 7828.401458,
+            "cleanupStartMs": 7828.4025,
+            "cleanupEndMs": 7948.515665999999
+          },
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": null
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 0,
+          "arm": "sequential",
+          "costMicros": 730,
+          "elapsedMs": 5786.995874999997,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 7438.435249999999,
+          "timing": {
+            "generationStartMs": 0.00041599999894970097,
+            "generationEndMs": 6608.711665999999,
+            "preparationStartMs": 6608.715708,
+            "preparationEndMs": 7085.948790999999,
+            "verificationStartMs": 7085.950708,
+            "verificationEndMs": 7325.513833000001,
+            "cleanupStartMs": 7325.514874999997,
+            "cleanupEndMs": 7438.428125000002
+          },
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 1,
+          "arm": "sequential",
+          "costMicros": 695,
+          "elapsedMs": 5261.2954580000005,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 6831.317792000002,
+          "timing": {
+            "generationStartMs": 0.0002499999973224476,
+            "generationEndMs": 5968.195166999998,
+            "preparationStartMs": 5968.1967920000025,
+            "preparationEndMs": 6441.839749999999,
+            "verificationStartMs": 6441.841333000004,
+            "verificationEndMs": 6714.170167000004,
+            "cleanupStartMs": 6714.171167,
+            "cleanupEndMs": 6831.311583000002
+          },
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 1,
+          "arm": "overlap",
+          "costMicros": 811,
+          "elapsedMs": 7231.446541999998,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 8324.003790999996,
+          "timing": {
+            "preparationStartMs": 0.002165999998396728,
+            "generationStartMs": 0.11716599999635946,
+            "preparationEndMs": 467.50091599999723,
+            "generationEndMs": 7911.447124999999,
+            "verificationStartMs": 7911.452249999995,
+            "verificationEndMs": 8161.860708,
+            "cleanupStartMs": 8161.862041,
+            "cleanupEndMs": 8323.996165999997
+          },
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 2,
+          "arm": "overlap",
+          "costMicros": 765,
+          "elapsedMs": 5983.806833000002,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 7185.5065410000025,
+          "timing": {
+            "preparationStartMs": 0.0009160000045085326,
+            "generationStartMs": 0.10195799999928568,
+            "preparationEndMs": 445.25220800000534,
+            "generationEndMs": 6797.600000000006,
+            "verificationStartMs": 6797.605541000004,
+            "verificationEndMs": 7066.453874999999,
+            "cleanupStartMs": 7066.4545,
+            "cleanupEndMs": 7185.501166000002
+          },
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 2,
+          "arm": "sequential",
+          "costMicros": 849,
+          "elapsedMs": 7813.8267080000005,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 9437.020540999998,
+          "timing": {
+            "generationStartMs": 0.0008750000051804818,
+            "generationEndMs": 8571.604041000006,
+            "preparationStartMs": 8571.613291000009,
+            "preparationEndMs": 9075.487499999996,
+            "verificationStartMs": 9075.490790999997,
+            "verificationEndMs": 9321.617166000004,
+            "cleanupStartMs": 9321.619874999997,
+            "cleanupEndMs": 9437.016208000008
+          },
+          "validArtifact": true,
+          "publicCount": 5,
+          "fullCount": 6
+        }
+      ]
+    },
+    {
+      "kind": "prepared-cascade",
+      "productionQualified": false,
+      "evidence": {
+        "protocolSha256": "023841b762780d4fe192fa2d42c2e13671b4c347ee7372ad667b6db6e7199602",
+        "resultSha256": "4a48909b9c0b9a03489f36bda63199cf6e6847f166f3074e1e7a788b8d212bc7",
+        "auditSha256": "3c0e99a0ea7c0c2a5dca9c1379acb2ae5ed6614af2bf76aa9c2cef4767217c4d"
+      },
+      "summary": {
+        "cascade": {
+          "passed": 6,
+          "falseAccepts": 0,
+          "rescues": 0,
+          "costMicros": 3604,
+          "meanWorkflowMs": 5480.474722333333
+        },
+        "strong": {
+          "passed": 6,
+          "falseAccepts": 0,
+          "rescues": 0,
+          "costMicros": 34164,
+          "meanWorkflowMs": 7724.094048666667
+        },
+        "cheap": {
+          "passed": 4,
+          "falseAccepts": 0,
+          "rescues": 0,
+          "costMicros": 3769,
+          "meanWorkflowMs": 5786.889583500003
+        }
+      },
+      "rows": [
+        {
+          "caseIndex": 0,
+          "repeat": 0,
+          "strategy": "cascade",
+          "costMicros": 423,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 2703.856708,
+          "validArtifact": true,
+          "fullCount": 20,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 423,
+              "elapsedMs": 1426.6231659999999,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 116
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.010708000000022366,
+                "generationStartMs": 0.43775000000005093,
+                "preparationEndMs": 486.2135420000001,
+                "generationEndMs": 2359.040458,
+                "verificationStartMs": 2359.057833,
+                "verificationEndMs": 2586.9428749999997,
+                "cleanupStartMs": 2586.946,
+                "cleanupEndMs": 2678.542125
+              },
+              "stageMs": 2678.561917
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 0,
+          "strategy": "strong",
+          "costMicros": 4024,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3170.0670410000002,
+          "validArtifact": true,
+          "fullCount": 20,
+          "steps": [
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 4024,
+              "elapsedMs": 2103.730833,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 76
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.0012499999997999112,
+                "generationStartMs": 0.10099999999965803,
+                "preparationEndMs": 568.9758750000001,
+                "generationEndMs": 2795.9443329999995,
+                "verificationStartMs": 2795.9526669999996,
+                "verificationEndMs": 3027.5924999999997,
+                "cleanupStartMs": 3027.59325,
+                "cleanupEndMs": 3159.2850419999995
+              },
+              "stageMs": 3159.2917079999997
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 0,
+          "strategy": "cheap",
+          "costMicros": 450,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 2865.7758330000006,
+          "validArtifact": true,
+          "fullCount": 20,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 450,
+              "elapsedMs": 1727.0701669999999,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 170
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.0013339999995878316,
+                "generationStartMs": 0.11108399999920948,
+                "preparationEndMs": 452.3909589999994,
+                "generationEndMs": 2472.220041999999,
+                "verificationStartMs": 2472.2228749999995,
+                "verificationEndMs": 2722.287542,
+                "cleanupStartMs": 2722.288875,
+                "cleanupEndMs": 2851.450333999999
+              },
+              "stageMs": 2851.4565000000002
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 1,
+          "strategy": "strong",
+          "costMicros": 4144,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 4059.71975,
+          "validArtifact": true,
+          "fullCount": 20,
+          "steps": [
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 4144,
+              "elapsedMs": 2906.2052079999994,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 100
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.001916999999593827,
+                "generationStartMs": 0.11391700000058336,
+                "preparationEndMs": 541.5228339999994,
+                "generationEndMs": 3695.8280840000007,
+                "verificationStartMs": 3695.8312499999993,
+                "verificationEndMs": 3926.504084,
+                "cleanupStartMs": 3926.504999999999,
+                "cleanupEndMs": 4048.034084000001
+              },
+              "stageMs": 4048.0398339999992
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 1,
+          "strategy": "cheap",
+          "costMicros": 455,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3563.877542,
+          "validArtifact": true,
+          "fullCount": 20,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 455,
+              "elapsedMs": 2352.977500000001,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 180
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.00166700000045239,
+                "generationStartMs": 0.11275000000023283,
+                "preparationEndMs": 482.53950000000077,
+                "generationEndMs": 3193.0787500000024,
+                "verificationStartMs": 3193.0825000000023,
+                "verificationEndMs": 3413.6571249999997,
+                "cleanupStartMs": 3413.658042000001,
+                "cleanupEndMs": 3551.4578340000025
+              },
+              "stageMs": 3551.463292000002
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 1,
+          "strategy": "cascade",
+          "costMicros": 474,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3453.978292,
+          "validArtifact": true,
+          "fullCount": 20,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 474,
+              "elapsedMs": 2350.5686669999996,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 218
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.001458000002457993,
+                "generationStartMs": 0.10829200000080164,
+                "preparationEndMs": 472.3213750000032,
+                "generationEndMs": 3074.0705830000006,
+                "verificationStartMs": 3074.073625000001,
+                "verificationEndMs": 3271.9510420000006,
+                "cleanupStartMs": 3271.951833000003,
+                "cleanupEndMs": 3439.040458000003
+              },
+              "stageMs": 3439.0462079999998
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 2,
+          "strategy": "cheap",
+          "costMicros": 459,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3161.965709,
+          "validArtifact": true,
+          "fullCount": 20,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 459,
+              "elapsedMs": 1971.7952079999995,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 188
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.001582999997481238,
+                "generationStartMs": 0.1069999999999709,
+                "preparationEndMs": 679.7584169999973,
+                "generationEndMs": 2823.6710829999975,
+                "verificationStartMs": 2823.6738749999968,
+                "verificationEndMs": 3032.3041249999987,
+                "cleanupStartMs": 3032.3052499999976,
+                "cleanupEndMs": 3148.0912499999977
+              },
+              "stageMs": 3148.097791999997
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 2,
+          "strategy": "cascade",
+          "costMicros": 460,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 3824.861083,
+          "validArtifact": true,
+          "fullCount": 20,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 460,
+              "elapsedMs": 2602.4396670000024,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 191
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.001374999999825377,
+                "generationStartMs": 0.10645799999838346,
+                "preparationEndMs": 505.25645799999984,
+                "generationEndMs": 3451.7632909999993,
+                "verificationStartMs": 3451.766040999999,
+                "verificationEndMs": 3656.6379579999993,
+                "cleanupStartMs": 3656.6390409999985,
+                "cleanupEndMs": 3806.3168750000004
+              },
+              "stageMs": 3806.3229580000007
+            }
+          ]
+        },
+        {
+          "caseIndex": 0,
+          "repeat": 2,
+          "strategy": "strong",
+          "costMicros": 4449,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 4764.752625000001,
+          "validArtifact": true,
+          "fullCount": 20,
+          "steps": [
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 4449,
+              "elapsedMs": 3693.6620000000003,
+              "usage": {
+                "uncachedInputTokens": 3644,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 161
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.0009580000005371403,
+                "generationStartMs": 0.10066699999879347,
+                "preparationEndMs": 498.5089999999982,
+                "generationEndMs": 4421.296582999999,
+                "verificationStartMs": 4421.30025,
+                "verificationEndMs": 4623.855041999999,
+                "cleanupStartMs": 4623.856292,
+                "cleanupEndMs": 4743.791624999998
+              },
+              "stageMs": 4743.803958
+            }
+          ]
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 0,
+          "strategy": "cascade",
+          "costMicros": 775,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 7884.081875,
+          "validArtifact": true,
+          "fullCount": 6,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 775,
+              "elapsedMs": 6659.238249999995,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 852
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.002790999998978805,
+                "generationStartMs": 0.12037499999860302,
+                "preparationEndMs": 432.1557079999984,
+                "generationEndMs": 7429.751791000002,
+                "verificationStartMs": 7429.755333000001,
+                "verificationEndMs": 7687.708416000001,
+                "cleanupStartMs": 7687.709791000001,
+                "cleanupEndMs": 7860.711166000001
+              },
+              "stageMs": 7860.718332999997
+            }
+          ]
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 0,
+          "strategy": "strong",
+          "costMicros": 7544,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 13508.965334,
+          "validArtifact": true,
+          "fullCount": 6,
+          "steps": [
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 7544,
+              "elapsedMs": 12313.401666999998,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 811
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.0008329999982379377,
+                "generationStartMs": 0.09587499999906868,
+                "preparationEndMs": 493.45512499999313,
+                "generationEndMs": 13071.751957999993,
+                "verificationStartMs": 13071.754041999993,
+                "verificationEndMs": 13333.835832999997,
+                "cleanupStartMs": 13333.836124999994,
+                "cleanupEndMs": 13497.386332999995
+              },
+              "stageMs": 13497.390041999999
+            }
+          ]
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 0,
+          "strategy": "cheap",
+          "costMicros": 782,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 7723.971292000002,
+          "validArtifact": true,
+          "fullCount": 6,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 782,
+              "elapsedMs": 6563.015290999996,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 865
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.000540999993972946,
+                "generationStartMs": 0.09204099999624304,
+                "preparationEndMs": 448.08904099999927,
+                "generationEndMs": 7312.923290999999,
+                "verificationStartMs": 7312.930666,
+                "verificationEndMs": 7599.344207999995,
+                "cleanupStartMs": 7599.344458,
+                "cleanupEndMs": 7712.172999999995
+              },
+              "stageMs": 7712.173624999996
+            }
+          ]
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 1,
+          "strategy": "strong",
+          "costMicros": 7059,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 10532.814083999998,
+          "validArtifact": true,
+          "fullCount": 6,
+          "steps": [
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 7059,
+              "elapsedMs": 9243.7915,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 714
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.0006250000005820766,
+                "generationStartMs": 0.09554200000275159,
+                "preparationEndMs": 489.22954200000095,
+                "generationEndMs": 10089.463125000002,
+                "verificationStartMs": 10089.464958000004,
+                "verificationEndMs": 10343.957667000002,
+                "cleanupStartMs": 10343.957958000006,
+                "cleanupEndMs": 10521.631291999998
+              },
+              "stageMs": 10521.631750000008
+            }
+          ]
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 1,
+          "strategy": "cheap",
+          "costMicros": 800,
+          "publicPassed": false,
+          "fullPassed": false,
+          "workflowMs": 8304.604500000001,
+          "validArtifact": true,
+          "fullCount": null,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 800,
+              "elapsedMs": 7070.555208999998,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 902
+              },
+              "disposition": "complete",
+              "publicPassed": false,
+              "timing": {
+                "preparationStartMs": 0.0006250000005820766,
+                "generationStartMs": 0.10229100000287872,
+                "preparationEndMs": 466.5171249999985,
+                "generationEndMs": 7869.245750000002,
+                "verificationStartMs": 7869.248290999996,
+                "verificationEndMs": 8143.807040999993,
+                "cleanupStartMs": 8143.807457999996,
+                "cleanupEndMs": 8291.016374999992
+              },
+              "stageMs": 8291.017290999996
+            }
+          ]
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 1,
+          "strategy": "cascade",
+          "costMicros": 716,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 7008.185666999998,
+          "validArtifact": true,
+          "fullCount": 6,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 716,
+              "elapsedMs": 5538.21083299999,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 734
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.0006250000005820766,
+                "generationStartMs": 0.13041700000758283,
+                "preparationEndMs": 624.0426670000015,
+                "generationEndMs": 6225.515250000011,
+                "verificationStartMs": 6225.518250000008,
+                "verificationEndMs": 6670.744124999997,
+                "cleanupStartMs": 6670.744542,
+                "cleanupEndMs": 6998.771332999997
+              },
+              "stageMs": 6998.77350000001
+            }
+          ]
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 2,
+          "strategy": "cheap",
+          "costMicros": 823,
+          "publicPassed": false,
+          "fullPassed": false,
+          "workflowMs": 9101.142625000008,
+          "validArtifact": true,
+          "fullCount": null,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 823,
+              "elapsedMs": 7325.139792000002,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 948
+              },
+              "disposition": "complete",
+              "publicPassed": false,
+              "timing": {
+                "preparationStartMs": 0.0006659999926341698,
+                "generationStartMs": 0.15462499999557622,
+                "preparationEndMs": 1341.1508329999924,
+                "generationEndMs": 8112.222999999998,
+                "verificationStartMs": 8112.22645799999,
+                "verificationEndMs": 8727.114082999993,
+                "cleanupStartMs": 8727.114457999996,
+                "cleanupEndMs": 9084.65845799999
+              },
+              "stageMs": 9084.659290999989
+            }
+          ]
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 2,
+          "strategy": "cascade",
+          "costMicros": 756,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 8007.884709000005,
+          "validArtifact": true,
+          "fullCount": 6,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 756,
+              "elapsedMs": 6771.688500000004,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 814
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.0007919999916339293,
+                "generationStartMs": 0.14333399999304675,
+                "preparationEndMs": 1668.6369589999958,
+                "generationEndMs": 7522.936459000004,
+                "verificationStartMs": 7522.938916999992,
+                "verificationEndMs": 7809.7774999999965,
+                "cleanupStartMs": 7809.777916999999,
+                "cleanupEndMs": 7984.3063339999935
+              },
+              "stageMs": 7984.308042000004
+            }
+          ]
+        },
+        {
+          "caseIndex": 1,
+          "repeat": 2,
+          "strategy": "strong",
+          "costMicros": 6944,
+          "publicPassed": true,
+          "fullPassed": true,
+          "workflowMs": 10308.245458000005,
+          "validArtifact": true,
+          "fullCount": 6,
+          "steps": [
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 6944,
+              "elapsedMs": 9038.639041000002,
+              "usage": {
+                "uncachedInputTokens": 3489,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 691
+              },
+              "disposition": "complete",
+              "publicPassed": true,
+              "timing": {
+                "preparationStartMs": 0.001041999988956377,
+                "generationStartMs": 0.16649999999208376,
+                "preparationEndMs": 581.41466699999,
+                "generationEndMs": 9880.166624999998,
+                "verificationStartMs": 9880.168416999993,
+                "verificationEndMs": 10144.970166999992,
+                "cleanupStartMs": 10144.970499999996,
+                "cleanupEndMs": 10292.791457999992
+              },
+              "stageMs": 10292.792541999996
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

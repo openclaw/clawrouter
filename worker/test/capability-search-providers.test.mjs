@@ -4,14 +4,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { sha256Hex } = await import("../utils.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const ids = ["brave", "exa", "parallel"];
 const compiled = compileProviderSnapshot(ids.map(id => `providers/${id}.provider.yaml`).toSorted().map(file => parse(readFileSync(file, "utf8"))));
 

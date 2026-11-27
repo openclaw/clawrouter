@@ -1,3 +1,5 @@
+import { nativeParams } from "./native-route.ts";
+import { normalizeUnifiedAccessPrograms } from "./access-programs.ts";
 import { prepareMiniMaxSearch } from "./minimax-search.ts";
 import { miniMaxSearchRequirement, miniMaxSearchDenied } from "./minimax-search-credential.ts";
 import { prepareVeniceChatBinding } from "./venice-chat-binding.ts";
@@ -35,15 +37,19 @@ import { selectRequestTariff } from "./request-tariff.ts";
 import { prepareRadiusRequest } from "./provider-radius.ts";
 import { prepareOllamaChatRequest } from "./provider-ollama.ts";
 import { isStandaloneSearch, validateStandaloneSearch } from "./standalone-search.ts";
-import { discoveryQuery, isModelDiscovery, prepareModelDiscovery } from "./model-discovery.ts";
+import { discoveryQuery, prepareModelDiscovery } from "./model-discovery-request.ts";
+import { isModelDiscovery } from "./model-discovery-formats.ts";
 import { validateResponsesInputTokens } from "./responses-input-tokens.ts";
+import { validateImageEdit } from "./image-edits.ts";
 import { validateImageGeneration } from "./image-generation.ts";
-import { resolveTemplate } from "./provider-templates.ts";
+import { resolveTemplate, PreparationAdmission, isPreparationLimit } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env, ProxyRequestBody } from "./types";
-import { capabilityForPath, endpointForPath, modelRoute, modelSupportsEndpoint, providerForModel, providerModel, transformRequestBody, unifiedPathForEndpoint } from "./providers";
-import { decodePathSegment, errorResponse, HttpError } from "./utils";
+import { transformRequestBody } from "./provider-request"; import { endpointForPath, modelRoute, providerForModel, providerModel, unifiedPathForEndpoint } from "./provider-catalog"; import { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
+import { errorResponse } from "./utils";
+import { HttpError } from "./http-error";
 
 export interface ProxySelection {
+  preparation?: PreparationAdmission;
   provider: CompiledProvider;
   endpoint: CompiledEndpoint;
   model: CompiledModel | null;
@@ -121,10 +127,11 @@ export function validateSelectedInput(selection: ProxySelection): void {
     validateCompactRequest(requestObject(selection.body), selection.model);
     return;
   }
-  if (selection.endpoint.request_format === "openai.images_generations") {
+  if (["openai.images_generations", "openai.images_edits"].includes(selection.endpoint.request_format)) {
     const pricing = selection.model?.pricing;
     if (pricing?.unit !== "image_token") throw new HttpError(400, "image_model_unqualified", "a registered image generation tariff is required");
-    validateImageGeneration(requestObject(selection.body), pricing);
+    if (selection.endpoint.request_format === "openai.images_edits") validateImageEdit(requestObject(selection.body), pricing);
+    else validateImageGeneration(requestObject(selection.body), pricing);
     return;
   }
   if (selection.endpoint.request_format !== "openai.audio_speech") return;
@@ -136,7 +143,10 @@ interface ProxySelectionFailure {
   auditSelection: ProxySelection | null;
 }
 
-export function concreteOpenAiSelection(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number): ProxySelection | ProxySelectionFailure {
+export function concreteOpenAiSelection(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number, preparation?: PreparationAdmission): ProxySelection | ProxySelectionFailure {
+  // Standalone selection (including WebSocket selection) begins one operation.
+  // Proxy entries supply their existing token; returned selections carry it onward.
+  preparation ??= new PreparationAdmission();
   const modelId = typeof body.model === "string" ? body.model : "";
   const capability = capabilityForPath(path);
   const route = modelRoute(modelId, capability ?? undefined);
@@ -145,10 +155,14 @@ export function concreteOpenAiSelection(path: string, body: Record<string, unkno
   if (!capability || !endpoint || !route.model.capabilities.includes(capability)) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} does not support ${path}`, 400));
   if (unifiedPathForEndpoint(route.provider, endpoint) !== path) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} requires its provider-native endpoint`, 400));
   try {
-    const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env);
-    const transformed = transformRequestBody(route.provider, path, upstreamModel, { ...body, model: upstreamModel }, env);
-    return { provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST", timeoutMs };
+    const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env, preparation);
+    const upstreamBody = { ...body, model: upstreamModel };
+    if (capability === "llm.responses" || (capability === "llm.chat" && route.provider.id !== "openai"))
+      normalizeUnifiedAccessPrograms(upstreamBody, route.provider.id === "openai");
+    const transformed = transformRequestBody(route.provider, path, upstreamModel, upstreamBody, env, preparation);
+    return { preparation, provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST", timeoutMs };
   } catch (error) {
+    if (isPreparationLimit(error)) throw error;
     const failure = error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
     return selectionFailure(errorResponse(failure.code, failure.message, failure.status), {
       provider: route.provider, endpoint, model: route.model, capability, body, pathParams: { model: modelId, deployment: modelId }, method: "POST", timeoutMs,
@@ -164,22 +178,24 @@ export function isSelectionFailure(value: ProxySelection | ProxySelectionFailure
   return "response" in value;
 }
 
-export function prepareManifestRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, inputBody: unknown, inputPathParams: Record<string, string>, env: Env, native = false): { model: CompiledModel | null; body: ProxyRequestBody; pathParams: Record<string, string> } {
+export function prepareManifestRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, inputBody: unknown, inputPathParams: Record<string, string>, env: Env, native = false, preparation?: PreparationAdmission): { preparation: PreparationAdmission; model: CompiledModel | null; body: ProxyRequestBody; pathParams: Record<string, string> } {
+  preparation ??= new PreparationAdmission(); // Explicit standalone selection entry.
+  preparation.paths(inputPathParams, endpoint.path_param_styles);
   if (endpoint.request_format === "cloudflare_ai_gateway.universal") {
     if (!Array.isArray(inputBody)) throw new HttpError(400, "invalid_request_body", "universal gateway body must be a JSON array");
     // Entries are ordered upstream fallbacks, not one model request. Keep their
     // native queries intact and do not invent a model or price for the wrapper.
-    return { model: null, body: inputBody.map((entry) => requestObject(entry, "universal gateway entry")), pathParams: inputPathParams };
+    return { preparation, model: null, body: inputBody.map((entry) => requestObject(entry, "universal gateway entry")), pathParams: inputPathParams };
   }
   const body = requestObject(inputBody);
   // Managed job models are native inputs, not inference catalog selectors.
   // The explicit protocol adapter validates them before credential selection.
   if (endpoint.lifecycle) {
     if (endpoint.modelPassthrough) throw new HttpError(400, "invalid_managed_route", "managed lifecycles cannot use model passthrough");
-    return { model: null, body, pathParams: inputPathParams };
+    return { preparation, model: null, body, pathParams: inputPathParams };
   }
   if (endpoint.request_format === "openai.moderations" && body.model === undefined) body.model = "omni-moderation-latest";
-  if (isModelDiscovery(endpoint)) return prepareModelDiscovery(provider, endpoint, body, inputPathParams);
+  if (isModelDiscovery(endpoint)) return { ...prepareModelDiscovery(provider, endpoint, body, inputPathParams), preparation };
   const embedding = nativeEmbeddingInput(provider, endpoint);
   // Native models/foo is a wire assertion, not a second router selector.
   const modelId = !embedding && typeof body.model === "string" ? body.model : null;
@@ -193,8 +209,8 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
     return model;
   };
   const bodyModel = resolve(modelId), pathModel = resolve(pathModelId);
-  const bodyUpstream = bodyModel ? resolvedUpstreamModel(provider, bodyModel, env) : null;
-  const pathUpstream = pathModel ? resolvedUpstreamModel(provider, pathModel, env) : null;
+  const bodyUpstream = bodyModel ? resolvedUpstreamModel(provider, bodyModel, env, preparation) : null;
+  const pathUpstream = pathModel ? resolvedUpstreamModel(provider, pathModel, env, preparation) : null;
   if (bodyUpstream && pathUpstream && bodyUpstream !== pathUpstream) throw new HttpError(400, "model_path_mismatch", "body model and path model must resolve to the same upstream model");
 
   const model = bodyModel ?? pathModel;
@@ -202,23 +218,27 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   const upstreamModel = bodyUpstream ?? pathUpstream;
   if (native && provider.id === "venice" && endpoint.request_format === "openai.chat_completions" && upstreamModel)
     prepareVeniceChatBinding(body, upstreamModel);
+  const replacementKeys = endpoint.path_params.filter(param => param === "model" || param === "deployment");
+  preparation.paths(inputPathParams, endpoint.path_param_styles, upstreamModel ?? undefined, replacementKeys);
   const pathParams = { ...inputPathParams };
-  for (const name of endpoint.path_params.filter((param) => param === "model" || param === "deployment")) {
+  for (const name of replacementKeys) {
     if (upstreamModel) pathParams[name] = upstreamModel;
   }
-  if (embedding) return { model, body, pathParams };
+  if (embedding) return { preparation, model, body, pathParams };
   const transformedInput = { ...body };
   if (endpoint.path_params.some((name) => name === "model" || name === "deployment")) delete transformedInput.model;
   else if (modelId && upstreamModel) transformedInput.model = upstreamModel;
   return {
-    model,
-    body: model && upstreamModel ? transformRequestBody(provider, endpoint.path, upstreamModel, transformedInput, env) : transformedInput,
+    preparation, model,
+    body: model && upstreamModel ? transformRequestBody(provider, endpoint.path, upstreamModel, transformedInput, env, preparation) : transformedInput,
     pathParams,
   };
 }
 
-export function prepareNativeRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: unknown, path: string, env: Env): { model: CompiledModel | null; body: ProxyRequestBody; pathParams: Record<string, string> } {
-  return prepareManifestRequest(provider, endpoint, body, nativeParams(endpoint, path), env, true);
+export function prepareNativeRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: unknown, path: string, env: Env, preparation?: PreparationAdmission): { preparation: PreparationAdmission; model: CompiledModel | null; body: ProxyRequestBody; pathParams: Record<string, string> } {
+  preparation ??= new PreparationAdmission(); // Standalone native selection.
+  preparation.text(path, 8192);
+  return prepareManifestRequest(provider, endpoint, body, nativeParams(endpoint, path, preparation), env, true, preparation);
 }
 
 export function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: URLSearchParams | Record<string, unknown>; body: Record<string, unknown> } {
@@ -232,11 +252,16 @@ export function directManifestEnvelope(request: Request, endpoint: CompiledEndpo
   return { method: request.method, pathParams, query: isModelDiscovery(endpoint) ? discoveryQuery(query) : query, body: {} };
 }
 
-export function manifestEnvelope(value: unknown): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: unknown } {
+export function manifestEnvelope(value: unknown, preparation?: PreparationAdmission, pathParamStyles?: CompiledEndpoint["path_param_styles"]): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: unknown } {
   const envelope = requestObject(value, "manifest request");
   if (envelope.method !== undefined && typeof envelope.method !== "string") throw new HttpError(400, "invalid_request_body", "manifest method must be a string");
   const pathParams = optionalObject(envelope.pathParams, "manifest pathParams");
-  if (Object.values(pathParams).some((item) => typeof item !== "string")) throw new HttpError(400, "invalid_request_body", "manifest pathParams values must be strings");
+  let parameters = 0;
+  for (const name in pathParams) if (Object.hasOwn(pathParams, name)) {
+    if (++parameters > 32) preparation?.fail();
+    if (typeof pathParams[name] !== "string") throw new HttpError(400, "invalid_request_body", "manifest pathParams values must be strings");
+  }
+  preparation?.paths(pathParams as Record<string, string>, pathParamStyles);
   return {
     method: envelope.method as string | undefined,
     pathParams: pathParams as Record<string, string>,
@@ -256,43 +281,7 @@ export function requestObject(value: unknown, label = "request body"): Record<st
 
 export function searchParamsRecord(params: URLSearchParams): Record<string, string> { const result: Record<string, string> = {}; params.forEach((value, key) => { result[key] = value; }); return result; }
 
-function resolvedUpstreamModel(provider: CompiledProvider, model: CompiledModel, env: Env): string {
-  return model.upstream.includes("${") ? resolveTemplate(provider, model.upstream, env) : model.upstream;
-}
-
-export function nativeMatch(endpoint: CompiledEndpoint, path: string): boolean {
-  const pattern = endpoint.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\$\\\{[^}]+\\\}/g, "[^/]+");
-  return new RegExp(`^${pattern}$`).test(path);
-}
-export function nativeParams(endpoint: CompiledEndpoint, path: string): Record<string, string> {
-  const names = [...endpoint.path.matchAll(/\$\{([^}]+)\}/g)].map((match) => match[1]);
-  const pattern = endpoint.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\$\\\{[^}]+\\\}/g, "([^/]+)");
-  const match = path.match(new RegExp(`^${pattern}$`));
-  return Object.fromEntries(names.map((name, index) => [name, decodePathSegment(match?.[index + 1] ?? "")]));
-}
-
-// Several native protocols can share one model-qualified path. A registered
-// model's declared capability chooses the operation, never YAML order or a
-// guessed body shape. Stateful controls retain their original-owner resolver.
-export function nativeModelEndpoint(provider: CompiledProvider, matching: CompiledEndpoint[], path: string, method: string, body?: unknown): CompiledEndpoint | undefined {
-  const candidates = matching.filter(endpoint => endpoint.native_proxy && endpoint.methods.includes(method));
-  if (candidates.length < 2 || candidates.some(endpoint => endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.websocket || endpoint.inputProfile)) return;
-  const pathModel = candidates.every(endpoint => endpoint.path_params.some(name => name === "model" || name === "deployment"));
-  // Same-wire Chat operations may declare distinct capabilities for an exact
-  // registered body model. This is an identity selector, never content inference.
-  const bodyModel = !pathModel && method === "POST" && candidates.every(endpoint => !endpoint.path_params.length
-    && endpoint.request_format === "openai.chat_completions" && endpoint.response_format === "openai.chat_completions")
-    && body !== null && typeof body === "object" && !Array.isArray(body) && "model" in body && typeof body.model === "string" ? body.model : null;
-  if (!pathModel && !bodyModel) return;
-  const qualified = candidates.filter(endpoint => {
-    const params = nativeParams(endpoint, path), value = bodyModel ?? params.model ?? params.deployment;
-    const model = provider.models.find(model => model.upstream === value);
-    // A router alias is not an upstream model assertion on an overlapping native
-    // path. Manifest routes continue to resolve their explicit router selector.
-    if (!model && provider.models.some(model => model.id === value))
-      throw new HttpError(400, "native_model_alias_unsupported", "overlapping native routes require the selected upstream model identity");
-    return model && modelSupportsEndpoint(provider, model, endpoint);
-  });
-  if (qualified.length > 1) throw new HttpError(409, "native_route_ambiguous", "native model matches multiple declared operations");
-  return qualified[0];
+function resolvedUpstreamModel(provider: CompiledProvider, model: CompiledModel, env: Env, preparation?: PreparationAdmission): string {
+  preparation?.text(model.upstream, 16384);
+  return model.upstream.includes("${") ? resolveTemplate(provider, model.upstream, env, preparation) : model.upstream;
 }

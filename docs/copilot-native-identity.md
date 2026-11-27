@@ -1,9 +1,9 @@
 # GitHub Copilot account identity
 
 `worker/provider-copilot.ts` implements the account/catalog requests, public or
-enterprise identity qualification, scoped model filtering and native inference
-request construction. These helpers remain inactive without common credential
-materialization and dispatch integration. They do not read GitHub CLI, Git or environment
+enterprise identity qualification, native model visibility and inference
+request construction. The credential owner composes these helpers for catalog
+and inference operations. They do not read GitHub CLI, Git or environment
 credentials. Supply the selected Copilot grant's credential explicitly; ordinary
 repository authentication is unrelated.
 
@@ -66,8 +66,9 @@ no fetch, token exchange, consent or refresh operation.
 and `/messages` endpoints. A Claude-like name alone is not transport evidence.
 `isCopilotCatalogModelVisible` implements the frozen picker rule: literal
 `model_picker_enabled: true`, excluding normalized `disabled` and `unconfigured`
-policy states. `filterCopilotModels` intersects this visibility with advertised
-transports and the supplied caller-policy predicate. Empty results stay empty;
+policy states. The bounded catalog decoder combines this visibility with
+advertised transports; `CopilotCatalogFlow.acquire` then intersects admitted and
+current caller policy. Empty results stay empty;
 there is no static-seed fallback or automatic consent. Missing or unknown policy
 states remain facts, not evidence of inference entitlement. Deprecated model
 facts do not imply shutdown or permit replacing a selected ID.

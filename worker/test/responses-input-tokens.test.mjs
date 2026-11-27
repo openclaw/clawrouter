@@ -180,17 +180,94 @@ for (const status of [400, 429, 500]) test("count preserves upstream rejection "
 for (const cause of ["fetch", "abort", "timeout", "cancel", "malformed"]) test("count " + cause + " owns one zero receipt", async t => {
   const f = await setup(t, { fixedCost: 7 }), caller = new AbortController();
   let enter; const entered = new Promise(resolve => { enter = resolve; });
+  const held = cause === "abort" || cause === "timeout", original = held ? Promise.withResolvers() : null;
+  const roots = [], synthetic = new Error("synthetic count fetch released after public body");
+  let released = false, originalSettled = false, hasPrimary = false, primary, requestOutcome, bodyOutcome;
+  const diagnostic = (phase, status = null, failures = 0) => {
+    if (!held) return;
+    try { if (typeof t.log === "function") t.log("count-held-phase " + JSON.stringify({ phase, timeout: cause === "timeout", status,
+      released, originalSettled, hasPrimary, primaryIsUndefined: hasPrimary && primary === undefined, roots: roots.length, failures })); } catch {}
+  };
+  const observe = (promise, expected = false) => {
+    const outcome = promise.then(value => { if (expected) originalSettled = true; return { failed: false, value }; },
+      error => { if (expected) originalSettled = true; return { failed: true, error }; });
+    roots.push({ expected, outcome }); return outcome;
+  };
+  const release = () => { if (original && !released) { released = true; original.reject(synthetic); } };
+  const originalOutcome = original && observe(original.promise, true);
+  if (held) {
+    diagnostic("observer-install-start");
+    const pushDescriptor = Object.getOwnPropertyDescriptor(f.pending, "push"), push = f.pending.push;
+    t.after(async () => {
+      diagnostic("cleanup-start");
+      const failures = [];
+      try {
+        try { release(); } catch (error) { failures.push(error); }
+        diagnostic("cleanup-release");
+        try { await requestOutcome; } catch (error) { failures.push(error); }
+        try { await bodyOutcome; } catch (error) { failures.push(error); }
+        try { observe(f.drain()); } catch (error) { failures.push(error); }
+        for (let index = 0; index < roots.length; index++) {
+          try {
+            const row = roots[index], outcome = await row.outcome;
+            if (outcome.failed && !row.expected) failures.push(outcome.error);
+          } catch (error) { failures.push(error); }
+        }
+      } finally {
+        try {
+          if (pushDescriptor === undefined) delete f.pending.push;
+          else Object.defineProperty(f.pending, "push", pushDescriptor);
+        } catch (error) { failures.push(error); }
+      }
+      diagnostic("cleanup-joined", null, failures.length);
+      if (failures.length) throw new AggregateError([...(hasPrimary ? [primary] : []), ...failures], "count fixture cleanup failed");
+    });
+    try {
+      Object.defineProperty(f.pending, "push", { configurable: true, writable: true, enumerable: false,
+        value: function (...promises) { for (const promise of promises) observe(promise); return Reflect.apply(push, this, promises); } });
+    } catch (error) { hasPrimary = true; primary = error; throw error; }
+    diagnostic("observer-install-end");
+  }
   if (cause === "timeout") t.mock.timers.enable({ apis: ["setTimeout"] });
   f.response = () => { enter(); if (cause === "fetch") throw new Error("synthetic fetch failure");
-    if (["abort", "timeout"].includes(cause)) return new Promise(() => {});
+    if (held) return original.promise;
     if (cause === "cancel") return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("{")); } }), { headers: { "content-type": "application/json" } });
     return new Response("{ truncated", { headers: { "content-type": "application/json" } }); };
-  const pending = f.send(routes[0], {}, {}, caller.signal); await entered;
-  if (cause === "abort") caller.abort(); if (cause === "timeout") t.mock.timers.tick(120000);
-  const response = await pending;
-  if (cause === "cancel") await response.body.cancel(); else await f.consume(response);
-  await f.drain(); assert.equal(response.status, ["cancel", "malformed"].includes(cause) ? 200 : 502);
-  assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1); noMoney(f);
+  try {
+    const pending = f.send(routes[0], {}, {}, caller.signal);
+    if (held) {
+      requestOutcome = observe(pending);
+      bodyOutcome = requestOutcome.then(async outcome => {
+        if (outcome.failed) return { failed: false, unused: true };
+        try { return { failed: false, value: await outcome.value.text() }; }
+        catch (error) { return { failed: true, error }; }
+      });
+      roots.push({ expected: false, outcome: bodyOutcome });
+    }
+    if (held) {
+      const arrival = await Promise.race([entered.then(() => ({ entered: true })),
+        requestOutcome.then(outcome => ({ entered: false, outcome }))]);
+      if (!arrival.entered) {
+        if (arrival.outcome.failed) throw arrival.outcome.error;
+        assert.fail("count request completed before synthetic fetch arrival");
+      }
+      diagnostic("arrival");
+    } else await entered;
+    if (cause === "abort") caller.abort(); if (cause === "timeout") t.mock.timers.tick(120000);
+    const response = await pending;
+    diagnostic("response", response.status);
+    if (held) {
+      assert.equal(response.status, 502);
+      const body = await bodyOutcome; if (body.failed) throw body.error;
+      diagnostic("body", response.status);
+      assert.equal(originalSettled, false, "synthetic original fetch remains pending through the public body");
+      release(); diagnostic("original-release", response.status); const outcome = await originalOutcome;
+      assert.equal(outcome.failed, true); assert.equal(outcome.error, synthetic);
+    } else if (cause === "cancel") await response.body.cancel(); else await f.consume(response);
+    diagnostic("drain-start", response.status); await f.drain(); diagnostic("drain-end", response.status);
+    assert.equal(response.status, ["cancel", "malformed"].includes(cause) ? 200 : 502);
+    assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1); noMoney(f);
+  } catch (error) { hasPrimary = true; primary = error; diagnostic("failure", null, 1); throw error; }
 });
 
 test("free count respects API grant rate-limit cooldown with Retry-After", async t => {

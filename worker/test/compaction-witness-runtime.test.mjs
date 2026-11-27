@@ -128,7 +128,7 @@ async function bundle(root, replaceWitnessStore = false, script = router) {
     builder.onResolve({ filter: /compaction-witness-store\.ts$/ }, args => args.namespace === "pre-producer" ? { path: resolve(root, "worker/compaction-witness-store.ts") } : { path: "store", namespace: "pre-producer" });
     builder.onLoad({ filter: /.*/, namespace: "pre-producer" }, () => ({ resolveDir: resolve(root, "worker"), loader: "ts", contents: `
       export * from "./compaction-witness-store.ts";
-      import { HttpError } from "./utils.ts";
+      import { HttpError } from "./http-error.ts";
       export class CompactionWitnessStore {
         constructor(_storage) {}
         handle() { throw new HttpError(400, "invalid_continuation", "pre-producer continuation stores do not understand witnesses"); }
@@ -313,7 +313,9 @@ test("real workerd upgrade preserves continuation, background, settings and acco
   const budget = async () => Object.fromEntries(await Promise.all(legs.map(async name => [name, (await f.object("BUDGET_LEDGER", name, "/fixture/dump")).tables])));
   const ledgerBefore = await until(budget, value => legs.every(name => value[name].budget_reservations?.filter(row => JSON.parse(row).settled === 1).length === 2));
   const usageLedger = () => f.object("USAGE_LEDGER", "policy:tenant:fixture", "/fixture/dump");
-  const usageBefore = await until(usageLedger, value => value.tables.usage_events?.length === 2);
+  // The current writer's ingest wakes the report-cell fold 500 ms later; once it has chosen its target, the next
+  // step is a 15-minute fence away, so the ledger stays quiescent across the restart. Older writers fold nothing.
+  const usageBefore = await until(usageLedger, value => value.tables.usage_events?.length === 2 && (base !== undefined || JSON.parse(value.tables.usage_report_cell_state?.[0] ?? "{}").target_rowid === 2));
   const before = await f.dump(scope), settings = await f.dump("policy-bindings"), grants = await f.object("GRANT_CREDENTIALS", grant, "/fixture/dump");
   assert.equal(before.tables.compaction_witnesses, undefined, "the baseline has no witness storage");
   assert.equal(before.tables.http_continuations.length, 2);
@@ -397,7 +399,7 @@ test("real workerd v0.4.0 release storage opens and behaves unchanged on head", 
   const ledgerBefore = await until(budget, value => settled(value["tenant:fixture"], 2) && settled(value["provider:openai"], 3));
   const usageBefore = await until(usageLedgers, value => value[shards[0]].usage_events?.length === 2 && value[shards[1]].usage_events?.length === 1);
   const settings = await f.dump("policy-bindings"), grantsBefore = await grantRecords();
-  const headOnlyAuthority = ["upstream_grant_pool_identity", "upstream_grant_pool_pending", "upstream_grant_pool_versions", "upstream_grant_projections"];
+  const headOnlyAuthority = ["upstream_grant_pool_identity", "upstream_grant_pool_pending", "upstream_grant_pool_versions", "upstream_grant_projections", "usage_inventory_delete_v1", "usage_inventory_insert_v1", "usage_inventory_state", "usage_inventory_update_v1", "usage_retired_time", "usage_shard_retired"];
   assert.deepEqual(settings.schema.map(row => row.name).filter(name => headOnlyAuthority.includes(name)), [], "release storage predates these");
   assert.deepEqual(settings.tables.upstream_grant_pool_members.map(row => Object.keys(JSON.parse(row))), [["scope", "scope_id", "provider_id", "token_ref"], ["scope", "scope_id", "provider_id", "token_ref"]]);
   assert.deepEqual(Object.values(grantsBefore).map(record => [record.accountId, record.lineage]), [["account-policy", undefined], ["account-pool", undefined]], "release grant records predate lineage");
@@ -410,6 +412,7 @@ test("real workerd v0.4.0 release storage opens and behaves unchanged on head", 
   for (const [table, rows] of Object.entries(settings.tables)) assert.deepEqual(opened.tables[table], table === "upstream_grant_pool_members" ? withColumns(rows, { status: "legacy", pending_previous_status: null }) : rows, table);
   assert.deepEqual(opened.schema.map(row => row.name).sort(), [...settings.schema.map(row => row.name), ...headOnlyAuthority].sort());
   assert.deepEqual([opened.tables.upstream_grant_pool_versions, opened.tables.upstream_grant_projections], [[], []], "head-only authority tables start empty");
+  assert.deepEqual(opened.tables.usage_shard_retired, [], "opening does not invent former usage locations");
   assert.deepEqual(await grantRecords(), grantsBefore, "opening never rewrites a release grant record");
   const openedLedgers = await budget();
   for (const name of legs) {

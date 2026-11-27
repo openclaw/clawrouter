@@ -1,5 +1,5 @@
 import { readNativeJson } from "./native-json.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const miniMaxSpeechModels = [
   "speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo",

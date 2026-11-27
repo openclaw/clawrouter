@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-import { snapshot } from "../providers.ts";
-import { grantSupports } from "../provider-auth.ts";
+import { snapshot } from "../provider-catalog.ts";
+import { grantSupports } from "../grant-compatibility.ts";
 import { sha256Hex } from "../utils.ts";
 import { putGrantCredentials, inspectGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { overrideHotCacheConfig, HOT_CACHE_DISABLED } from "../hot-cache.ts";

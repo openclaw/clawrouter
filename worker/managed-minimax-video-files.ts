@@ -1,6 +1,6 @@
 import { discardVideoInput } from "./minimax-video-operation.ts";
 import type { ManagedControl, ManagedFileAction, ManagedFileAdapter, ManagedFileDescriptor } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, mediaObject } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, mediaObject } from "./media-wire.ts";
 import { isMiniMaxVideoOrigin, miniMaxVideoFiles, miniMaxVideoOrigins, observeMiniMaxVideo, prepareMiniMaxVideoFile, readMiniMaxVideoFile,
   readMiniMaxVideoFileState, validateMiniMaxMediaId } from "./minimax-video.ts";
 import type { CompiledEndpoint } from "./types.ts";

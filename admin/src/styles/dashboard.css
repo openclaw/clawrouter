@@ -173,12 +173,18 @@
   color: var(--accent);
 }
 
-.serviceSpectrum {
-  display: flex;
-  overflow: hidden;
-  background: var(--track);
+.dashboardAccessSummary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-muted);
 }
-.serviceSpectrumBlocked { background: var(--warn); }
+
+.dashboardAccessSummary > div { padding: 10px 16px; }
+.dashboardAccessSummary > div + div { border-left: 1px solid var(--line); }
+.dashboardAccessSummary dt { color: var(--muted); font-size: 11px; }
+.dashboardAccessSummary dd { margin: 4px 0 0; color: var(--ink); font-size: 14px; font-weight: 600; }
+.dashboardAccessSummary dd small { color: var(--muted); font-size: 11px; font-weight: 400; }
 
 .dashboardServiceGrid {
   display: grid;
@@ -216,7 +222,6 @@
 .dashboardService > span:nth-child(2) { display: grid; gap: 2px; min-width: 0; }
 .dashboardService > span:nth-child(2) strong { overflow: hidden; color: var(--ink); font-size: 11.5px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .dashboardService > span:nth-child(2) small { overflow: hidden; color: var(--muted); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
-.dashboardService.attention { box-shadow: inset 3px 0 var(--warn); }
 
 .dashboardTextAction {
   justify-content: flex-start;
@@ -245,6 +250,7 @@
 
 .quotaIdentity strong,
 .quotaNumbers strong { overflow: hidden; color: var(--ink); font-size: 10.5px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.quotaIdentity > .memberBudgetPolicyId { white-space: normal; overflow-wrap: anywhere; }
 .quotaIdentity small,
 .quotaNumbers small { color: var(--muted); font-size: 9.5px; }
 .quotaNumbers { justify-items: end; text-align: right; }

@@ -1,8 +1,8 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
-const { configuredUpstream, unifiedPathForEndpoint } = await import("../providers.ts");
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
+const { configuredUpstream } = await import("../providers.ts"); const { unifiedPathForEndpoint } = await import("../provider-catalog.ts");
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
 

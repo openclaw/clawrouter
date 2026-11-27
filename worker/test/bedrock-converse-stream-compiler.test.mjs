@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { eventFrame } from "./bedrock-eventstream-fixture.mjs";
 const { prepareBedrockConverseRequest, createBedrockConverseDecoder } = await import("../provider-bedrock-converse.ts");
 const { decodeBedrockEventFrame } = await import("../bedrock-eventstream.ts");
@@ -130,5 +130,13 @@ test("both Converse transports preserve explicit Chat eligibility and original r
     m => { m.auth.schemes[0].regionParam = "caller_region"; }, m => { m.adapter.injectHeaders = { Authorization: "synthetic" }; },
     m => { m.adapter.injectQuery = { region: "other" }; }, m => { m.adapter.passthroughHeaders = ["authorization"]; },
     m => { m.routing.baseUrlParam = "AWS_ORIGIN"; },
-  ]) { const manifest = fixture(true); change(manifest); assert.throws(() => compile(manifest), /aws_bedrock.converse|invalid manifest/, String(change)); }
+  ]) {
+    const manifest = fixture(true);
+    // Exercise the Converse authority guard, not the earlier embedding guard.
+    delete manifest.endpoints.embed_text;
+    manifest.capabilities = manifest.capabilities.filter(value => value.endpoint !== "embed_text");
+    manifest.models.entries = manifest.models.entries.filter(value => !value.capabilities.includes("llm.embeddings"));
+    assert.doesNotThrow(() => compile(manifest));
+    change(manifest); assert.throws(() => compile(manifest), /aws_bedrock.converse|invalid manifest/, String(change));
+  }
 });

@@ -2,7 +2,8 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-const { BackgroundStore, backgroundObservationMs, backgroundReplayMs } = await import("../background-store.ts");
+const { BackgroundStore } = await import("../background-store.ts");
+const { backgroundObservationMs, backgroundReplayMs } = await import("../background-record.ts");
 const { ResponsesScopeStore } = await import("../responses-scope.ts");
 const { createProxyAccounting } = await import("../proxy-accounting.ts");
 const { planBudgetReservation } = await import("../accounting.ts");
@@ -151,7 +152,8 @@ test("unknown prices, malformed metadata and raw idempotency keys fail before re
   const bad = [input => { input.facts.fixed = null; input.facts.cost = { ...cost, basis: "flat_fallback", reserveMicros: 1 }; },
     input => { input.managed.idempotencyKey = "raw-caller-key"; }, input => { input.managed.input = "private-input"; },
     input => { input.managed.requestedVersion = "x".repeat(257); }, input => { input.plan.reservedMicros = 1; }];
-  for (const mutate of bad) { const input = f.admission(); mutate(input); await assert.rejects(f.call({ action: "managed_admit", admission: input })); }
+  // Corrupt a synthetic wire payload, never the admitted immutable facts.
+  for (const mutate of bad) { const input = JSON.parse(JSON.stringify(f.admission())); mutate(input); await assert.rejects(f.call({ action: "managed_admit", admission: input })); }
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM responses_background").get().n, 0);
   assert.deepEqual(f.reserveCalls, []);
   for (const id of ["", "../escape", "a".repeat(129), "query?x=1"]) assert.throws(() => managedPredictionKey(id));

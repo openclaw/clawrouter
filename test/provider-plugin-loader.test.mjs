@@ -1,17 +1,10 @@
+import { providerPluginFixture as fixture } from "./helpers/provider-plugin-fixture.mjs";
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { loadProviderPlugin, loadProviderPlugins, PROVIDER_PLUGIN_LIMITS } from "../scripts/provider-plugin-loader.ts";
 
-function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "provider-plugin-test-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  cpSync(fileURLToPath(new URL("../examples/provider-plugin", import.meta.url)), root, { recursive: true });
-  return { root, descriptor: join(root, "clawrouter.plugin.json") };
-}
 
 test("loader captures deterministic data and changes its digest with resource content", t => {
   const { root, descriptor } = fixture(t);
@@ -23,6 +16,23 @@ test("loader captures deterministic data and changes its digest with resource co
   writeFileSync(join(root, "README.md"), "new documentation");
   assert.notEqual(loadProviderPlugin(descriptor).digest, first.digest);
   assert.match(first.manifestSource, /id: example/);
+});
+
+test("opt-in fixture capture preserves the digested bytes without changing default output", t => {
+  const { root, descriptor } = fixture(t);
+  const ordinary = loadProviderPlugin(descriptor);
+  assert.equal(Object.hasOwn(ordinary, "fixtureSources"), false);
+  const captured = loadProviderPlugin(descriptor, { captureFixtures: true });
+  const path = "fixtures/request.json", source = readFileSync(join(root, path), "utf8");
+  assert.deepEqual(captured.fixtureSources, [{ path, source }]);
+  assert.equal(captured.digest, ordinary.digest);
+  assert.deepEqual(captured.files, ordinary.files);
+  writeFileSync(join(root, path), '{"changed":true}');
+  assert.equal(captured.fixtureSources[0].source, source);
+  assert.notEqual(loadProviderPlugin(descriptor, { captureFixtures: true }).digest, captured.digest);
+  rmSync(join(root, path));
+  symlinkSync(join(root, "README.md"), join(root, path));
+  assert.throws(() => loadProviderPlugin(descriptor, { captureFixtures: true }), /symlink is not allowed/);
 });
 
 test("loader rejects file and parent-directory symlinks, including links within the package", t => {

@@ -1,10 +1,10 @@
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { jsonBodyBytes } from "./json-body.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { miniMaxSearchOrigins, miniMaxSearchPath, prepareMiniMaxSearch, readMiniMaxSearch } from "./minimax-search.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Common dispatch must supply the destination after qualifying the original
 // regional TokenPlan Search grant. This scalar is not proof of entitlement.

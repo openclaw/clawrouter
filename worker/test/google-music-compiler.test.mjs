@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { googleMusicModels, prepareGoogleMusic } = await import("../google-music.ts");
 const { prepareNativeGoogleMusic } = await import("../native-google-music.ts");
 const { configuredUpstream } = await import("../providers.ts");
@@ -25,7 +25,11 @@ function fixture() {
   manifest.capabilities.push({ id: "audio.generate", endpoint: "music_generate", methods: ["POST"] });
   manifest.endpoints.music_generate = { method: "POST", path: "/v1beta/models/${model}:generateContent", pathParams: ["model"],
     requestFormat: "google.music_generate", responseFormat: "google.music", timeoutMs: 600000 };
-  for (const upstream of ids) manifest.models.entries.push({ id: `google/${upstream}`, upstream, capabilities: ["audio.generate"] });
+  for (const upstream of ids) {
+    // Rebuild the music contract without dropping declared model metadata.
+    const declared = existing.models.entries.find(value => value.upstream === upstream);
+    manifest.models.entries.push({ ...structuredClone(declared), id: `google/${upstream}`, upstream, capabilities: ["audio.generate"] });
+  }
   return manifest;
 }
 function selection(provider, model, requestBody = body()) {

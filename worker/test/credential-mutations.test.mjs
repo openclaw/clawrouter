@@ -80,10 +80,10 @@ test("create imports all legacy credentials before collision checks and never pr
 
 test("normalized migrated ownership governs listing, quota, rotation and revocation", async t => {
   t.mock.method(Date, "now", () => fixedNow);
-  const env = await fixture(t, Array.from({ length: 10 }, (_, index) => [`key_${index}`, credential(" OWNER@EXAMPLE.COM ")]), { legacy: true });
+  const env = await fixture(t, Array.from({ length: 25 }, (_, index) => [`key_${index}`, credential(" OWNER@EXAMPLE.COM ")]), { legacy: true });
   const options = { auth: "session" };
   const listed = await env.http(personalPath, "GET", undefined, options);
-  assert.equal((await listed.json()).credentials.length, 10);
+  assert.equal((await listed.json()).credentials.length, 25);
   await error(await env.http(personalPath, "POST", { ...payload, credentialId: "new_key" }, options), 409, "credential_limit_reached");
   assert.equal((await env.http(`${personalPath}/key_0/rotate`, "POST", { secretSha256: nextDigest }, options)).status, 200, "rotation consumes no slot");
   assert.deepEqual(env.credentials.get("key_0"), { ...credential(" OWNER@EXAMPLE.COM "), secretSha256: nextDigest, expiresAt: renewedExpiry }, "rotate renews the legacy key and changes its hash");
@@ -91,11 +91,11 @@ test("normalized migrated ownership governs listing, quota, rotation and revocat
 });
 
 test("two personal clients cannot both claim the final enabled credential slot", async t => {
-  const env = await fixture(t, Array.from({ length: 9 }, (_, index) => [`key_${index}`, credential()]));
+  const env = await fixture(t, Array.from({ length: 24 }, (_, index) => [`key_${index}`, credential()]));
   const responses = await Promise.all(["next_one", "next_two"].map(credentialId => env.http(personalPath, "POST", { ...payload, credentialId }, { auth: "session" })));
   assert.deepEqual(responses.map(response => response.status).sort(), [201, 409]);
   assert.equal((await responses.find(response => response.status === 409).json()).error.code, "credential_limit_reached");
-  assert.equal(env.credentials.size, 10);
+  assert.equal(env.credentials.size, 25);
 });
 
 const holdingLosses = {

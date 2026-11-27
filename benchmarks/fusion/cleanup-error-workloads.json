@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "accounting-cleanup-errors",
+      "split": "development",
+      "base": "e35ad553362b8a1fde89f61a3bb934c199193d00",
+      "oracle": "997bcfc7c1a5bae0385c36716611b196eb7878e3",
+      "editPaths": [
+        "worker/accounting.ts"
+      ],
+      "visibleTests": [
+        "worker/test/accounting.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/accounting.test.mjs"
+      ],
+      "instruction": "Budget reservation rollback loses the original reservation failure and terminal cleanup failures. Preserve the existing public 503 accounting_unavailable classification and rollback-error message when rollback cannot finish, but retain the original reservation reason plus every failed cleanup in reservation order under exactly one private non-enumerable, non-writable, non-configurable symbol property. The diagnostic record must have reservationReason and cleanupFailures properties. Freeze that record, the cleanupFailures array and every failure entry. Each entry must retain reservationId, objectName, ledgerReason and queueReason, including present properties whose values are undefined. Preserve original reason identities; do not stringify, deduplicate or expose them through public error JSON or an exported accessor. Join all started reserve and cleanup operations. Successful queue fallback counts as cleanup success; if cleanup succeeds, rethrow the identical original reservation reason, even undefined. Keep one ledger attempt and one queue fallback per settlement. Preserve generic concurrent cleanup, serial Search cleanup that continues after a failure, and exported settleBudget first-terminal-queue-error behavior. Do not add retries, compensation, change public APIs or alter successful accounting."
+    }
+  ]
+}

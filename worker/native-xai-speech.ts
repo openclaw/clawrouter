@@ -2,7 +2,7 @@ import { inputRetirement } from "./input-retirement.ts";
 import { jsonBodyBytes } from "./json-body.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { prepareXaiSpeech, readXaiSpeech, xaiSpeechFormats } from "./xai-speech.ts";
 
 const outputLimit = 16 * 1024 * 1024, chunkLimit = 8192;

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parseProviderPluginDescriptor, providerPluginFiles, providerPluginPath, ProviderPluginContractError } from "../packages/provider-plugin-contract/src/index.ts";
@@ -55,4 +56,34 @@ test("optional resources are strict and bounded", () => {
   for (const fixtures of [["a.json", "a.json"], ["a.yaml"], Array.from({ length: 129 }, (_, i) => `${i}.json`), {}]) {
     assert.throws(() => parseProviderPluginDescriptor({ ...input, fixtures }), ProviderPluginContractError);
   }
+});
+
+test("public plugin exports retain the descriptor owner's identities", async () => {
+  const root = await import("../packages/provider-plugin-contract/src/index.ts");
+  const descriptor = await import("../packages/provider-plugin-contract/src/plugin-descriptor.ts");
+  for (const name of Object.keys(descriptor)) assert.equal(root[name], descriptor[name], name);
+});
+
+test("plugin tooling loads only its descriptor and conformance owners", () => {
+  const output = execFileSync(process.execPath, ["--input-type=module", "--eval", `
+    import assert from "node:assert/strict";
+    import { registerHooks } from "node:module";
+    const loaded = new Set();
+    registerHooks({ load(url, context, next) {
+      const name = /\\/packages\\/provider-plugin-contract\\/src\\/([^/]+)$/.exec(url)?.[1];
+      if (name) {
+        assert.ok(!["index.ts", "bindings.ts", "native-capabilities.ts"].includes(name), name);
+        loaded.add(name);
+      }
+      return next(url, context);
+    } });
+    const { loadProviderPlugin } = await import("./scripts/provider-plugin-loader.ts");
+    assert.equal(loadProviderPlugin("examples/provider-plugin/clawrouter.plugin.json").descriptor.id, "example");
+    assert.deepEqual([...loaded], ["plugin-descriptor.ts"]);
+    const { validateProviderConformance } = await import("./scripts/validate-provider-conformance.mjs");
+    assert.equal(validateProviderConformance(["examples/provider-plugin/clawrouter.plugin.json"]).packages[0].id, "example");
+    assert.deepEqual([...loaded].sort(), ["conformance.ts", "plugin-descriptor.ts"]);
+    process.stdout.write("isolated contract owners\\n");
+  `], { cwd: new URL("..", import.meta.url), encoding: "utf8" });
+  assert.equal(output, "isolated contract owners\n");
 });

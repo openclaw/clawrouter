@@ -1,0 +1,295 @@
+{
+  "schemaVersion": 1,
+  "study": "atcoder-none-512-live-v1",
+  "status": "audited",
+  "sourceSha": "7fe90c273c5aaa5e3dbcea247680165609bbd53f",
+  "protocolSha256": "d2d4fd9ed48a36a622f41d93dd89c7137985c6bb257fa3f7e271e7f9828804ca",
+  "resultSha256": "ad519397144dad5f92c173c63031d08129aab773e07953e164ef403314e41b32",
+  "auditSha256": "ee0b5381486630f0ac4d5ece73433188df3496f2e90455c3592fe8bd931372b9",
+  "priorAuditSha256": "a8a3ed3cd7cb247619496f3e013f9bb912d01ecc24d5bd53b68eb9f5df201242",
+  "draftMaxOutputTokens": 512,
+  "models": [
+    "openai/gpt-6-luna",
+    "openai/gpt-6.1-terra"
+  ],
+  "calls": 14,
+  "totalCostMicros": 20348,
+  "summary": {
+    "strong": {
+      "passed": 5,
+      "costMicros": 12459,
+      "elapsedMs": 42166.404583
+    },
+    "cascade": {
+      "passed": 6,
+      "costMicros": 7889,
+      "elapsedMs": 44914.57291700001
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 2,
+    "escalations": 2,
+    "costRatio": 0.633196885785376,
+    "elapsedRatio": 1.0651743576711772,
+    "qualityMatchedCostScreen": false,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "records": [
+    {
+      "id": "lcb-1761b861a0dbcbd5",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1494,
+      "elapsedMs": 6221.492709,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-1761b861a0dbcbd5",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 161,
+      "elapsedMs": 4293.724165999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      },
+      "draftDisposition": "complete",
+      "draftOutputTokens": 186,
+      "draftReasoningTokens": 0
+    },
+    {
+      "id": "lcb-34a980a7d516da5e",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "costMicros": 4315,
+      "elapsedMs": 17032.985292,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 34,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 3
+      },
+      "draftDisposition": "truncated",
+      "draftOutputTokens": 512,
+      "draftReasoningTokens": 0
+    },
+    {
+      "id": "lcb-34a980a7d516da5e",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": false,
+      "passed": false,
+      "escalated": false,
+      "costMicros": 3214,
+      "elapsedMs": 9876.518832999998,
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 34,
+        "failures": 16,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 3
+      }
+    },
+    {
+      "id": "lcb-f8a0b853f4580678",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1913,
+      "elapsedMs": 6601.928415999995,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-f8a0b853f4580678",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 230,
+      "elapsedMs": 5230.333625000007,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      },
+      "draftDisposition": "complete",
+      "draftOutputTokens": 336,
+      "draftReasoningTokens": 0
+    },
+    {
+      "id": "lcb-46b9c4156c9a64d8",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 182,
+      "elapsedMs": 4479.769250000005,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      },
+      "draftDisposition": "complete",
+      "draftOutputTokens": 234,
+      "draftReasoningTokens": 0
+    },
+    {
+      "id": "lcb-46b9c4156c9a64d8",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1896,
+      "elapsedMs": 6048.4727920000005,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17c091672360f911",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1585,
+      "elapsedMs": 5080.817458000005,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17c091672360f911",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 154,
+      "elapsedMs": 3703.9917920000007,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      },
+      "draftDisposition": "complete",
+      "draftOutputTokens": 145,
+      "draftReasoningTokens": 0
+    },
+    {
+      "id": "lcb-9a7df49b21a566b6",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "costMicros": 2847,
+      "elapsedMs": 10173.768792000003,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      },
+      "draftDisposition": "complete",
+      "draftOutputTokens": 221,
+      "draftReasoningTokens": 0
+    },
+    {
+      "id": "lcb-9a7df49b21a566b6",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 2357,
+      "elapsedMs": 8337.174375000002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    }
+  ],
+  "limitations": [
+    "Exposed-cohort, single-sample tuning result; the known conflicting stdin system instruction was still present.",
+    "Strong control received one attempt; cascade received up to two. No matched strong self-repair control in this trial.",
+    "One rescued draft was truncated; the other was complete and supplied with a public-example counterexample. No causal benefit follows from this single observation.",
+    "The frozen gate required both arms to pass all six tasks and remains false because direct passed five.",
+    "Cost excludes engineering, hardware and operations; elapsed excludes final private grading; no production claim."
+  ],
+  "fallbackMode": "repair",
+  "draftReasoningEffort": "none"
+}

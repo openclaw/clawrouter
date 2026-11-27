@@ -116,8 +116,10 @@ export class GrantCredentialObject extends Owner{
   return super.fetch(request);
  }
 }
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 const source=structuredClone(snapshot.providers.find(p=>p.id==='openai')),template=source.endpoints.find(e=>e.request_format==='openai.chat_completions');
+// Reuse the wire template, not OpenAI's provider-specific product identity.
+delete source.products;delete source.offer_definitions;
 const formats=['openai.chat_completions','openai.responses','anthropic.messages'],paths=['/chat/completions','/responses','/messages'],caps=['llm.chat','llm.responses','llm.messages'];
 const compiled={...source,id:'github-copilot',config_keys:[],optional_config_keys:[],auth:{schemes:[{type:'oauth',tokenRef:'copilot'}],authorization:null,refresh:null,grantTransports:{}},routing:{...source.routing,modelPrefixes:['github-copilot/']},
  endpoints:formats.map((format,i)=>({...template,id:'api_'+i,path:paths[i],request_format:format,response_format:format,method:'POST',methods:['POST'],native_proxy:true,streaming:'sse',path_params:[],query:{},headers:{},auth:undefined,upstreamPath:undefined,websocket:undefined,lifecycle:undefined,responsesLifecycle:undefined,modelPassthrough:undefined})),

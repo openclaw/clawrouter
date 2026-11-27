@@ -1,4 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
+import { fixtureResponses as memberResponses } from "./fixtures/personal-usage";
 import { expect, test, type Page } from "@playwright/test";
 import type { AccessPolicy, AdminUsageRow, FusionConfig, FusionReadiness, ProviderReadiness, ProviderRow, UsageSnapshot } from "../src/ui-types";
 import snapshot from "../../worker/generated/provider-snapshot.json" with { type: "json" };
@@ -10,12 +11,20 @@ test.beforeEach(async ({ page }) => {
 
 test("dashboard is WCAG AA clean and visually stable", async ({ page }) => {
   const { responses, providers } = dashboardFixture();
+  let selectFontLoaded = false;
   await page.route("**/v1/**", async (route) => {
-    const body = responses[new URL(route.request().url()).pathname];
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/v1/session") {
+      // Chromium can retain fallback line metrics inside a native select after a font swap.
+      // Mount the authenticated fixture with its final font instead of repainting it later.
+      selectFontLoaded = await page.evaluate(async () => (await document.fonts.load('12.5px "Archivo Variable"', "180 days")).length > 0);
+    }
+    const body = responses[path];
     await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
   });
   await page.goto("/");
   await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  expect(selectFontLoaded).toBe(true);
   await expect(page.locator(".dashboardStats > div").first().locator("strong")).toHaveText(`8/${providers.length}`);
   await expect(page.locator(".dashboardServiceGrid article strong")).toHaveText(providers.slice(0, 10).map((provider) => provider.display_name));
   await expect(page.getByRole("button", { name: "Show 1 more services" })).toBeVisible();
@@ -33,6 +42,176 @@ test("real demo shows the bundled provider inventory and remains WCAG AA clean",
   await expect(page.locator(".catalogMeta strong")).toHaveText(`${count} services`);
   await expect.poll(async () => (await page.locator(".mainPane .entityTitle").allTextContents()).sort())
     .toEqual(snapshot.providers.map((provider) => provider.display_name).sort());
+});
+
+for (const [name, granted] of [["Anthropic", true], ["Abliteration", false]] as const) {
+  test(`demo connection changes update readiness without changing the ${granted ? "grant" : "denial"} for ${name}`, async ({ page }) => {
+    await openDemo(page);
+    const nav = page.getByRole("navigation", { name: "console" });
+    const summary = page.locator(".dashboardAccessSummary");
+    const gateway = summary.locator("dd").first();
+    const personal = summary.locator("dd").last();
+    const row = page.locator(".dashboardService").filter({ has: page.getByText(name, { exact: true }) });
+    const gatewayCount = Number.parseInt(await gateway.innerText(), 10);
+    const usableCount = Number.parseInt(await personal.locator("strong").innerText(), 10);
+    const grants = await personal.locator("small").innerText();
+    await expect(row.locator(".status")).toHaveText(granted ? "usable" : "denied");
+
+    for (const enabled of [false, true]) {
+      await nav.getByRole("button", { name: "Catalog", exact: true }).click();
+      await page.getByRole("textbox", { name: "search catalog" }).fill(name);
+      await page.locator(".tableRow").filter({ has: page.getByText(name, { exact: true }) }).click();
+      await page.getByRole("button", { name: enabled ? "Enable connection" : "Disable connection", exact: true }).click();
+      await expect(page.getByRole("button", { name: enabled ? "Disable connection" : "Enable connection", exact: true })).toBeEnabled();
+      await nav.getByRole("button", { name: "Dashboard", exact: true }).click();
+      await expect(gateway).toHaveText(`${gatewayCount - Number(!enabled)} executable`);
+      await expect(row.locator(".status")).toHaveText(!granted ? "denied" : enabled ? "usable" : "disabled");
+      if (granted && !enabled) await expect(row).toContainText("Provider connection is disabled by an administrator.");
+      await expect(personal.locator("strong")).toHaveText(`${usableCount - Number(granted && !enabled)} usable`);
+      await expect(personal.locator("small")).toHaveText(grants);
+    }
+  });
+}
+
+test("catalog readiness does not grant the administrator a usable service", async ({ page }) => {
+  const { responses, session } = dashboardFixture();
+  const access = session.entitlements.providers.find((provider) => provider.provider === "anthropic")!;
+  access.readiness = { ...access.readiness, executable: false, status: "unavailable", verified: false, reasons: ["No eligible route under this policy."] };
+  await page.route("**/v1/**", async (route) => {
+    const body = responses[new URL(route.request().url()).pathname];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  const panel = page.locator(".servicePanel");
+  const anthropic = panel.locator("article").filter({ has: page.getByText("Anthropic", { exact: true }) });
+  await expect(anthropic.locator(".status")).toHaveText("unavailable");
+  await expect(panel.getByText("8 executable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("6 usable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("of 10 granted", { exact: true })).toBeVisible();
+  const denied = panel.locator("article").filter({ has: page.getByText("Perplexity", { exact: true }) });
+  await expect(denied.locator(".status")).toHaveText("denied");
+  await expect(page.locator(".operationsDiagram > div").filter({ hasText: "Not executable" }).locator("strong")).toHaveText("3");
+  await page.getByRole("switch", { name: "Light mode" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const a11y = await new AxeBuilder({ page }).include(".servicePanel").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
+  expect(a11y.violations).toEqual([]);
+});
+
+test("gateway counts stay unknown during a held or failed bootstrap, never borrowing personal readiness", async ({ page }) => {
+  const { responses, readiness, session } = dashboardFixture();
+  let failBootstrap = false;
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/v1/admin/bootstrap" && failBootstrap) {
+      await hold;
+      await route.fulfill({ status: 503, body: "catalog readiness unavailable" });
+      return;
+    }
+    const body = responses[path];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  const coverage = page.locator(".dashboardStats > div").filter({ hasText: "Catalog readiness" });
+  const blocked = page.locator(".operationsDiagram > div").filter({ hasText: "Not executable" });
+  const panel = page.locator(".servicePanel");
+  await expect(coverage.locator("strong")).toHaveText("8/11");
+  await expect(blocked.locator("strong")).toHaveText("3");
+  // The next session read observes one eligible route; gateway configuration has not changed.
+  for (const access of session.entitlements.providers) {
+    access.allowed = access.provider === "anthropic";
+    if (!access.allowed) {
+      access.policies = [];
+      access.readiness = { ...access.readiness, executable: false, verified: false, status: "unavailable" };
+    }
+  }
+  failBootstrap = true;
+  const pending = page.waitForRequest("**/v1/admin/bootstrap");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await pending;
+  try {
+    await expect(panel.getByText("of 1 granted", { exact: true })).toBeVisible();
+    await expect(panel.getByText("1 usable", { exact: true })).toBeVisible();
+    await expect(coverage.locator("strong")).toHaveText("—");
+    await expect(panel.getByText("Unknown", { exact: true })).toBeVisible();
+    await expect(blocked.locator("strong")).toHaveText("—");
+  } finally {
+    release();
+  }
+  await expect(page.locator(".statusBar")).toContainText("catalog readiness unavailable");
+  await expect(coverage.locator("strong")).toHaveText("—");
+  await expect(blocked.locator("strong")).toHaveText("—");
+  // Missing from the next gateway inventory does not mean blocked or personally executable.
+  readiness.splice(readiness.findIndex((item) => item.id === "anthropic"), 1);
+  failBootstrap = false;
+  await page.getByRole("button", { name: "Retry refresh" }).click();
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  await expect(coverage.locator("strong")).toHaveText("7/11");
+  await expect(coverage.locator("small")).toContainText("1 unknown");
+  await expect(blocked.locator("strong")).toHaveText("3");
+  await expect(panel.getByText("1 usable", { exact: true })).toBeVisible();
+});
+
+test("members see only their granted services, not gateway coverage", async ({ page }) => {
+  const { responses, session } = dashboardFixture();
+  session.role = "user";
+  responses["/v1/session/usage"] = memberResponses["/v1/session/usage"];
+  await page.route("**/v1/**", async (route) => {
+    const body = responses[new URL(route.request().url()).pathname];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  const panel = page.locator(".servicePanel");
+  await expect(panel.getByRole("heading", { name: "Granted services" })).toBeVisible();
+  await expect(panel.getByText("7 of 10 usable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Perplexity", { exact: true })).toHaveCount(0);
+  await expect(panel.getByText("Catalog readiness", { exact: true })).toHaveCount(0);
+
+  session.entitlements.providers = [];
+  await page.reload();
+  await expect(panel.getByText("Service access unavailable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("No services assigned", { exact: true })).toHaveCount(0);
+});
+
+test("Other providers distinguishes missing price coverage from known zero and unpriced calls", async ({ page }) => {
+  const { responses } = dashboardFixture();
+  const usage = (responses["/v1/admin/usage"] as { usage: UsageSnapshot }).usage;
+  await page.route("**/v1/**", route => {
+    const body = responses[new URL(route.request().url()).pathname];
+    return route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  for (const [counts, micros, dashboard, details] of [
+    [[undefined, undefined, undefined], 0, "$0.00 accounted; coverage unknown", "$0.00 accounted; coverage unknown"],
+    [[undefined, 0, 0], 0, "$0.00 accounted; coverage unknown", "$0.00"],
+    [[0, 1, undefined], 250000, "$0.25 accounted; at least 1 unpriced", "$0.25 accounted; at least 1 unpriced"],
+    [[0, 0, 0], 0, "$0.00", "$0.00"],
+    [[2, 2, 2], 0, "Price unavailable", "Price unavailable"],
+    [[0, 0, 2], 250000, "$0.25 accounted; 2 unpriced", "$0.25 accounted; 2 unpriced"],
+  ] as const) {
+    usage.providers = ["openai", "anthropic", "mistral", "tavily", "replicate", "firecrawl", "xai"].map((provider, i) => {
+      const unpriced = i === 0 ? undefined : i < 4 ? 0 : counts[i - 4];
+      return { provider, requestCount: 2, errorCount: 0, successCount: 2, totalTokens: 8, actualCostMicros: i === 0 || i === 5 ? micros : 0, ...(unpriced === undefined ? {} : { unpricedRequestCount: unpriced }) };
+    });
+    await page.goto("/");
+    const table = page.getByRole("table", { name: "Requests by provider" });
+    const other = table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: /Other providers/ }) }).getByRole("cell").last();
+    const spendFor = (name: string) => table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(name) }) }).getByRole("cell").last();
+    const namedUnknown = (micros ? "$0.25" : "$0.00") + " accounted; coverage unknown";
+    await expect(spendFor("OpenAI")).toHaveAccessibleName(namedUnknown);
+    await expect(spendFor("OpenAI")).toHaveText(namedUnknown);
+    await expect(spendFor("Anthropic")).toHaveText("$0.00");
+    await expect(other).toHaveText(dashboard);
+    await page.getByRole("navigation", { name: "console" }).getByRole("button", { name: "Usage", exact: true }).press("Enter");
+    await page.getByText("Authoritative allowances and legacy diagnostics", { exact: true }).press("Enter");
+    await expect(spendFor("OpenAI")).toHaveAccessibleName(namedUnknown);
+    await expect(spendFor("OpenAI")).toHaveText(namedUnknown);
+    await expect(spendFor("Anthropic")).toHaveText("$0.00");
+    await expect(other).toHaveText(details);
+    if (counts.slice(1).some(count => count === undefined)) await expect(other).toHaveAttribute("title", /coverage unavailable/);
+  }
 });
 
 test("admin dashboard distinguishes unavailable prices from mixed and fully priced spend", async ({ page }) => {
@@ -64,9 +243,88 @@ test("admin dashboard distinguishes unavailable prices from mixed and fully pric
     await expect(spend.locator("span")).toHaveText(label);
     await expect(spend.locator("strong")).toHaveText(value);
     await expect(spend.locator("small")).toContainText("Last 30 days · May include estimates");
-    await expect(page.locator(".providerChartValue small")).toHaveText(value);
-    await expect(page.locator(".providerChartLegendMeta")).toHaveText("Requests · accounted spend · may include estimates");
+    const table = page.getByRole("table", { name: "Requests by provider" });
+    await expect(table.getByRole("columnheader")).toHaveText(["Provider", "Requests", "Accounted spend (USD)"]);
+    const providerRow = table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: /openai/i }) });
+    await expect(providerRow.getByRole("cell").last()).toHaveText(value);
+    await expect(providerRow.getByRole("cell").last()).toHaveAttribute("title", /May include estimates/);
+    await expect(page.getByText("Spend may include estimates", { exact: true })).toBeVisible();
   }
+});
+
+test("provider distribution retains long identities and Other providers across Dashboard and Usage", async ({ page }) => {
+  const { responses } = dashboardFixture();
+  const longName = "research-inference-service-with-a-long-provider-identifier";
+  const totals = { requestCount: 10, successCount: 8, errorCount: 2, totalTokens: 200, actualCostMicros: 250_000, unpricedRequestCount: 1 };
+  const usage = (responses["/v1/admin/usage"] as { usage: UsageSnapshot }).usage;
+  usage.providers = [longName, "anthropic", "tavily", "openai", "replicate", "mistral", "xai"].map(provider => ({ provider, ...totals }));
+  await page.route("**/v1/**", route => {
+    const body = responses[new URL(route.request().url()).pathname];
+    return route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  const table = page.getByRole("table", { name: "Requests by provider" });
+  for (const otherCount of [3, 2]) {
+    if (otherCount === 2) {
+      await page.getByRole("navigation", { name: "console" }).getByRole("button", { name: "Usage", exact: true }).press("Enter");
+      await page.getByText("Authoritative allowances and legacy diagnostics", { exact: true }).press("Enter");
+    }
+    const name = table.getByRole("rowheader", { name: new RegExp(longName) });
+    await expect(name).toContainText("200 tokens");
+    const other = table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: /Other providers/ }) });
+    await expect(other.getByRole("img", { name: (10 * otherCount) + " requests, " + (2 * otherCount) + " errors" })).toBeVisible();
+    await expect(other.getByRole("cell").first()).toContainText("80% success");
+    await expect(other.getByRole("cell").last()).toHaveText("$" + (0.25 * otherCount).toFixed(2) + " accounted; " + otherCount + " unpriced");
+    await expect.poll(() => table.evaluate(el => el.scrollWidth <= el.clientWidth && [...el.querySelectorAll("th, td, strong")].every(cell => cell.scrollWidth <= cell.clientWidth + 1))).toBe(true);
+  }
+});
+
+test("provider rows show exact errors even when success rounds to 100 percent", async ({ page }) => {
+  const { responses } = dashboardFixture();
+  const usage = (responses["/v1/admin/usage"] as { usage: UsageSnapshot }).usage;
+  usage.providers = ["openai", "anthropic", "mistral", "tavily", "replicate", "firecrawl", "xai"].map((provider, index) => {
+    const errorCount = [1, 2, 0, 3, 1, 2, 0][index];
+    return { provider, requestCount: 400, successCount: 400 - errorCount, errorCount, totalTokens: 20, actualCostMicros: 0 };
+  });
+  await page.route("**/v1/**", route => {
+    const body = responses[new URL(route.request().url()).pathname];
+    return route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  const table = page.getByRole("table", { name: "Requests by provider" });
+  for (const surface of ["Dashboard", "Usage"]) {
+    if (surface === "Usage") {
+      await page.getByRole("navigation", { name: "console" }).getByRole("button", { name: "Usage", exact: true }).press("Enter");
+      await page.getByText("Authoritative allowances and legacy diagnostics", { exact: true }).press("Enter");
+    }
+    for (const [name, errors] of [["OpenAI", 1], ["Anthropic", 2], ["Mistral", 0], ["Other providers", surface === "Usage" ? 2 : 3]] as const) {
+      const cell = table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(name) }) }).getByRole("cell").first();
+      await expect(cell).toContainText(errors === 1 ? /1 error\b/ : errors + " errors");
+      if (errors) await expect(cell).not.toContainText("100% success");
+      else await expect(cell).toContainText("100% success");
+    }
+  }
+});
+
+test("a pending provider distribution does not show an empty result before the ledger answers", async ({ page }) => {
+  const { responses } = dashboardFixture();
+  (responses["/v1/admin/usage"] as { usage: UsageSnapshot }).usage.providers = [];
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/v1/admin/usage") await hold;
+    const body = responses[path];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  const panel = page.locator(".dashboardProviderPanel");
+  try {
+    await expect(panel.getByText("Provider usage unavailable.", { exact: true })).toBeVisible();
+    await expect(panel.getByText("No provider activity", { exact: true })).toHaveCount(0);
+  } finally { release(); }
+  await expect(panel.getByText("No provider activity", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("table")).toHaveCount(0);
 });
 
 test("a provider without a cap still explains the other budget scopes", async ({ page }) => {
@@ -314,9 +572,10 @@ function dashboardFixture() {
   const usage: UsageSnapshot = {
     ledger: "ready", events: [],
     summary: { requestCount: 120, successCount: 116, errorCount: 4, inputTokens: 90_000, outputTokens: 30_000, totalTokens: 120_000, actualCostMicros: 8_400_000 },
+    // This current-ledger fixture has complete price coverage. Missing wire fields are exercised separately.
     providers: [
-      { provider: "openai", requestCount: 80, successCount: 78, errorCount: 2, totalTokens: 90_000, actualCostMicros: 5_600_000 },
-      { provider: "anthropic", requestCount: 40, successCount: 38, errorCount: 2, totalTokens: 30_000, actualCostMicros: 2_800_000 },
+      { provider: "openai", requestCount: 80, successCount: 78, errorCount: 2, totalTokens: 90_000, actualCostMicros: 5_600_000, unpricedRequestCount: 0 },
+      { provider: "anthropic", requestCount: 40, successCount: 38, errorCount: 2, totalTokens: 30_000, actualCostMicros: 2_800_000, unpricedRequestCount: 0 },
     ],
     daily: Array.from({ length: 30 }, (_, index) => [2, 4, 3, 5, 4, 6][index % 6]).map((requestCount, index) => ({
       dayStartMs: Date.UTC(2026, 5, index + 7), requestCount, successCount: requestCount - (index < 4 ? 1 : 0),
@@ -344,7 +603,7 @@ function dashboardFixture() {
       overview: { policiesActive: 2, tenantsTotal: 1 },
     },
   };
-  return { providers, responses };
+  return { providers, readiness, responses, session };
 }
 
 function fusionFixture(adviserModels: string[] = []) {
@@ -378,5 +637,5 @@ test("administrators open personal usage from Usage without changing the overvie
   await page.getByRole("button", { name: "Usage", exact: true }).click();
   await page.getByRole("button", { name: "My usage", exact: true }).click();
   await expect(page.getByRole("heading", { name: "My usage", exact: true })).toBeVisible();
-  await expect(page.getByText("Personal reporting is not connected in local demo mode. No live usage is shown.")).toBeVisible();
+  await expect(page.getByText("Usage reporting is not connected in demo mode. No live usage is shown.")).toBeVisible();
 });

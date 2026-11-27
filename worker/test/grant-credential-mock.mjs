@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import { GrantCredentialObject } from "../grant-credentials.ts";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 
@@ -32,7 +33,11 @@ export function attachGrantCredentialNamespace(env, { useExistingAuthority = fal
         };
         objects.set(id, { values, state, object: new GrantCredentialObject(state, env), alarm: () => alarm });
       }
-      return { fetch: (url, init) => objects.get(id).object.fetch(new Request(url, init)) };
+      return { fetch: async (url, init) => {
+        if (!new Headers(init?.headers).has("x-clawrouter-identity-admission")) return objects.get(id).object.fetch(new Request(url, init));
+        const response = await objects.get(id).object.fetch(new Request(url, { ...init, body: accessBytesResponse(init.body, "").body, duplex: "half" }));
+        return accessBytesResponse(await response.text(), "", { status: response.status, headers: response.headers });
+      } };
     },
   };
   return env;

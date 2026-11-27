@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { crc32 } from "node:zlib";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { prepareNativeGoogleImage } = await import("../native-google-images.ts");
 const { observeGoogleImage } = await import("../google-images.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");
@@ -154,6 +154,7 @@ test("Google image delivery requires bounded complete UTF-8 JSON with matching l
   const text = JSON.stringify(payload()), header = { "content-type": "application/json" };
   for (const length of ["-1", "1.5", "1, 1", "invalid", String(jsonLimit + 1), String(Buffer.byteLength(text) - 1), String(Buffer.byteLength(text) + 1)])
     await assert.rejects(read(new Response(text, { headers: { ...header, "content-length": length } })));
+  for (const encoding of ["identity", " Identity "]) assert.ok(await read(new Response(text, { headers: { ...header, "content-encoding": encoding, "content-length": String(Buffer.byteLength(text)) } })));
   await assert.rejects(read(new Response(text, { headers: { ...header, "content-encoding": "identity", "content-length": "1" } })));
   for (const status of [202, 206, 302, 422, 500]) await assert.rejects(read(response(payload(), {}, status)));
   for (const headers of [{ "content-type": "text/plain" }, { "content-range": "bytes 0-1/100" }, { "content-encoding": "gzip" }])

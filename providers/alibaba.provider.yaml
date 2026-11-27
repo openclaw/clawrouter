@@ -50,6 +50,7 @@ endpoints:
 models:
   entries:
     - id: alibaba/wan2.6-t2v
+      displayName: "Wan 2.6 Text-to-Video"
       upstream: wan2.6-t2v
       capabilities: [media.predict]
 billing:

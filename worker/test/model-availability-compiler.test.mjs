@@ -1,8 +1,8 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
-const { providerModel } = await import("../providers.ts");
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
+const { providerModel } = await import("../provider-catalog.ts");
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 const { modelSupportsEndpoint } = await import("../../shared/route-catalog.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");

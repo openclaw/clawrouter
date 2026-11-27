@@ -1,7 +1,7 @@
 import { parseReplicatePrediction, prepareReplicateCreate, readReplicatePrediction, replicateControlPath,
   rewriteReplicatePredictionUrls, validateReplicatePredictionId } from "./replicate-lifecycle.ts";
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, noMediaQuery } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, noMediaQuery } from "./media-wire.ts";
 
 export const replicateManagedAdapter: ManagedLifecycleAdapter = {
   protocol: "replicate.predictions", requestFormats: ["replicate.prediction_create"], supportsResult: false, supportsCancel: true,

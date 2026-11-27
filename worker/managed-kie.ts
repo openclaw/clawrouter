@@ -1,6 +1,7 @@
-import { kieTaskPath, parseKieSubmission, parseKieTask, prepareKieTask, validateKieTaskId } from "./kie-jobs.ts";
+import { kieTaskPath, observeKieSubmission, observeKieTask, prepareKieTask, validateKieTaskId } from "./kie-jobs.ts";
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
+import { readMediaJson } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./media-wire.ts";
 
 export const kieManagedAdapter: ManagedLifecycleAdapter = {
   protocol: "kie.jobs", requestFormats: ["kie.job_create"], supportsResult: false, supportsCancel: false,
@@ -25,14 +26,14 @@ export const kieManagedAdapter: ManagedLifecycleAdapter = {
   },
   async read(response, context) {
     if (context.action !== "create" && context.action !== "retrieve") throw new Error("unsupported_kie_control");
-    const { text, body } = await readMediaJson(response);
+    const { body } = await readMediaJson(response);
     if (context.action === "create") {
-      return { id: parseKieSubmission(text, response.status).id, nativeStatus: null, terminal: null, body, followUp: "retrieve" };
+      return { id: observeKieSubmission(body, response.status).id, nativeStatus: null, terminal: null, body, followUp: "retrieve" };
     }
     if (mediaObject(body.data) && body.data.model !== undefined && body.data.model !== context.requestedVersion) {
       throw new Error("kie_task_model_mismatch");
     }
-    const observation = parseKieTask(text, response.status, validateKieTaskId(context.expectedId));
+    const observation = observeKieTask(body, response.status, validateKieTaskId(context.expectedId));
     // The documented state establishes termination even when output/metrics are
     // absent. Output decoding is a consumer concern, never evidence of a refund.
     return { id: observation.id, nativeStatus: observation.state,

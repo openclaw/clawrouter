@@ -1,15 +1,16 @@
 import { pixVerseInputFixedCost } from "./pixverse-input-policy.ts";
 import type { RequestTariffEndpoint } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
-import { isModelDiscovery } from "./model-discovery.ts";
+import { isModelDiscovery } from "./model-discovery-formats.ts";
 import { validateBudgetReservation, type EstimatedCost } from "./accounting";
 import { modelForEndpoint } from "./model-pricing.ts";
 import { modelReservationBounds, type PricingEndpoint } from "./pricing";
 import { estimateCost } from "./proxy-accounting";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ProviderConnection, ProxyRequestBody } from "./types";
 import { REALTIME } from "./realtime-protocol";
+import { realtimeCapacityMissing } from "./realtime-budget-policy.ts";
 import { softBudgetPolicy } from "./soft-budget.ts";
-import { HttpError } from "./utils";
+import { HttpError } from "./http-error";
 
 export interface BudgetObservation { policyRemaining: number | null; dailyRemaining?: number | null; weeklyRemaining?: number | null; providerRemaining: number | null }
 export interface OperationAffordability {
@@ -22,7 +23,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   // Only the basis is used for variable prices; a representative body's default output
   // allowance is not a claim that every real request fits the observed balance.
   const realtime = endpoint.request_format === "openai.realtime";
-  if (realtime && (auth.policy.budgetMode === "soft" || [auth.policy.monthlyBudgetMicros, auth.policy.dailyBudgetMicros, auth.policy.weeklyBudgetMicros, connection.monthlyBudgetMicros].every(v => v == null))) return { status: "exact-blocked", reasonCode: "realtime_hard_budget_required" };
+  if (realtime && realtimeCapacityMissing(auth.policy, connection)) return { status: "exact-blocked", reasonCode: "realtime_hard_budget_required" };
   // Catalog probes have no request model; use this exact candidate's native
   // identity while retaining request-dependent affordability for tariffs.
   if (endpoint.requestPricing && "outcome" in endpoint.requestPricing) {

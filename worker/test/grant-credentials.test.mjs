@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 test("legacy grants migrate to the credential owner before KV secrets are scrubbed", async () => {
   const key = "oauth/policy/openai";
@@ -540,6 +541,7 @@ function credentialEnv(values) {
     POLICY_KV: {
       async get(key, type) {
         const value = values.get(key) ?? null;
+        if (!Array.isArray(key) && type === "stream" && value !== null) return accessBytesResponse(typeof value === "string" ? value : JSON.stringify(value), "").body;
         return value === null ? null : type === "text" ? typeof value === "string" ? value : JSON.stringify(value) : typeof value === "string" ? JSON.parse(value) : structuredClone(value);
       },
       async put(key, value) { values.set(key, JSON.parse(value)); },

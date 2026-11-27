@@ -1,6 +1,7 @@
 import type { Env, UpstreamGrant } from "./types.ts";
 import { boundedSecret } from "./grant-refresh-diagnosis.ts";
-import { HttpError, readJson } from "./utils.ts";
+import { readJson } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Reuse the credential binding, with a reserved non-grant object name. Its
 // random HMAC key and full digests stay private to this object, never in KV,
@@ -49,7 +50,7 @@ export async function reserveRefreshOwnership(storage: DurableObjectStorage, env
       if (item.name === key) continue;
       const response = await env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(item.name)).fetch(`https://clawrouter.internal${OWNERSHIP_CURRENT}`, { method: "POST" });
       if (!response.ok) throw new HttpError(503, "refresh_ownership_unavailable", "existing refresh ownership could not be verified");
-      const current = await response.json<{ exists: boolean; refreshToken?: string | null }>();
+      const current = await response.json<{ exists: boolean; refreshToken?: string | null; pendingRefreshToken?: string | null }>();
       let other = current.refreshToken;
       if (!current.exists) {
         // Match legacyGrantMetadata: plain strings are access-only grants;
@@ -58,7 +59,8 @@ export async function reserveRefreshOwnership(storage: DurableObjectStorage, env
         const legacy = raw?.trim().startsWith("{") ? JSON.parse(raw) as UpstreamGrant : null;
         other = legacy?.refreshToken;
       }
-      if (typeof other === "string" && other && await fingerprint(other) === id.slice(6)) {
+      const tokens = [other, current.pendingRefreshToken];
+      if ((await Promise.all(tokens.map(value => typeof value === "string" && value ? fingerprint(value) : null))).includes(id.slice(6))) {
         await storage.put(id, { owner: item.name, used: false });
         return new Response(null, { status: 409 });
       }

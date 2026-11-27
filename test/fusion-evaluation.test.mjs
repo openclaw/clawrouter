@@ -34,6 +34,12 @@ test("paired evaluation exposes domain regressions, cost, latency and uncertaint
   assert.equal(comparison.meanScoreDelta, 1 / 3);
   assert.ok(comparison.scoreDelta95.low < 0);
   assert.ok(comparison.scoreDelta95.high > 0);
+  assert.equal(comparison.meanCostDeltaMicros, 20);
+  assert.equal(comparison.meanCostRatio, 3);
+  assert.equal(comparison.meanLatencyDeltaMs, 200);
+  assert.equal(comparison.meanLatencyRatio, 3);
+  assert.deepEqual([comparison.costRatio95.low, comparison.costRatio95.high], [3, 3]);
+  assert.deepEqual([comparison.latencyDelta95.low, comparison.latencyDelta95.high], [200, 200]);
   assert.deepEqual(report, evaluateFusion(fixture(), "single"), "bootstrap is reproducible");
 });
 
@@ -74,5 +80,98 @@ for (const [name, change, pattern] of [
 test("a one-case result does not manufacture a confidence interval", () => {
   const input = fixture(); input.records = input.records.slice(0, 2);
   assert.equal(evaluateFusion(input, "single").comparisons[0].scoreDelta95, null);
+  assert.equal(evaluateFusion(input, "single").comparisons[0].costRatio95, null);
+  assert.equal(evaluateFusion(input, "single").comparisons[0].latencyDelta95, null);
   assert.throws(() => evaluateFusion(input, "missing"), /baseline/);
+});
+
+test("resource ratios compare case means instead of averaging per-case ratios", () => {
+  const input = fixture(); input.records = input.records.slice(0, 4);
+  for (const row of input.records) {
+    row.costMicros = row.strategy === 'single' ? (row.caseId === 'a' ? 1 : 9) : 2;
+    row.latencyMs = row.costMicros;
+  }
+  const comparison = evaluateFusion(input, 'single').comparisons[0];
+  assert.equal(comparison.meanCostRatio, .4);
+  assert.equal(comparison.meanLatencyRatio, .4);
+  assert.equal(comparison.costRatio95.low, 2 / 9);
+  assert.equal(comparison.costRatio95.high, 2);
+  for (let trial = 2; trial <= 10; trial++) input.records.push(...input.records.slice(0, 2).map(row => ({ ...row, trial })));
+  assert.deepEqual(evaluateFusion(input, 'single').comparisons[0], comparison);
+});
+
+test("zero baselines retain deltas and make undefined ratios explicit", () => {
+  const input = fixture();
+  for (const row of input.records) if (row.strategy === 'single') { row.costMicros = 0; row.latencyMs = 0; }
+  let comparison = evaluateFusion(input, 'single').comparisons[0];
+  assert.equal(comparison.meanCostRatio, null);
+  assert.equal(comparison.costRatio95, null);
+  assert.equal(comparison.latencyRatio95, null);
+  assert.equal(comparison.costDelta95.low, 30);
+  assert.equal(comparison.latencyDelta95.low, 300);
+  input.records[0].costMicros = 10; input.records[0].latencyMs = 100;
+  comparison = evaluateFusion(input, 'single').comparisons[0];
+  assert.equal(comparison.meanCostRatio, 9);
+  assert.equal(comparison.costRatio95, null, 'a zero-denominator resample is not dropped');
+  assert.equal(comparison.latencyRatio95, null);
+});
+
+test("resource uncertainty preserves paired failures and does not imply savings", () => {
+  const input = fixture();
+  for (const row of input.records) if (row.strategy === 'panel') {
+    row.costMicros = row.caseId === 'a' ? 1 : 20;
+    row.latencyMs = row.caseId === 'a' ? 10 : 200;
+    if (row.caseId === 'c') { row.status = 'error'; row.score = 0; }
+  }
+  const comparison = evaluateFusion(input, 'single').comparisons[0];
+  assert.equal(comparison.meanCostRatio, 41 / 30);
+  assert.ok(comparison.costRatio95.low < 1);
+  assert.ok(comparison.costRatio95.high > 1);
+  assert.ok(comparison.latencyRatio95.low < 1);
+  assert.ok(comparison.latencyRatio95.high > 1);
+});
+
+test("unrepresentable latency ratios remain unknown instead of serializing Infinity", () => {
+  const input = fixture();
+  for (const row of input.records) row.latencyMs = row.strategy === 'single' ? Number.MIN_VALUE : Number.MAX_SAFE_INTEGER;
+  const comparison = evaluateFusion(input, 'single').comparisons[0];
+  assert.equal(comparison.meanLatencyRatio, null);
+  assert.equal(comparison.latencyRatio95, null);
+  assert.ok(Number.isFinite(comparison.meanLatencyDeltaMs));
+});
+
+
+test("binary losses cannot cancel across repeated trials", () => {
+  const input = fixture();
+  input.records = input.records.slice(0, 2);
+  input.records.push(...input.records.map((row) => ({ ...row, trial: 2, score: 1 - row.score })));
+  const comparison = evaluateFusion(input, "single").comparisons[0];
+  assert.equal(comparison.losses, 0);
+  assert.equal(comparison.ties, 1);
+  assert.equal(comparison.binaryTaskLoss.cases, 1);
+  assert.equal(comparison.binaryTaskLoss.casesWithLostBaselineSuccess, 1);
+  assert.equal(comparison.binaryTaskLoss.upper95, 1);
+});
+
+test("zero observed losses still retain task-level uncertainty", () => {
+  const input = fixture();
+  input.records = Array.from({ length: 30 }, (_, i) => input.records.slice(0, 2).map((row) =>
+    ({ ...row, caseId: `case-${i}`, score: 1 }))).flat();
+  let loss = evaluateFusion(input, "single").comparisons[0].binaryTaskLoss;
+  assert.ok(Math.abs(loss.upper95 - (1 - 0.05 ** (1 / 30))) < 1e-12);
+  assert.ok(loss.upper95 > 0.05);
+  input.records.push(...input.records.map((row) => ({ ...row, trial: 2 })));
+  loss = evaluateFusion(input, "single").comparisons[0].binaryTaskLoss;
+  assert.equal(loss.cases, 30);
+  assert.ok(Math.abs(loss.upper95 - (1 - 0.05 ** (1 / 30))) < 1e-12);
+  input.records[1].score = 0;
+  loss = evaluateFusion(input, "single").comparisons[0].binaryTaskLoss;
+  // Independent inversion: P(X <= 1) = (1-p)^30 + 30p(1-p)^29.
+  assert.ok(Math.abs((1 - loss.upper95) ** 30 + 30 * loss.upper95 * (1 - loss.upper95) ** 29 - 0.05) < 1e-12);
+});
+
+test("fractional scores do not receive a binary loss bound", () => {
+  const input = fixture();
+  input.records[0].score = 0.5;
+  assert.equal(evaluateFusion(input, "single").comparisons[0].binaryTaskLoss, null);
 });

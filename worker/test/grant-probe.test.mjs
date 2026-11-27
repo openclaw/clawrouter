@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { refreshStoredGrantQuota } from "../providers.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 test("subscription quota probes authenticate, bound, and persist provider-neutral state", async (context) => {
   const key = "oauth/policy/openai-subscription";
@@ -31,7 +32,11 @@ test("subscription quota probes authenticate, bound, and persist provider-neutra
     });
   });
   const env = attachGrantCredentialNamespace({
-    POLICY_KV: { async get(requested) { return requested === key ? structuredClone(grant) : null; }, async put() {} },
+    POLICY_KV: { async get(requested, type) {
+      const value = requested === key ? grant : null;
+      if (!Array.isArray(requested) && type === "stream" && value !== null) return accessBytesResponse(typeof value === "string" ? value : JSON.stringify(value), "").body;
+      return value === null ? null : structuredClone(value);
+    }, async put() {} },
     ACCESS_CONTROL: {
       idFromName(name) { return name; },
       get() {
@@ -64,7 +69,11 @@ test("quota probes fail before fetch when required grant metadata is absent", as
   let fetched = false;
   context.mock.method(globalThis, "fetch", async () => { fetched = true; return Response.json({}); });
   const env = attachGrantCredentialNamespace({
-    POLICY_KV: { async get() { return { provider: "openai", kind: "subscription", accessToken: "test", updatedAt: "2026-07-07T10:00:00.000Z" }; }, async put() {} },
+    POLICY_KV: { async get(requested, type) {
+      const value = { provider: "openai", kind: "subscription", accessToken: "test", updatedAt: "2026-07-07T10:00:00.000Z" };
+      if (!Array.isArray(requested) && type === "stream") return accessBytesResponse(JSON.stringify(value), "").body;
+      return value;
+    }, async put() {} },
   });
   await assert.rejects(() => refreshStoredGrantQuota(env, "oauth/policy/openai"), (error) => error?.code === "grant_quota_probe_unavailable");
   assert.equal(fetched, false);

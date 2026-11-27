@@ -1,5 +1,5 @@
 import type { CompiledEndpoint } from "./types";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export type ProxyQuery = URLSearchParams | Record<string, unknown>;
 

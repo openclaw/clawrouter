@@ -1,7 +1,8 @@
 import { sqliteFixture } from "./sqlite-storage.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { UsageLedgerObject, usageSnapshots } from "../ledgers.ts";
+import { UsageLedgerObject } from "../ledgers.ts";
+import { usageSnapshots } from "../usage-ledger-client.ts";
 import { emptyUsageSnapshot } from "../usage-sharding.ts";
 import { legacySnapshot, snapshotRequest, syntheticUsage, usageFixture } from "./usage-snapshot-fixture.mjs";
 

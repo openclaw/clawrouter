@@ -1,0 +1,333 @@
+{
+  "schemaVersion": 1,
+  "study": "Public-verifier blind spot in a Copilot cancellation repair",
+  "scope": "One previously exposed historical cancellation repair, three paired trials, one task cluster. Development challenge only; no unseen confirmation, collaboration or production claim.",
+  "task": {
+    "id": "history-fe532e69e69d",
+    "baseCommit": "d5cf833082913c84f771ae3599f82db4cfd4a91b",
+    "referenceCommit": "fe532e69e69d7502b02b3b163c11f2b48ed67c02",
+    "sourcePaths": [
+      "worker/copilot-public-proxy.ts"
+    ],
+    "testPaths": [
+      "worker/test/copilot-public-proxy.test.mjs"
+    ]
+  },
+  "provenance": {
+    "sourceCommit": "545383b64a97b9a28988e7cf523fa3975b6e669a",
+    "protocolSha256": "4abdf0a930918868904f6c8bd33324cbf2a8d80c7427ddebf7c43496fa38d790",
+    "resultSha256": "fc8c62ebb055ac846de1504e7f2daaadbf14a48cb04c85e5440c362518c2fcc6",
+    "terminalAuditSha256": "fa9c53fb99826895b7d92a07af62f506661c2253e563df4fb69e0b60de0233f0",
+    "qualificationProtocolSha256": "ae56779275e454b90f8bfd9b675f3c0b848fa53fc5e38d8b9872b7842c029cd2",
+    "qualificationResultSha256": "4c7911692e62efb76a052d3bde3067bb5931ab79a74ccdbf7cde96f1127795fe"
+  },
+  "method": {
+    "draftModel": "openai/gpt-6-luna",
+    "draftReasoning": "medium",
+    "draftMaxOutputTokens": 4096,
+    "strongModel": "openai/gpt-6.1-terra",
+    "strongReasoning": "low",
+    "strongMaxOutputTokens": 8192,
+    "comparison": "Alternating arm order, matched two-attempt ceilings, fresh strong fallback after a rejected draft. All calls finish before full grading. Exact edits apply to the original baseline.",
+    "context": "Both arms receive identical baseline source, unchanged lifecycle helpers and the public suite. Source was previously exposed in this research campaign.",
+    "qualification": "Preserve all baseline tests. Add a public reserve-abort empty-body probe to both suites. The original reserve and observe cancellation regressions remain final-only. The public probe was authored after reading the original regression.",
+    "verification": "Both arms use short-circuit public verification; accepted candidates must pass all 18 public tests and compile. All six candidates passed, so no fallback ran. Final-only full grading checks 20 tests after all model calls.",
+    "runtime": "Existing immutable exact-lock sandbox; no downloads or new compute allocation. Original public and full repository suites plus Worker compilation.",
+    "cost": "Integer microUSD estimates from recorded usage and frozen tariffs, not invoices. Cache-neutral normalization prices all input at the base rate.",
+    "elapsed": "Per-arm elapsed time includes generation and public verification. Separate full grading is excluded from both arms. Two strong candidates hit the 118-second in-container full-suite timeout (exit 137); those failures remain in the quality denominator.",
+    "gates": "Full correctness, zero false accepts and at least 20% savings on both cost measures. Development lead additionally requires a successful fallback rescue and elapsed ratio <=1.2. Thresholds unchanged.",
+    "limits": "Previously exposed source and a regression-informed public probe preclude unseen confirmation. Three repeats of one task do not establish task-level confidence. Private protocols/raw proof are retained by hash; this report is not a standalone reproduction bundle."
+  },
+  "qualification": {
+    "referenceFull": {
+      "valid": true,
+      "passed": true,
+      "tests": 20,
+      "failures": 0,
+      "skipped": 0,
+      "compilerPassed": true
+    },
+    "referencePublic": {
+      "valid": true,
+      "passed": true,
+      "tests": 18,
+      "failures": 0,
+      "skipped": 0,
+      "compilerPassed": true
+    },
+    "baseFull": {
+      "valid": true,
+      "passed": false,
+      "tests": 20,
+      "failures": 3,
+      "skipped": 0,
+      "compilerPassed": true
+    },
+    "basePublic": {
+      "valid": true,
+      "passed": false,
+      "tests": 18,
+      "failures": 1,
+      "skipped": 0,
+      "compilerPassed": true
+    }
+  },
+  "records": [
+    {
+      "id": "history-fe532e69e69d/repeat-0",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 28205,
+      "attempts": 1,
+      "costMicros": 34063,
+      "elapsedMs": 20160.911667,
+      "full": {
+        "valid": false,
+        "passed": false,
+        "tests": -1,
+        "failures": -1,
+        "skipped": -1,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [
+            "789d1ce91f9353ab18ebd7ac8cce99e995cb52375ef87f348d0ae87e4dd363b6"
+          ],
+          "truncated": false
+        },
+        "exitCode": 137,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": false
+    },
+    {
+      "id": "history-fe532e69e69d/repeat-0",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 2925,
+      "attempts": 1,
+      "costMicros": 3511,
+      "elapsedMs": 12361.43275,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "history-fe532e69e69d/repeat-1",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 3706,
+      "attempts": 1,
+      "costMicros": 1597,
+      "elapsedMs": 22806.874875,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "history-fe532e69e69d/repeat-1",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 30705,
+      "attempts": 1,
+      "costMicros": 8445,
+      "elapsedMs": 28028.413,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "history-fe532e69e69d/repeat-2",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 27425,
+      "attempts": 1,
+      "costMicros": 5165,
+      "elapsedMs": 17343.107707999996,
+      "full": {
+        "valid": false,
+        "passed": false,
+        "tests": -1,
+        "failures": -1,
+        "skipped": -1,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [
+            "789d1ce91f9353ab18ebd7ac8cce99e995cb52375ef87f348d0ae87e4dd363b6"
+          ],
+          "truncated": false
+        },
+        "exitCode": 137,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": false
+    },
+    {
+      "id": "history-fe532e69e69d/repeat-2",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 2870,
+      "attempts": 1,
+      "costMicros": 761,
+      "elapsedMs": 12556.378500000006,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true
+    }
+  ],
+  "summary": {
+    "strong": {
+      "passed": 1,
+      "costMicros": 47673,
+      "elapsedMs": 65532.432375
+    },
+    "cascade": {
+      "passed": 3,
+      "costMicros": 5869,
+      "elapsedMs": 47724.68612500001
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 0,
+    "escalations": 0,
+    "costRatio": 0.12310951691733266,
+    "elapsedRatio": 0.7282605634398293,
+    "costComparison": {
+      "costBasis": "invoice-and-cache-neutral-v1",
+      "strong": {
+        "costMicros": 47673,
+        "normalizedMicros": 86335
+      },
+      "cascade": {
+        "costMicros": 5869,
+        "normalizedMicros": 9501
+      },
+      "costRatio": 0.12310951691733266,
+      "normalizedCostRatio": 0.11004806857010482,
+      "invoiceCostScreen": true,
+      "normalizedCostScreen": true,
+      "costScreen": true
+    },
+    "qualityMatchedCostScreen": false,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "accounting": {
+    "calls": 6,
+    "newCostMicros": 53542,
+    "cumulativeCostMicros": 312456087,
+    "remainingMicros": 87543913,
+    "campaignCapMicros": 400000000
+  },
+  "decision": {
+    "qualityMatchedCostScreen": false,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false,
+    "accepted": "Retain as a verifier blind-spot development result and evidence that the small model can solve this task. Do not promote the routing policy.",
+    "reason": "Small candidates pass 3/3 full suites; strong candidates pass 1/3 with two timed-out full grades. No fallback rescue occurred. Cost and latency ratios compare arms with unequal successful completion, so they are descriptive only.",
+    "productionGate": "30 unseen real tasks with three trials each, task-clustered uncertainty and unchanged quality/cost/latency controls remain required.",
+    "deployment": "None. No routing default or production configuration changed."
+  },
+  "publicFalseAcceptsByArm": {
+    "strong": 2,
+    "cascade": 0
+  },
+  "summaryFieldMeaning": {
+    "falseAccepts": "Counts only cascade public acceptances that fail the full suite. See publicFalseAcceptsByArm for both arms.",
+    "invalidFullGrades": "Timeout rows have unknown test counts (-1), not zero failures. They count as unsuccessful candidates."
+  },
+  "diagnosis": {
+    "status": "Inference from saved code and failure traces; no counterfactual repair tested.",
+    "finding": "Both timed-out strong drafts add a disposal promise to the bounded response-producer list. The original list allows three response slots; adding disposal appears to consume the retirement-reply slot. The reference joins disposal through the physical-work promise instead.",
+    "implication": "An empty aborted response is insufficient evidence of correct cleanup. Public verification needs a bounded complete retirement lifecycle, including successful retirement acknowledgment and release, before accepting this bug class."
+  }
+}

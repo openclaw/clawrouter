@@ -1,93 +1,17 @@
+import { admitBackgroundAdmission, admitInputAllocation, newBackgroundJob, liveBackground, type BackgroundAdmission, type ManagedAdmission, type BackgroundJob, type BackgroundTombstone, type BackgroundRecord, type BackgroundSummary, type ManagedState, type SettlementDisposition } from "./background-record.ts";
+import { admitAccountingJson, copyAccountingJson, accountingObjectProjection, accountingArrayProjection } from "./json-body.ts";
 import { assertManagedInputLive, bindManagedInput, inputReceipt, inputUnavailable, uploadJob, validateInputAllocation, type ManagedInputAllocation, type ManagedInputBinding, type ManagedInputReceipt } from "./managed-input-receipt.ts";
-import type { BudgetReservationIntent, BudgetReservationPlan } from "./accounting.ts";
-import { accountingReceipt, type AccountingFacts, type AccountingOutcome } from "./proxy-accounting.ts";
-import type { ContinuationOwner } from "./continuation-store.ts";
-import type { UsageIngestReceipt } from "./ledgers.ts";
-import type { ManagedFileDescriptor, ManagedObservationLoss, ManagedProtocol } from "./managed-lifecycle-types.ts";
-import type { UsageEvent } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { type BudgetReservationIntent } from "./accounting.ts";
+import { accountingReceipt, type AccountingOutcome } from "./proxy-accounting.ts";
+import type { ManagedFileDescriptor, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
+import { HttpError } from "./http-error.ts";
 import { assertPublishedInputLive, samePublishedInput, samePublishedObject, validatePublishedInput, validatePublishedObject,
   validatePublishedAttempt, publishedInputUnavailable, publishedInputVersion, type PublishedInputBinding,
   type PublishedInputReceipt, type PublishedInputObject, type PublishedInputAttempt } from "./published-input-receipt.ts";
 
-export const backgroundObservationMs = 60 * 60_000;
-export const backgroundAutoRetryMs = 7 * 86_400_000;
-export const backgroundReplayMs = 44 * 86_400_000;
 export const backgroundRowBytes = 64 * 1024;
 export const backgroundActiveLimit = 16;
 export const backgroundCapacity = 64;
-
-export type SettlementDisposition = "pending" | "settled" | "missing" | "conflict" | "unavailable";
-interface BackgroundLeg {
-  intent: BudgetReservationIntent;
-  reserve: "never" | "sent" | "accepted" | "denied";
-  uncertainReserve: boolean;
-  dispatched: boolean;
-  settlement: SettlementDisposition;
-}
-export interface BackgroundAdmission {
-  id: string;
-  admittedAt: number;
-  owner: ContinuationOwner;
-  facts: AccountingFacts;
-  plan: BudgetReservationPlan;
-  route: { pathParams: Record<string, string>; organization: string | null; project: string | null };
-  stream: boolean;
-  managed?: ManagedAdmission;
-}
-export interface ManagedAdmission {
-  protocol: ManagedProtocol;
-  providerId?: string;
-  idempotencyKey: string | null;
-  requestDigest: string;
-  requestedVersion: string;
-  // Secret-free selected API base for qualifying only this job's output descriptors.
-  fileBaseUrl?: string;
-}
-interface ManagedState extends ManagedAdmission {
-  observationUnavailable?: ManagedObservationLoss;
-  files?: ManagedFileDescriptor[];
-  route?: BackgroundAdmission["route"];
-  policyGeneration: string;
-  submission: "pending" | "submission_unknown" | "bound";
-  upstreamId: string | null;
-  terminal: "succeeded" | "failed" | "canceled" | "aborted" | null;
-}
-interface BackgroundSummary {
-  inputReceipt?: ManagedInputReceipt;
-  id: string;
-  admittedAt: number;
-  observeUntil: number;
-  autoRetryUntil: number;
-  replayUntil: number;
-  eventId: string;
-  requestId: string;
-  amount: number | null;
-  basis: string | null;
-  usage: UsageIngestReceipt["outcome"] | "pending" | "unavailable";
-  settlements: SettlementDisposition[];
-  lastError: "admission_lost" | "observation_unavailable" | "observation_expired" | "accounting_unavailable" | null;
-  managed?: ManagedState;
-}
-export interface BackgroundJob extends BackgroundSummary {
-  phase: "admitting" | "observing" | "outbox";
-  owner: ContinuationOwner;
-  facts: AccountingFacts | null;
-  legs: BackgroundLeg[];
-  reservedMicros: number;
-  route: BackgroundAdmission["route"] | null;
-  stream: boolean;
-  responseId: string | null;
-  egress: boolean;
-  dispatchClaimed: boolean;
-  event: UsageEvent | null;
-  nextAttemptAt: number;
-  attempts: number;
-  contentRef: string | null;
-}
-export interface BackgroundTombstone extends BackgroundSummary { phase: "complete" | "expired" }
-export type BackgroundRecord = BackgroundJob | BackgroundTombstone;
-export function liveBackground(record: BackgroundRecord): record is BackgroundJob { return record.phase !== "complete" && record.phase !== "expired"; }
 
 // All mutations run in the scoped Responses owner's serialized tail. The same
 // 64 rows contain live jobs and evictable summaries; no second recovery index.
@@ -159,13 +83,14 @@ export class BackgroundStore {
   }
 
   admit(input: BackgroundAdmission): BackgroundJob {
+    admitBackgroundAdmission(input);
     if (!/^bg_[0-9a-f]{32}$/.test(input.id) || !Number.isSafeInteger(input.admittedAt) || Math.abs(Date.now() - input.admittedAt) > 60_000) invalid();
     if (input.managed) {
       validateManagedAdmission(input);
       if (this.managedRetry(input.managed, input.owner.policyGeneration)) throw new HttpError(409, "background_job_exists", "managed admission already exists");
     }
     if (this.get(input.id)) throw new HttpError(409, "background_job_exists", "background admission already exists");
-    const job = newBackgroundJob(input);
+    const job = copyAccountingJson(newBackgroundJob(input), "capsule");
     encode(job);
     const active = [...this.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM responses_background WHERE phase IN ('admitting', 'observing')")][0].count;
     if (active >= backgroundActiveLimit) capacity();
@@ -182,11 +107,13 @@ export class BackgroundStore {
 
   // Input upload and generation share this row, never a global asset index.
   allocateInput(input: ManagedInputAllocation): BackgroundJob {
+    admitInputAllocation(input);
+    const uploadInput = { ...input.admission, managed: undefined, ...input.upload };
     validateInputAllocation(input);
     if (this.get(input.admission.id)) inputUnavailable();
     const job = this.admit(input.admission);
     job.inputReceipt = { binding: input.binding, state: "pending", imageId: null, createClaimed: false,
-      upload: newBackgroundJob({ ...input.admission, managed: undefined, ...input.upload }) };
+      upload: copyAccountingJson(newBackgroundJob(uploadInput), "capsule") };
     this.save(job); return job;
   }
 
@@ -318,6 +245,10 @@ export class BackgroundStore {
       || managed.terminal !== "succeeded" || managed.observationUnavailable || Date.now() >= job.replayUntil) {
       throw new HttpError(409, "managed_files_unavailable", "files require the original succeeded managed job before its retention deadline");
     }
+    admitAccountingJson(files, "capsule");
+    admitAccountingJson(accountingObjectProjection(job, { managed: accountingObjectProjection(managed, {
+      files: accountingArrayProjection(managed.files ?? [], files),
+    }) }), "capsule");
     const merged = new Map<string, ManagedFileDescriptor>();
     for (const entries of [managed.files ?? [], files]) {
       if (!Array.isArray(entries) || entries.length > 64) invalidFiles();
@@ -496,17 +427,3 @@ function invalid(): never { throw new HttpError(400, "background_request_invalid
 function missing(): never { throw new HttpError(404, "background_unavailable", "background recovery record is unavailable; this does not confirm settlement"); }
 
 function invalidFiles(): never { throw new HttpError(400, "managed_files_invalid", "managed files require at most 64 bounded native identifiers and media types"); }
-
-function newBackgroundJob(input: BackgroundAdmission): BackgroundJob {
-  return {
-      id: input.id, admittedAt: input.admittedAt, observeUntil: input.admittedAt + backgroundObservationMs,
-      autoRetryUntil: input.admittedAt + backgroundAutoRetryMs, replayUntil: input.admittedAt + backgroundReplayMs,
-      eventId: input.facts.event.id, requestId: input.facts.event.request_id,
-      amount: null, basis: null, usage: "pending", settlements: input.plan.legs.map(() => "pending"), lastError: null,
-      phase: "admitting", owner: input.owner, facts: input.facts, reservedMicros: input.plan.reservedMicros,
-      legs: input.plan.legs.map(intent => ({ intent, reserve: "never", uncertainReserve: false, dispatched: false, settlement: "pending" })),
-      route: input.route, stream: input.stream, responseId: null, egress: false, dispatchClaimed: false, event: null,
-      nextAttemptAt: input.admittedAt + 60_000, attempts: 0, contentRef: null,
-      ...(input.managed ? { managed: { ...input.managed, providerId: input.owner.providerId, route: input.route, policyGeneration: input.owner.policyGeneration, submission: "pending", upstreamId: null, terminal: null } as ManagedState } : {}),
-  };
-}

@@ -1,16 +1,17 @@
 import { accessSessionIdentity, sessionPolicies, sessionPolicyIdentity, verifiedAccessSession } from "./access";
 import { upstreamGrantResponses } from "./admin";
-import { grantRoutingPolicy } from "./grant-selection";
-import { grantUsageSnapshot } from "./ledgers";
+import { grantRoutingPolicy } from "./grant-routing";
+import { grantUsageSnapshot } from "./usage-ledger-client";
 import { policyAllowsModel } from "./policy-models";
-import { authenticateProxyKey } from "./proxy-auth";
-import { snapshot } from "./providers";
-import { modelEligibility, planLabel, policyGrants, quotaFree } from "../shared/subscription-pool.ts";
+import { authenticateProxyKey, hasProxyKeyIntent } from "./proxy-auth";
+import { snapshot } from "./provider-catalog";
+import { modelExclusionReason, planLabel, policyGrants, poolModelEligibility, quotaFree } from "../shared/subscription-pool.ts";
 import type { Env, UpstreamGrant } from "./types";
-import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
+import { errorResponse, privateJson, sha256Hex } from "./utils";
+import { HttpError } from "./http-error";
 
 export async function poolResponse(request: Request, env: Env): Promise<Response> {
-  const hasKey = ["authorization", "x-api-key", "x-goog-api-key", "api-key"].some(name => /(?:clawrouter-|ocpk_)/.test(request.headers.get(name) ?? ""));
+  const hasKey = hasProxyKeyIntent(request.headers);
   const session = hasKey ? null : await verifiedAccessSession(request, env);
   const policyId = new URL(request.url).searchParams.get("policyId");
   const entry = session && policyId ? (await sessionPolicies(session, env)).find(entry => entry.policyId === policyId) : null;
@@ -49,13 +50,19 @@ export async function poolResponse(request: Request, env: Env): Promise<Response
     ? key.split("/").at(-1)! : `shared-${(await sha256Hex(key)).slice(0, 16)}`;
   const now = Date.now();
   const rows = policyGrants(policy, await upstreamGrantResponses(env, records));
+  // Eligibility is a pool fact: a reserve-band grant is eligible while dispatch drains it.
+  const eligibility = new Map(models.map(model => {
+    const members = rows.filter(grant => grant.provider === model.provider), statuses = poolModelEligibility(members, model.upstream, policy, now);
+    return [model.id, new Map(members.map((grant, index) => [grant, statuses[index]]))];
+  }));
   const grants = await Promise.all(rows.map(async grant => ({
     key: await publicKey(grant.key), label: grant.label, provider: grant.provider, kind: grant.kind, enabled: grant.enabled,
     credentialStatus: grant.credentialStatus ?? null, plan: grant.subscription?.plan ?? planLabel(grant.account?.rateLimitTier),
     account: grant.account ? { email: grant.account.email ?? null, rateLimitTier: grant.account.rateLimitTier ?? null, subscriptionStatus: grant.account.subscriptionStatus ?? null } : null,
     windows: grant.quotaWindows.map(window => ({ id: window.id, window: window.window, models: window.models ?? null, remainingPercent: quotaFree(window, now), resetAt: window.resetAt, observedAt: window.observedAt ?? grant.quotaObservedAt })),
     extraUsage: grant.extraUsage ? { enabled: grant.extraUsage.enabled ?? null, usedCredits: grant.extraUsage.usedCredits ?? null, monthlyLimit: grant.extraUsage.monthlyLimit ?? null, currency: grant.extraUsage.currency ?? null, spendLimitReached: grant.extraUsage.spendLimitReached ?? null } : null,
-    eligibility: Object.fromEntries(models.map(model => [model.id, model.provider === grant.provider ? modelEligibility(grant, model.upstream, policy, now) : "exhausted"])),
+    eligibility: Object.fromEntries(models.map(model => [model.id, eligibility.get(model.id)!.get(grant) ?? "exhausted"])),
+    exclusionReasons: Object.fromEntries(models.map(model => [model.id, model.provider === grant.provider ? modelExclusionReason(grant, model.upstream, policy, now) : "provider_mismatch"])),
     lastSelectedAt: grant.lastSelectedAt, selectedCount: grant.selectedCount,
   })));
   const usage = await grantUsageSnapshot(env, auth.policy.tenantId ?? "default", auth.policyId, 7);

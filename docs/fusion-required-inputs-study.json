@@ -1,0 +1,311 @@
+{
+  "schemaVersion": 1,
+  "study": "required-native-inputs-retrospective-replay",
+  "scope": "One exposed historical CI-selector repair. Model-free retrospective replay across three previously completed model comparisons. This checks a repaired verifier, not unseen-task efficacy or prospective savings.",
+  "priorStudy": "https://github.com/openclaw/clawrouter/pull/1292",
+  "task": {
+    "id": "history-d7c0556b1dde",
+    "baseCommit": "2f2e3494966d2be7b99c91e3d10b67daa215e731",
+    "referenceCommit": "d7c0556b1dde8ef209ef52db5688338764019529",
+    "editPaths": [
+      "scripts/openclaw-contract-changes.mjs"
+    ]
+  },
+  "provenance": {
+    "sourceCommit": "305827d833fc08fe2758aab23e512688102babeb",
+    "protocolSha256": "f8843bc2fa8724d1f66585f18e75bb0789699a6acfab67007b278951c3454d8b",
+    "resultSha256": "05bd5eb0e3038e40e1ae2e06d2b9d486a1aa7bbd52bc1619fb9979979b919a01",
+    "priorComparisons": [
+      {
+        "name": "contract-selection-medium-paired-v1",
+        "protocolSha256": "0788819ee833fc6c67967ece91a9c8c01ee3bfa6731ac21f2f0d77ae5804f9fe",
+        "resultSha256": "ce79fbc6d3c6f56345d73ab41f7a261275feb68f03a25c0ab136ce4b8f15b9d1",
+        "terminalAuditSha256": "3bf1f37eba68a4f90512850771989250e80c049c198eff17846d62acf59613a3"
+      },
+      {
+        "name": "contract-selection-guarded-paired-v1",
+        "protocolSha256": "709f0fc2c83dd088857eef856d428b079766b714e6f0be68af5a4ff6437ac150",
+        "resultSha256": "8d85cbc43538f181c96efbb8f30345f76e9aa1d2082d476141f5ceda41d11f26",
+        "terminalAuditSha256": "1f62b14c75a590062065a3da3cb37509ec2beab7b2e57cb25ec24bd94af09dab"
+      },
+      {
+        "name": "contract-selection-guarded-none-v1",
+        "protocolSha256": "8d0298fbf98a0cd55c02311361d339cba1870d68423b9912c740f1c0909424a8",
+        "resultSha256": "c1682735a3703ba15b29e0a8d2356824ff00bef60f6e693708294eedd05803f2",
+        "terminalAuditSha256": "52a5ddcda9c0248bd8e019b2791fec170d65a5be5cce7667f4c4ba8bcf7ab279"
+      }
+    ]
+  },
+  "method": {
+    "requiredInputs": "Every test/helpers module reachable in the frozen baseline dependency graph, except the local-only Bifrost socket helper explicitly excluded by the original task contract. Paths were not selected from reference source or model edits.",
+    "explicitException": "test/helpers/bifrost-reset-socket.mjs",
+    "requiredHelperPaths": [
+      "test/helpers/catalog-diagnostic-harness.mjs",
+      "test/helpers/cloudflare-response-clones.ts",
+      "test/helpers/fixture-cleanup.mjs",
+      "test/helpers/openclaw-baseten-guard-observer.mjs",
+      "test/helpers/openclaw-catalog-variant.mjs",
+      "test/helpers/openclaw-consumer.mjs",
+      "test/helpers/openclaw-google-text.mjs",
+      "test/helpers/openclaw-pixverse-guard-observer.mjs",
+      "test/helpers/openclaw-private-execution-observer.mjs",
+      "test/helpers/openclaw-qwen-callsite-observer.mjs",
+      "test/helpers/openclaw-runner-reporter.mjs",
+      "test/helpers/openclaw-vydra-guard-observer.mjs",
+      "test/helpers/qianfan-memory.mjs",
+      "test/helpers/worker-outcome-fixture.mjs",
+      "test/helpers/workerd.mjs"
+    ],
+    "retainedChecks": "All original baseline tests, original reference tests, authored public configuration reproducer and five previously qualified negative preservation checks remain intact.",
+    "qualification": "The reference must pass full and public suites without skips; the broken baseline must fail by assertions at matching test counts. Each saved final artifact is replayed against the repaired public suite and native syntax checks.",
+    "cost": "No model calls. No downloads or new runtime image for this replay.",
+    "reproducibility": "Hashes identify retained local protocols and raw proof. Model artifacts and private runners are not distributed; this report is an audited observation rather than a standalone reproduction bundle."
+  },
+  "qualification": {
+    "referenceFull": {
+      "valid": true,
+      "passed": true,
+      "tests": 69,
+      "failures": 0,
+      "skipped": 0
+    },
+    "referencePublic": {
+      "valid": true,
+      "passed": true,
+      "tests": 38,
+      "failures": 0,
+      "skipped": 0
+    },
+    "baseFull": {
+      "valid": true,
+      "passed": false,
+      "tests": 69,
+      "failures": 44,
+      "skipped": 0
+    },
+    "basePublic": {
+      "valid": true,
+      "passed": false,
+      "tests": 38,
+      "failures": 12,
+      "skipped": 0
+    }
+  },
+  "summary": {
+    "savedArtifacts": 18,
+    "correctArtifactsRetained": 14,
+    "falseAcceptsBefore": 4,
+    "falseAcceptsAfter": 0,
+    "trueAcceptsLost": 0,
+    "noPaidCalls": true,
+    "retrospective": true,
+    "qualifiedProductionGain": false
+  },
+  "outcomes": [
+    {
+      "study": "contract-selection-medium-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-0",
+      "strategy": "strong",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-medium-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-0",
+      "strategy": "cascade",
+      "previousPublicPassed": true,
+      "previousFullPassed": false,
+      "accepted": false,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 5,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-medium-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-1",
+      "strategy": "cascade",
+      "previousPublicPassed": true,
+      "previousFullPassed": false,
+      "accepted": false,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 5,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-medium-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-1",
+      "strategy": "strong",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-medium-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-2",
+      "strategy": "strong",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-medium-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-2",
+      "strategy": "cascade",
+      "previousPublicPassed": true,
+      "previousFullPassed": false,
+      "accepted": false,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 5,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-0",
+      "strategy": "strong",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-0",
+      "strategy": "cascade",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-1",
+      "strategy": "cascade",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-1",
+      "strategy": "strong",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-2",
+      "strategy": "strong",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-paired-v1",
+      "id": "history-d7c0556b1dde/repeat-2",
+      "strategy": "cascade",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-none-v1",
+      "id": "history-d7c0556b1dde/repeat-0",
+      "strategy": "strong",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-none-v1",
+      "id": "history-d7c0556b1dde/repeat-0",
+      "strategy": "cascade",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-none-v1",
+      "id": "history-d7c0556b1dde/repeat-1",
+      "strategy": "cascade",
+      "previousPublicPassed": true,
+      "previousFullPassed": false,
+      "accepted": false,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 11,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-none-v1",
+      "id": "history-d7c0556b1dde/repeat-1",
+      "strategy": "strong",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-none-v1",
+      "id": "history-d7c0556b1dde/repeat-2",
+      "strategy": "strong",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    },
+    {
+      "study": "contract-selection-guarded-none-v1",
+      "id": "history-d7c0556b1dde/repeat-2",
+      "strategy": "cascade",
+      "previousPublicPassed": true,
+      "previousFullPassed": true,
+      "accepted": true,
+      "replayPublicTests": 38,
+      "replayPublicFailures": 0,
+      "syntaxPassed": true
+    }
+  ],
+  "interpretation": [
+    "Negative-only preservation checks rejected the three original over-broad drafts but accepted a later draft that omitted required native helpers.",
+    "Adding baseline-derived positive helper checks rejects all four saved false accepts and retains all 14 correct saved artifacts. This is retrospective repair on one task and can overestimate transfer performance.",
+    "The reference passes 69 full and 38 public tests. The broken baseline fails 44 full and 12 public tests; no tests are skipped.",
+    "No model was rerun and no savings are imputed to these replays. A new benchmark must freeze the verifier before generating candidates and use unseen tasks.",
+    "This is opt-in caller-side verification research. No Worker routing policy, deployment or default changed."
+  ]
+}

@@ -82,7 +82,43 @@ test("legacy owner IDs agree across admission, credential, overview, tenant, and
   assert.equal(bootstrap.tenants[0].activeKeys, 0);
 });
 
-async function authorityFixture(t, principalId = email) {
+
+test("bootstrap summaries retain their credential snapshot when a key expires during grant reads", async t => {
+  const start = Date.parse("2026-11-27T00:00:00Z");
+  let now = start;
+  t.mock.method(Date, "now", () => now);
+  const { env } = await authorityFixture(t, email, { expiresAt: new Date(start + 1000).toISOString() });
+  const grantKey = "oauth/fixture/openai";
+  const grant = { enabled: false, provider: "openai", tokenRef: "openai", scope: "policies", scopeId: "fixture", tokenType: "api_key" };
+  const originalKv = env.POLICY_KV;
+  env.POLICY_KV = {
+    ...originalKv,
+    async get(key, ...args) { return key === grantKey ? grant : originalKv.get(key, ...args); },
+    async list(options) { return options.prefix === "oauth/" ? { keys: [{ name: grantKey }], list_complete: true } : originalKv.list(options); },
+  };
+  const originalGet = env.ACCESS_CONTROL.get;
+  let advanced = false;
+  env.ACCESS_CONTROL.get = (...args) => {
+    const owner = originalGet(...args);
+    return { ...owner, fetch(url, init) {
+      if (new URL(url).pathname === "/grant-pools/states") { now = start + 2000; advanced = true; }
+      return owner.fetch(url, init);
+    } };
+  };
+  const get = async path => {
+    const response = await worker.fetch(new Request(`https://router.example/v1/admin/${path}`, { headers: { authorization: `Bearer ${adminToken}` } }), env, {});
+    assert.equal(response.status, 200, path);
+    return response.json();
+  };
+  const bootstrap = await get("bootstrap");
+  assert.equal(advanced, true);
+  assert.equal(bootstrap.credentials[0].active, true);
+  assert.equal(bootstrap.overview.keysActive, 1);
+  assert.equal(bootstrap.tenants[0].activeKeys, 1);
+  assert.equal((await get("credentials")).credentials[0].active, false, "a later request observes expiry");
+});
+
+async function authorityFixture(t, principalId = email, credentialFields = {}) {
   const { sql } = sqliteFixture(t);
   let authority;
   const env = {
@@ -94,6 +130,6 @@ async function authorityFixture(t, principalId = email) {
   const setUser = (enabled) => authorityCall(env, "/users/put", { email, record: { enabled, contentRetentionDisabled: true } });
   await setUser(true);
   await authorityCall(env, "/policies/put", { policyId: "fixture", policy: { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: null } });
-  await authorityCall(env, "/credentials/mutate", { credentialId: "fixture", operation: "put", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" }, credential: { enabled: true, policyId: "fixture", secretSha256: await sha256Hex(secret), principalId } });
+  await authorityCall(env, "/credentials/mutate", { credentialId: "fixture", operation: "put", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" }, credential: { enabled: true, policyId: "fixture", secretSha256: await sha256Hex(secret), principalId, ...credentialFields } });
   return { env, setUser };
 }

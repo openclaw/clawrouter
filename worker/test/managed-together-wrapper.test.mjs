@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { managedCreateAdapter, managedLifecycleAdapter } from "../managed-lifecycle-adapters.ts";
 import { togetherManagedAdapter as adapter } from "../managed-together-wrapper.ts";
-import { managedMediaEnvelopeBytes } from "../managed-media-json.ts";
+import { managedMediaEnvelopeBytes } from "../media-wire.ts";
 const wire = JSON.parse(await readFile(new URL("../../providers/_fixtures/together/video.json", import.meta.url), "utf8"));
 const context = { action: "retrieve", expectedId: wire.pending.id, requestedVersion: wire.pending.model, pathParams: {} };
 const endpoint = { method: "GET", path: "/v2/videos/${video_id}" };

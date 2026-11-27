@@ -27,7 +27,14 @@ function hold(t) {
   return { entered: entered.promise, calls: () => calls, signal: () => signal, release: () => release.resolve(Response.json(tokenBody())) };
 }
 test("Vertex key-only owner bootstrap signs fixed JWT and projects no private material", async t => {
+  let now = Math.floor(Date.now() / 1000) * 1000 + 999, requestedAt;
+  t.mock.method(Date, "now", () => now);
   const f = setup(), projection = await f.put(); let calls = 0;
+  // Real signing crosses a second boundary before the token request starts.
+  const sign = crypto.subtle.sign.bind(crypto.subtle);
+  t.mock.method(crypto.subtle, "sign", async (...args) => {
+    const signature = await sign(...args); now += 2; return signature;
+  });
   assert.equal(projection.hasAccessToken, false); assert.equal(projection.hasRefreshToken, false);
   // Signing authority reserves its active pool slot at the explicit admin
   // commit; refresh must not try to activate an unadmitted attachment later.
@@ -36,6 +43,7 @@ test("Vertex key-only owner bootstrap signs fixed JWT and projects no private ma
   assert.doesNotMatch(JSON.stringify(projection), /PRIVATE KEY|vertexPrivateKey|vertexServiceAccountPrivateKey/);
   assert.equal(secretlessGrant({ ...projection, vertexPrivateKey: signing.pem }).vertexPrivateKey, undefined);
   t.mock.method(globalThis, "fetch", async (input, init) => {
+    requestedAt = Date.now();
     calls++; const request = new Request(input, init); assert.equal(request.url, "https://oauth2.googleapis.com/token");
     assert.equal(request.redirect, "manual"); assert.equal(request.method, "POST"); assert.equal(request.headers.has("authorization"), false);
     const form = new URLSearchParams(await request.text()); assert.equal(form.get("grant_type"), "urn:ietf:params:oauth:grant-type:jwt-bearer");
@@ -46,13 +54,14 @@ test("Vertex key-only owner bootstrap signs fixed JWT and projects no private ma
     assert.equal(jwt.iss, signingBinding().clientEmail); assert.equal(jwt.aud, request.url);
     assert.equal(jwt.scope, "https://www.googleapis.com/auth/cloud-platform"); assert.equal(jwt.exp - jwt.iat, 3600); assert.equal(jwt.sub, undefined);
     assert.equal(await crypto.subtle.verify("RSASSA-PKCS1-v1_5", signing.publicKey, Buffer.from(signature, "base64url"), new TextEncoder().encode(`${header}.${claims}`)), true);
+    now += 1500; // Response latency must not extend the access token lifetime.
     return Response.json(tokenBody());
   });
-  const before = Date.now(), materialized = await f.materialize(projection);
+  const materialized = await f.materialize(projection);
   assert.equal(calls, 1); assert.equal(materialized.accessToken, "synthetic-jwt-access"); assert.equal(materialized.refreshToken, undefined);
   assert.equal(materialized.vertexPrivateKey, undefined); assert.equal(materialized.credentialLineage, projection.credentialLineage);
   assert.equal(materialized.credentialGeneration, projection.credentialGeneration + 1);
-  assert.ok(Date.parse(materialized.expiresAt) <= before + 3600000);
+  assert.equal(Date.parse(materialized.expiresAt), Math.floor(requestedAt / 1000) * 1000 + 3600000);
   const current = await f.inspect(); assert.equal((await f.materialize(current)).accessToken, "synthetic-jwt-access"); assert.equal(calls, 1);
   assert.equal(f.record().refreshAttempt, null); assert.ok(f.owner().alarm() > Date.now());
 });

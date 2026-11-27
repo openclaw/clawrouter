@@ -19,7 +19,7 @@ const drainExpected=async work=>{await work?.catch(error=>{if(!['access_deadline
 async function setup(t){
   const rules=new Map(['org','team'].map((id,i)=>['access/assignment-rules/'+id,{version:1,enabled:true,kind:i?'github_team':'github_org',subject:i?'example/maintainers':'example',groups:[i?'retained':'revocable'],policyIds:[],priority:i,revokeOnLoss:!i,provenance:'cloudflare_access'}]));
   const f={identityCalls:0,configReads:0,adminReads:0,value:valid(),user:null};
-  const env={CLAWROUTER_ACCESS_AUD:'evidence',POLICY_KV:{list:async()=>({keys:[...rules.keys()].map(name=>({name})),list_complete:true}),get:async key=>rules.get(key)??null}};
+  const env={CLAWROUTER_ACCESS_AUD:'evidence',POLICY_KV:{list:async()=>({keys:[...rules.keys()].map(name=>({name})),list_complete:true}),get:async (key,type)=>{const value=rules.get(key)??null;return value!==null&&type==='stream'?accessBytesResponse(JSON.stringify(value),'').body:value;}}};
   Object.defineProperty(env,'CLAWROUTER_ACCESS_TEAM_DOMAIN',{get(){f.configReads++;return issuer;}});
   Object.defineProperty(env,'CLAWROUTER_ADMIN_TOKEN_SHA256',{get(){f.adminReads++;return '0'.repeat(64);}});
   const authority=createGrantAuthority(undefined,env);env.ACCESS_CONTROL={idFromName:n=>n,get:()=>({fetch:(url,init)=>authority.fetch(url,init)})};

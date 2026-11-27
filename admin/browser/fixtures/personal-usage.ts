@@ -24,7 +24,7 @@ export function fixtureReport(params = new URLSearchParams(), now = fixtureNow):
   const from = params.has('from') ? Date.parse(params.get('from')!) : to - Number(params.get('days') ?? 7) * 86400000;
   const values = groupBy === 'model' ? ['openai/gpt-5-mini', 'anthropic/claude-sonnet', 'tavily/search'] : groupBy === 'provider' ? ['openai', 'anthropic', 'tavily'] : ['studio-key', null];
   const groupMetrics = partitionMetrics(values.length === 3 ? [28, 11, 3] : [28, 14]);
-  const boundaries = [];
+  const boundaries: Array<{start:number;end:number;label:string}> = [];
   for (let start = from; start < to && boundaries.length < 32;) {
     const end = Math.min(to, (Math.floor(start / 86400000) + 1) * 86400000);
     boundaries.push({ start, end, label: new Date(start).toISOString().slice(0, 10) }); start = end;

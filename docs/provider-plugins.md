@@ -41,10 +41,19 @@ my-provider/
 ```
 
 The descriptor contract is exported from
-`packages/provider-plugin-contract/src/index.ts`. The package is currently
-private, source-only, and not registered as a workspace or published to npm.
-Node 24+ can import the source using native TypeScript stripping. This first
-contract needs no dependency install and performs no I/O.
+`packages/provider-plugin-contract/src/index.ts`. The package is a private
+workspace package with compiled ESM JavaScript and TypeScript declarations. It is not published to npm. Build and pack a local
+archive for use outside this repository:
+
+```sh
+pnpm --filter @clawrouter/provider-plugin-contract pack --pack-destination /tmp
+```
+
+Install that archive in a separate project and import
+`@clawrouter/provider-plugin-contract`. Its runtime has no dependencies and needs
+no TypeScript loader. See the [package README](../packages/provider-plugin-contract/README.md).
+Repository tooling can still import the source directly with Node 24+ native
+TypeScript stripping. The contract performs no I/O.
 
 ```ts
 import { parseProviderPluginDescriptor, providerPluginFiles } from
@@ -57,6 +66,24 @@ const declaredFiles = providerPluginFiles(descriptor);
 Adjust the relative import to your checkout location. These functions validate
 the descriptor and enumerate its payload files; they do not load those files,
 validate the provider manifest, sanitize images, or certify upstream support.
+
+### Validate manifest structure outside the repository
+
+The packed contract includes the same service-provider v1 JSON Schema used by
+the compiler:
+
+```js
+import schema from "@clawrouter/provider-plugin-contract/service-provider.schema.json"
+  with { type: "json" };
+```
+
+Use a JSON Schema Draft 2020-12 validator after parsing YAML, or resolve this
+package export as the schema file for editor tooling. The build copies the
+canonical repository schema without maintaining a second authored version.
+The main JavaScript export does not load the schema.
+
+This checks structure only. Run the ClawRouter compiler to check semantic
+qualification and references; neither check grants runtime permission.
 
 ### Compile an explicitly selected package
 
@@ -87,7 +114,14 @@ node scripts/provider-package-index.mjs \
 The versioned index contains validated provider names, package versions and
 content digests. Documentation, licenses, fixtures, and light/dark logos are
 package-relative references with byte sizes and SHA-256 hashes. It contains no
-file contents, absolute paths, upstream URLs, credentials, or auth metadata.
+file contents, absolute paths, upstream URLs, credentials, or auth configuration.
+When a manifest declares products, `products` contains only their provider-scoped
+ID, display name, commercial model, and authentication method, sorted by ID.
+Manifests without products omit the field; no default product is inferred.
+These authored labels do not certify credentials, entitlement, prices or setup
+support. Bindings, endpoints, model selections, offers and refresh configuration
+are excluded. The metadata types are exported by the plugin contract; existing
+imports from `shared/provider-products.ts` remain supported.
 The generator validates execution manifests with the existing compiler and
 reads each package once, using the captured manifest for both validation and
 metadata. Repeat `--plugin` to select packages explicitly.
@@ -100,18 +134,70 @@ admission rules before rendering or serving resources.
 
 ## Compiled provider contract
 
-[`shared/provider-snapshot.ts`](../shared/provider-snapshot.ts) owns the existing
-v1 snapshot, endpoint, model, auth, and quota declarations. Build tools and
-future package compilers can import these types without importing Worker
-bindings, credential records, or adapter implementations. Existing imports from
+`@clawrouter/provider-plugin-contract` owns the existing v1 `ProviderSnapshot`,
+`CompiledProvider`, and `CompiledModel` declarations. They compose the portable
+model, product, endpoint, auth, and quota declarations.
+[`shared/provider-snapshot.ts`](../shared/provider-snapshot.ts) preserves existing
+imports through type-only compatibility exports. Build tools and package compilers can import these
+types without importing Worker bindings, credential records, or adapter
+implementations. Existing imports from
 `worker/types.ts` and `worker/managed-lifecycle-types.ts` remain supported through
 type-only re-exports. The snapshot wire shape and runtime behavior are unchanged.
+
+Full product, binding, offer selection, and compiled offer declaration types are
+exported by `@clawrouter/provider-plugin-contract`. Core imports from
+`shared/provider-products.ts` remain type-only compatibility exports. The
+package owns `ProviderGrantKind`; `shared/provider-snapshot.ts` still exports it
+as `GrantKind` for existing consumers.
+
+Authentication scheme, OAuth authorization/refresh configuration, and compiled
+grant-transport types also belong to the package. Existing imports of
+`AuthScheme`, `AuthorizationConfig`, `RefreshConfig`, `GrantTransportAuth`, and
+`CompiledGrantTransport` from `shared/provider-snapshot.ts` remain supported.
+Credential storage, refresh ownership, runtime validation, and upstream calls
+remain host responsibilities.
 
 `GrantKind` preserves the legacy `api_key`, `oauth`, and `subscription` values.
 It is a compatibility classification, not the future product or commercial
 model. Product/offer normalization still needs its own migration and parity
 checks. The shared module contains types only; it does not validate a snapshot
 or qualify a provider capability.
+
+Endpoint declarations also belong to the package: `CompiledEndpoint`,
+`ManagedProtocol`, `ManagedFileLinks`, `OutputTokenLimit`, and `ToolPricing`.
+Existing imports from `shared/provider-snapshot.ts` remain supported. These
+compiled types preserve path, format, streaming, lifecycle, and limit fields;
+they do not replace manifest validation or host dispatch and admission.
+
+Quota probe and response-header declarations belong to the package through
+`CompiledQuotaConfig`, `CompiledQuotaProbe`, `CompiledQuotaProbeWindow`,
+`CompiledQuotaWindow`, and `GrantQuotaKind`. `GrantAccount` and `GrantExtraUsage`
+also belong to the package; `shared/provider-observations.ts` preserves existing
+imports. These are provider-reported observations and extraction recipes.
+Polling, freshness, credentials, budgets, and admission remain host-owned.
+
+### Portable model declarations
+
+The package exports `ProviderModelDefinition`, `ModelAvailability`, request-parameter
+support types, and native endpoint capability types, including the OpenAI, Baseten,
+and Sage decision protocols. Existing imports from `shared/provider-model.ts`,
+`shared/model-availability.ts`, `shared/model-request-parameters.ts`, and
+`shared/native-capabilities.ts` remain supported.
+
+The closed `isPublishedMusicInputSupport` validator moves with its support type
+and remains available through the shared import. Its matching rules are unchanged.
+Request assessment, publication permissions, and runtime admission remain in the
+host. These declarations describe compiled provider facts; they do not replace
+the shared model catalogue or add catalogue imports.
+
+### Portable tariff declarations
+
+The contract package exports `ModelPricing`, `RequestPricing`, and their component
+types. Existing imports from `shared/provider-model.ts` and
+`shared/request-pricing.ts` remain supported through type-only exports. These are
+published tariff declarations; runtime policy overrides, admission, and settlement
+remain host-owned. This does not add a model-catalogue importer or change price
+units, nullable values, or provider-specific qualifications.
 
 ### Explicit products
 
@@ -219,6 +305,45 @@ publish product references. Providers without declarations retain their existing
 catalog shape. These fields neither choose an account nor promise entitlement;
 dispatch still revalidates the request and its authority.
 
+### Bundled OpenAI pilot
+
+`openai.provider.yaml` declares two products:
+
+| Product ID | Commercial model | Authentication metadata | Existing binding |
+| --- | --- | --- | --- |
+| `platform-api` | Metered | API key | Default OpenAI provider configuration |
+| `chatgpt-subscription` | Subscription | OAuth 2 | Stored `subscription` grant transport |
+
+The API product covers the registered endpoints, including Responses recovery
+controls. The subscription product covers only Responses, matching its existing
+transport allowlist. It does not gain recovery controls, WebSocket access,
+Chat, Decisions, image, audio, or model-list access.
+
+Model selections are explicit. The subscription shares the API product's
+Responses model list; it does not assert account entitlement to those models.
+Model listing, model retrieval, and standalone search are declared model-free
+operations. Other offers identify their registered model cards. Catalog forms
+without a selected model do not inherit those model-specific identities.
+
+These declarations add catalog annotations. They do not change execution,
+prices, quota ownership, or [subscription onboarding](openai-subscriptions.md).
+When changing a model's capabilities, update the corresponding explicit offer
+selection in the same change; the OpenAI declaration tests check coverage.
+
+### Bundled Anthropic pilot
+
+`anthropic.provider.yaml` separates `platform-api` (metered, API key) from
+`claude-subscription` (subscription, OAuth 2). Both products declare exact model
+selections for Messages and token counting. Only the API product declares the
+model-list and model-retrieval operations, with `models: null`.
+
+The subscription product references the existing `subscription` grant transport.
+The runtime still rejects subscription model discovery. Neither product adds
+WebSocket or lifecycle support, changes credential refresh or quota probes, or
+certifies live account entitlement. These declarations preserve existing prices
+and execution rules. Update explicit offer selections alongside model capability
+changes; the declaration and runtime tests check this boundary.
+
 ## Descriptor v1
 
 | Field | Requirement |
@@ -304,11 +429,159 @@ Do not offer an unrestricted `handleRequest(env)` hook: it would bypass policy,
 tenant isolation, credential ownership, accounting, and output controls. Package
 metadata must never determine its own secret, network, or storage permissions.
 
+## Static binding compatibility
+
+The portable package exports `transportForGrant`, `bindingSupportsOperation`,
+and `productSupportsBinding`, with `ProviderBindingGrant` and
+`ProviderBindingRequirement` input types. These are the same implementations
+used through `shared/provider-bindings.ts` in ClawRouter.
+
+Use them to inspect a compiled product's endpoint allowlist, transport, lifecycle
+links, and HTTP/WebSocket compatibility. They do not load credentials, perform
+I/O, or authorize execution. A compatible result still requires the host's
+provider-specific qualification, credential, policy, quota, and budget checks.
+The full offer resolver remains in the Worker.
+
+## Catalogue references
+
+A model entry can name its intended shared catalogue row:
+
+```yaml
+models:
+  entries:
+    - id: gateway/router-alias
+      upstream: native-slug
+      catalogRef:
+        provider: catalog-provider
+        modelId: org/Model:revision
+```
+
+`catalogRef` requires nonblank `provider` and `modelId` strings. The compiler
+preserves both values exactly, including case and slashes. It does not split
+the router ID, normalize the catalogue ID, or infer a provider mapping.
+Different router aliases can explicitly target the same catalogue row.
+
+The compiled provider model and model index retain detached copies of this
+reference. Omitting it preserves the existing snapshot shape. The portable
+`ProviderModelCatalogRef` type uses the catalogue core's `provider`/`modelId`
+field names without importing its unpublished package or copying its parser.
+
+This declaration does not fetch a catalogue or prove that the referenced row
+exists. It cannot add prices, capabilities, endpoints, or account entitlement.
+A future importer must validate the selected catalogue and record provenance
+before using its facts. Existing local declarations remain authoritative.
+
 ## Contributor contract tests
 
-The starter fixture is intentionally generic JSON data. A future conformance
-runner will own a versioned scenario schema and execute the host adapter, not
-package-supplied test code. Required scenarios depend on declared features:
+The starter fixture uses the data-only `clawrouter.provider-conformance.v1`
+contract. Import `parseProviderConformanceScenario` from the plugin contract
+package to validate parsed JSON. The parser performs no I/O and returns detached
+data. The scaffolder sets each generated fixture's `providerId` to the new ID.
+
+Version 1 supports `kind: json-exchange`: one client `request`, the expected
+`upstream.request`, a supplied `upstream.response`, and the expected client
+`response`. Each scenario has a stable `id`, `providerId`, `endpoint`, and
+`capability`. Optional `model` is an exact, opaque model ID; omitting it describes
+a model-free exchange. The future runner must check these references against
+the selected manifest and must invoke the host adapter, not package code.
+
+Requests specify an uppercase HTTP `method` and an origin-relative `path`,
+including any query. Responses specify a final HTTP `status` from 200 to 599.
+Optional `headers` use lowercase names and single-line string values; they
+describe only the headers asserted by the scenario, not the full transport
+header set. Optional `body` contains an exact JSON value. Omitted bodies and
+JSON `null` remain distinct. Bodies are limited to 32 levels and 10,000 values;
+the package loader separately bounds file sizes. Unknown envelope fields fail
+validation. JSON object keys inside bodies remain provider data.
+
+This is a shape contract, not a conformance runner or an attestation. It does
+not compare adapter output, check manifest references, detect real secrets, or
+make network requests. The existing loader still accepts arbitrary JSON fixture
+resources; it does not require this schema. Use synthetic content and synthetic
+header values only. Do not copy live credentials into examples.
+
+### Validate a package's scenario declarations
+
+```sh
+node scripts/validate-provider-conformance.mjs \
+  --plugin examples/provider-plugin/clawrouter.plugin.json
+```
+
+Repeat `--plugin` to validate several selected packages together. The command
+requires at least one scenario per package and validates every declared fixture
+against the scenario schema. Existing arbitrary JSON fixtures still load and
+compile normally; migrate them before opting into this command.
+
+The command compiles each captured manifest and checks provider identity, unique
+scenario IDs within each package, endpoint/capability bindings, and the declared
+upstream method. Optional model references must match an exact declared router
+model ID with the selected capability. An upstream alias or a matching suffix
+is not a substitute for that ID. The client method can differ from the upstream
+method; this step does not qualify the client route or its mapping.
+
+The loader captures fixture text from the same bytes it hashes, without reopening
+package files for validation. Output is a deterministic
+`clawrouter.provider-conformance-validation.v1` report with `scope: declarations`.
+It includes package content digests and scenario references, not fixture bodies,
+headers, credential configuration, upstream URLs, or absolute paths. The report
+type is exported by the plugin contract. Invalid packages produce no report.
+
+This check does not execute an adapter, compare expected HTTP messages, authorize
+an account, check runtime availability, or prove fixture coverage. A declared
+reference does not establish model availability. The future host runner must separately
+qualify routes, configuration, and supported scenario kinds before execution.
+
+### Execute native REST JSON exchanges
+
+```sh
+node scripts/run-provider-conformance.mjs \
+  --plugin examples/provider-plugin/clawrouter.plugin.json
+```
+
+This separate development command validates all selected packages first, then
+executes their fixtures through the actual Worker entry point. Run it in its own
+Node process with the repository dependencies installed. It temporarily replaces
+the in-process provider registry and intercepts every upstream `fetch`; it never
+falls back to the network. Packages supply data only. They cannot provide code,
+credentials, or host bindings.
+
+The first execution scope is deliberately narrow: model-free `rest_json`
+providers, one required API-key scheme (either `Authorization: Bearer ${secret}`
+or a named `api_key` header such as `X-API-Key`), one
+`*_API_KEY` configuration value, one fixed HTTPS base URL, and unambiguous literal
+native POST routes. OAuth, grant transports, model catalogs, streaming, lifecycle
+endpoints, and stream/error adapters are rejected before any scenario runs.
+
+A fixture's client path is relative to the provider's native mount. For example,
+`/v1/invoke` runs at `/v1/native/example/v1/invoke`. Upstream paths include the
+complete path and query sent to the provider. The host owns client authorization
+and supplies the synthetic upstream key `synthetic-conformance-key`; fixtures
+can assert `authorization: Bearer synthetic-conformance-key` upstream, or the
+configured API-key header with value `synthetic-conformance-key`. Header names
+in manifests are case-insensitive; fixture header names must be lowercase. Client fixtures cannot supply either host authorization
+or the selected API-key header. Header API-key scenarios also reject an
+additional upstream `Authorization` header. Query-string keys remain unsupported.
+Ambient API keys are never copied into the fixture environment.
+
+Each scenario must cause exactly one upstream call with redirects disabled.
+The runner compares method, origin, path, asserted headers, and exact JSON body;
+it supplies the authored upstream response and checks the final client status,
+asserted headers, and exact JSON body. Additional headers are allowed. Omitted
+bodies differ from JSON `null`. Observed bodies are bounded to 2 MiB. The host's
+background settlement is joined, but accounting values are not asserted.
+
+Success emits a `clawrouter.provider-conformance-execution.v1` report with scope
+`native-rest-json-exchanges`, package digests, and scenario references. Failure
+emits no partial report and does not echo HTTP values. Registry and transport
+changes are restored before exit. This proves only these deterministic Worker
+exchanges, not live connectivity, entitlement, budget correctness, or complete
+provider coverage. Native model-free bodies retain their native shape; unified
+model-routing transforms are outside this scope.
+
+Streaming, binary bodies, auth setup, local rejection without an upstream call,
+multi-call lifecycle operations, usage assertions, and retry timing need separate
+scenario kinds and host support. They are not represented by `json-exchange`.
+Required scenarios will depend on declared features:
 
 - auth injection and redaction;
 - request and error mapping;
@@ -330,11 +603,20 @@ proof that an account is entitled to upstream access.
 | Compiler `--plugin` input alongside legacy inputs | Landed | Default CLI and snapshot stay equivalent; test mixed-input collisions. |
 | Generated package asset index and setup metadata | Landed | Do not render untrusted SVG or add auth capabilities. |
 | Complete-package scaffold command | Landed | Create only a new directory; never register or deploy a provider. |
-| Product and offer normalization behind compatibility layer | Separate future draft | Shadow-check existing discovery and dispatch; preserve public aliases. |
+| Fixture declaration validator and native REST JSON host runner | Landed | Opt-in development commands; no live probes or Worker changes. |
+| Portable products, offers, models, auth, endpoints, quotas, and compiled snapshots | Landed | Shared imports remain compatible; declarations do not establish runtime eligibility. |
+| Product and offer matching in the caller catalogue | Landed | Additive metadata; credentials and runtime admission retain authority. |
 | Shared model-catalog import and provenance | Separate future draft | Pin supported core release; qualify prices separately. |
 | Credential/connection and accounting migration | Separate future drafts | Preserve refresh ownership, reservations, and delayed execution settlement. |
 
+The caller catalogue and the shared model catalogue are different boundaries.
+Matching a declared offer in `/v1/catalog` does not import OpenClaw model facts.
+See the [architecture status](provider-contract-architecture.md#implementation-status)
+for the implemented boundaries and remaining migration work.
+
 Do not move all existing provider files into package folders in the same PR.
 The Fusion and provider-parity work can continue against their current paths.
-Migrate one package only after the loader/compiler contract is accepted. Keep
-the initial refactor PRs unmerged until the owner explicitly releases that hold.
+Migrate one package only after its loader/compiler and execution contracts are
+qualified. The owner has released the initial core-refactor hold. Land narrow
+changes after review and required validation; release and deployment remain
+separate actions.

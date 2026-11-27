@@ -1,10 +1,10 @@
 import { jsonBodyBytes } from "./json-body.ts";
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 import { miniMaxImageModel, miniMaxImagePath, observeMiniMaxImage, prepareMiniMaxImage } from "./minimax-images.ts";
 import { readNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const jsonLimit = 8 * 1024 * 1024, outputLimit = 4 * 1024 * 1024;
 

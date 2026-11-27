@@ -1,5 +1,6 @@
 import { sqliteFixture } from "./sqlite-storage.mjs";
 import { PolicyBindingIndexObject } from "../authority.ts";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 export function continuationAuthority(t, env = {}) {
   const objects = new Map();
@@ -24,7 +25,11 @@ export function continuationAuthority(t, env = {}) {
       return { async fetch(url, init) {
         const request = new Request(url, init);
         await namespace.beforeFetch?.(name, request);
-        return objects.get(name).object.fetch(request);
+        if (!request.headers.has("x-clawrouter-identity-admission")) return objects.get(name).object.fetch(request);
+        const response = await objects.get(name).object.fetch(new Request(request, {
+          body: accessBytesResponse(init.body, "").body, duplex: "half",
+        }));
+        return accessBytesResponse(await response.text(), "", { status: response.status, headers: response.headers });
       } };
     },
   };

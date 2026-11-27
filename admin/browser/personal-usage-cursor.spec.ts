@@ -1,239 +1,453 @@
 import { expect, test, type Page } from '@playwright/test';
 import { cursorUsageFixture } from '../test/helpers/personal-usage-cursor.mjs';
-import { fixtureNow, fixtureResponses } from './fixtures/personal-usage';
+import { fixtureResponses } from './fixtures/personal-usage';
 
-async function cursorUsage(page: Page) {
-  let now = fixtureNow, failReport = false, failEvents = false, failAnyEvents = false;
-  const server = cursorUsageFixture(now), queries: URL[] = [], invalid: string[] = [];
-  await page.clock.setFixedTime(new Date(now));
-  await page.route('**/v1/**', async route => {
-    const url = new URL(route.request().url()); queries.push(url);
-    if (!url.pathname.startsWith('/v1/session/usage/')) {
-      const body = fixtureResponses[url.pathname];
-      await route.fulfill({ status: body ? 200 : 404, json: body ?? {} }); return;
-    }
-    try {
-      // Validate every request using the shipped parser/cursor and real SQL
-      // event pagination, even those whose transport fails below.
-      const body = await server.read(url.href, now);
-      if (url.pathname.endsWith('/report') && failReport) { failReport = false; throw new Error('Injected report failure'); }
-      if (url.pathname.endsWith('/events') && (failAnyEvents || failEvents && url.searchParams.get('to') === new Date(now).toISOString())) { failEvents = false; failAnyEvents = false; throw new Error('Injected event failure'); }
-      await route.fulfill({ json: body });
-    } catch (error) {
-      const message = String(error instanceof Error ? error.message : error);
-      if (!message.startsWith('Injected')) invalid.push(url.pathname + url.search + ': ' + message);
-      await route.fulfill({ status: message.startsWith('Injected') ? 503 : 400, json: { error: { message } } });
-    }
-  });
-  return {
-    queries, invalid, close: () => server.close(),
-    expire: async () => { now += 16_000; await page.clock.setFixedTime(new Date(now)); },
-    failNextReportAndEvents: () => { failReport = true; failEvents = true; },
-    failNextReport: () => { failReport = true; },
-    failNextEvents: () => { failAnyEvents = true; },
-    end: () => new Date(now).toISOString(),
-  };
+async function cursorUsage(page: Page, options?: { rows: number }) {
+ const server=await cursorUsageFixture(options);let now=server.now,failReport=false,failEvents=false;
+ const queries:URL[]=[],invalid:string[]=[];
+ await page.clock.setFixedTime(new Date(now));
+ await page.route('**/v1/**',async route=>{
+  const url=new URL(route.request().url()),method=route.request().method();if(method==='GET')queries.push(url);
+  if(!url.pathname.startsWith('/v1/session/usage/')){if(url.pathname==='/v1/session/avatar'){await route.fulfill({status:204});return;}const body=fixtureResponses[url.pathname];await route.fulfill({status:body?200:404,json:body??{}});return;}
+  try{
+   const body=await server.read(url.href,now,method);
+   if(method==='GET'&&url.pathname.endsWith('/report')&&failReport){failReport=false;throw Error('Injected report failure');}
+   if(url.pathname.endsWith('/events')&&failEvents){failEvents=false;throw Error('Injected event failure');}
+   await route.fulfill({status:body.kind==='restart'?410:body.kind==='unavailable'?503:200,json:body});
+  }catch(error){const message=String(error instanceof Error?error.message:error);if(!message.startsWith('Injected'))invalid.push(message);await route.fulfill({status:message.startsWith('Injected')?503:400,json:{error:{message}}});}
+ });
+ return {...server,queries,invalid,end:()=>new Date(now).toISOString(),advance:async()=>{now+=16000;await page.clock.setFixedTime(new Date(now));},failReport:()=>{failReport=true;},failEvents:()=>{failEvents=true;}};
 }
-const calls = (page: Page) => page.locator('.personalActivityTable tbody > tr');
-async function activity(page: Page) { await page.getByRole('tab', { name: /^Activity/ }).click(); }
-async function details(page: Page) { await page.getByRole('tab', { name: 'Details', exact: true }).click(); }
-async function pageTwo(page: Page) {
-  await activity(page);
-  await expect(calls(page)).toHaveCount(25);
-  await page.getByRole('button', { name: 'Next page', exact: true }).click();
-  await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
-  await expect(calls(page)).toHaveCount(17);
-}
-async function catalog(page: Page) {
-  await page.getByRole('button', { name: 'Catalog', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Catalog', exact: true })).toBeVisible();
-}
-async function myUsage(page: Page) {
-  await page.getByRole('button', { name: 'My usage', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'My usage', exact: true })).toBeVisible();
-  await activity(page);
+const rows=(page:Page)=>page.locator('.personalActivityTable tbody > tr');
+const reads=(f:Awaited<ReturnType<typeof cursorUsage>>,kind:string)=>f.queries.filter(u=>u.pathname.endsWith('/'+kind));
+const activity=(page:Page)=>page.getByRole('tab',{name:/^Activity/}).click();
+async function pageTwo(page:Page){await activity(page);await expect(rows(page)).toHaveCount(100);await page.getByRole('button',{name:'Next page',exact:true}).click();await expect(page.getByText('Page 2',{exact:true})).toBeVisible();await expect(rows(page)).toHaveCount(42);}
+async function custom(page:Page,from:string,to:string,timezone='UTC'){
+ const advanced=page.locator('.personalAdvanced');if(!await advanced.evaluate(e=>e.hasAttribute('open')))await page.getByText('Custom dates & exact filters',{exact:true}).click();
+ await page.getByLabel('Start',{exact:true}).fill(from);await page.getByLabel('End (exclusive)',{exact:true}).fill(to);await page.getByLabel('Timezone',{exact:true}).fill(timezone);await page.getByRole('button',{name:'Apply filters',exact:true}).click();
 }
 
-test('expired rolling report reentry clears cursor and previous stack before new-bound events; report/event Retry stays anchored', async ({ page }) => {
-  const fixture = await cursorUsage(page);
-  try {
-    await page.goto('/dashboard/my-usage'); await pageTwo(page);
-    const oldCursor = fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!.searchParams.get('cursor');
-    expect(oldCursor).toBeTruthy();
-    await catalog(page); await fixture.expire(); await myUsage(page);
-    await expect(page.locator('.personalRange')).toContainText(fixture.end());
-    await expect(calls(page)).toHaveCount(25);
-    await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Previous page', exact: true })).toBeDisabled();
-    const newReads = fixture.queries.filter(url => url.pathname.endsWith('/events') && url.searchParams.get('to') === fixture.end());
-    expect(newReads.length).toBeGreaterThan(0);
-    expect(newReads.every(url => !url.searchParams.has('cursor'))).toBe(true);
-    expect(fixture.invalid).toEqual([]);
+test('partial recorded accounting is visible before expanding the member summary', async ({ page }) => {
+ const f = await cursorUsage(page, { rows: 0 });
+ try {
+  await f.ingest('free', { cost_basis: 'none', actual_cost_micros: 0 });
+  await f.ingest('estimate', { cost_basis: 'unpriced_model', actual_cost_micros: 0, reporting_estimated_cost_micros: 25_000, reporting_estimate_reason: 'fixture' });
+  // Historical invalid accounting is normalized to null, not a genuine zero.
+  await f.ingest('unreported', { cost_basis: 'unpriced_model', actual_cost_micros: -1 });
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const calls = summary.getByText('Model calls', { exact: true }).locator('+ dd');
+  const accounting = summary.locator('.personalAccounting');
+  const headline = accounting.locator('summary');
+  const caveat = ' · not a price or confirmed settlement';
+  for (const surface of ['Dashboard', 'My usage']) {
+   if (surface === 'Dashboard') await page.goto('/dashboard/home');
+   else await summary.getByRole('button', { name: 'Open My usage' }).click();
+   await expect(calls).toHaveText('3');
+   await expect(accounting).not.toHaveAttribute('open');
+   await expect.soft(headline, surface).toHaveText('Recorded accounting subtotal: $0.00 · 2 of 3 calls reported' + caveat);
+  }
+  await headline.focus();
+  await page.keyboard.press('Enter');
+  await expect(accounting.getByText('2/3 rows with a valid recorded accounting field.')).toBeVisible();
+  const nextDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export refreshed snapshot JSON' }).click();
+  const stream = await (await nextDownload).createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream!) chunks.push(chunk);
+  const file = JSON.parse(Buffer.concat(chunks).toString());
+  expect(file.metadata.totals).toMatchObject({ recordedChargeMicros: 0, chargeReportedCalls: 2, metrics: { calls: 3 } });
+  expect(file.events).toEqual(expect.arrayContaining([
+   expect.objectContaining({ id: 'free', costClass: 'no_charge', reportingCostMicros: 0, recordedChargeMicros: 0 }),
+   expect.objectContaining({ id: 'estimate', costClass: 'estimated', reportingCostMicros: 25_000, recordedChargeMicros: 0 }),
+   expect.objectContaining({ id: 'unreported', costClass: 'unknown', reportingCostMicros: null, recordedChargeMicros: null }),
+  ]));
 
-    await pageTwo(page); await catalog(page); await fixture.expire(); fixture.failNextReportAndEvents(); await myUsage(page);
-    await expect(page.getByRole('alert')).toContainText('Injected report failure');
-    await page.getByRole('button', { name: 'Retry report', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('Injected event failure');
-    const failedRead = fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!;
-    expect(failedRead.searchParams.get('to')).toBe(fixture.end()); expect(failedRead.searchParams.has('cursor')).toBe(false);
-    const reports = fixture.queries.filter(url => url.pathname.endsWith('/report')).length;
-    await page.getByRole('button', { name: 'Retry recent calls', exact: true }).click();
-    await expect(calls(page)).toHaveCount(25);
-    expect(fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!.search).toBe(failedRead.search);
-    expect(fixture.queries.filter(url => url.pathname.endsWith('/report'))).toHaveLength(reports);
-    await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Previous page', exact: true })).toBeDisabled();
-    await pageTwo(page);
-    await page.getByRole('button', { name: 'Previous page', exact: true }).click();
-    await expect(calls(page)).toHaveCount(25); await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Previous page', exact: true })).toBeDisabled();
-    expect(fixture.invalid).toEqual([]);
-  } finally { fixture.close(); }
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  await form.getByText('Custom dates & exact filters').click();
+  const quality = form.getByLabel('Price quality');
+  const apply = form.getByRole('button', { name: 'Apply filters' });
+  await quality.selectOption('no_charge');
+  await apply.click();
+  await expect(calls).toHaveText('1');
+  await expect(headline).toHaveText('Recorded accounting amount: $0.00' + caveat);
+  await quality.selectOption('unknown');
+  await apply.click();
+  await expect(headline).toHaveText('Recorded accounting amount: Not reported' + caveat);
+  await expect(calls).toHaveText('1');
+  await form.getByLabel('Model (exact)').fill('no-matching-model');
+  await apply.click();
+  await expect(calls).toHaveText('0');
+  await expect(headline).toHaveText('Recorded accounting amount: Not reported' + caveat);
+ } finally { f.close(); }
 });
 
-test('same-anchor cached navigation preserves valid page two; expired pinned custom report does too, explicit Refresh resets', async ({ page }) => {
-  const fixture = await cursorUsage(page);
-  try {
-    await page.goto('/dashboard/my-usage'); await pageTwo(page);
-    const pageTwoRead = fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!;
-    await catalog(page); await myUsage(page);
-    await expect(page.getByText('Page 2', { exact: true })).toBeVisible(); await expect(calls(page)).toHaveCount(17);
-    expect(fixture.queries.filter(url => url.pathname.endsWith('/report'))).toHaveLength(1);
-    expect(fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!.search).toBe(pageTwoRead.search);
+test('members compare keys, inspect one and return to all keys in the same period', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  await f.ingest('build-call', { credential_id: 'build-key', model: 'build-model', input_tokens: 12, output_tokens: 4, total_tokens: 16, actual_cost_micros: 15, cost_basis: 'unpriced_usage' });
+  await page.route('**/v1/session/credentials', route => route.fulfill({ json: { credentials: [
+   { credentialId: 'build-key', name: 'Renamed build runner', policyId: 'p', principalId: 'member@example.com', enabled: true },
+   { credentialId: 'retained-key', name: 'Retired laptop', policyId: 'p', principalId: 'member@example.com', enabled: false },
+  ] } }));
+  await f.ingest('session-call', { credential_id: null });
+  await f.ingest('another-member', { principal_id: 'other@example.test', credential_id: 'another-members-key' });
+  await page.goto('/dashboard/my-usage');
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const ranks = page.getByRole('region', { name: 'Usage breakdown' });
+  const calls = summary.locator('.personalGlance > div').filter({ has: page.getByText('Model calls', { exact: true }) }).locator('dd').first();
+  await expect(calls).toHaveText('144');
+  const from = new Date(f.now - 3600000).toISOString(), to = f.end();
+  await custom(page, from, to);
+  await expect(summary.locator('.personalRange')).toContainText(from);
+  await expect(calls).toHaveText('144');
+  await page.getByText('Custom dates & exact filters', { exact: true }).click();
+  const compare = page.getByRole('button', { name: 'Compare keys', exact: true });
+  await page.getByRole('combobox', { name: 'Group by', exact: true }).focus();
+  await page.keyboard.press('Tab');
+  await expect(compare).toBeFocused();
+  await expect(compare).toHaveCSS('outline-style', 'solid');
+  await page.keyboard.press('Enter');
+  await expect(ranks.getByRole('heading', { name: 'Top keys' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Comparing keys' })).toBeFocused();
+  await expect(ranks.getByRole('listitem').filter({ hasText: 'retained-key' })).toContainText('426');
+  await expect(ranks.getByRole('listitem').filter({ hasText: 'build-key' })).toContainText('16');
+  const inventory = page.getByRole('combobox', { name: 'Current own-key selector' });
+  await expect(inventory).toContainText('Current name: Renamed build runner — build-key');
+  await expect(inventory).toContainText('Current name: Retired laptop — retained-key (revoked)');
+  await expect(ranks).not.toContainText('Renamed build runner');
+  await expect(ranks).not.toContainText('Retired laptop');
+  await expect(ranks).not.toContainText('another-members-key');
+  const cut = reads(f, 'report').at(-1)!.searchParams.get('cut');
+  expect(cut).toBeTruthy();
 
-    await page.getByText('Custom dates & exact filters', { exact: true }).click();
-    await page.getByLabel('Start', { exact: true }).fill(new Date(fixtureNow - 2 * 3600000).toISOString());
-    await page.getByLabel('End (exclusive)', { exact: true }).fill(new Date(fixtureNow).toISOString());
-    await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
-    await expect(page.getByText('Page 1', { exact: true })).toBeVisible(); await pageTwo(page);
-    const customReport = fixture.queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.search;
-    const customPage = fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!.search;
-    await catalog(page); await fixture.expire(); await myUsage(page);
-    await expect(page.getByText('Page 2', { exact: true })).toBeVisible(); await expect(calls(page)).toHaveCount(17);
-    expect(fixture.queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.search).toBe(customReport);
-    expect(fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!.search).toBe(customPage);
-    await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
-    await expect(page.getByText('Page 1', { exact: true })).toBeVisible(); await expect(calls(page)).toHaveCount(25);
-    expect(fixture.queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.search).toBe(customReport);
-    expect(fixture.invalid).toEqual([]);
-  } finally { fixture.close(); }
+  await ranks.getByRole('button', { name: 'build-key', exact: true }).click();
+  await expect(calls).toHaveText('1');
+  await expect(ranks.getByRole('heading', { name: 'Selected key usage' })).toBeVisible();
+  const scope = summary.locator('.personalActiveFilters');
+  await expect(scope.locator('strong')).toHaveText('Selected key = build-key');
+  await expect(scope.locator('time').first()).toHaveAttribute('datetime', from);
+  await expect(scope.locator('time').last()).toHaveAttribute('datetime', to);
+  await expect(summary).toContainText('12 input · 4 output');
+  await expect(summary).toContainText('Recorded accounting amount: $0.000015');
+  await expect(summary.getByLabel('Known API cost unavailable')).toBeVisible();
+  await activity(page);
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page)).toContainText('build-model');
+  await expect(rows(page)).toContainText('Price unknown');
+  await expect(rows(page).getByText('Key: build-key', { exact: true })).toBeVisible();
+  const events = reads(f, 'events').at(-1)!.searchParams;
+  expect([events.get('key'), events.get('from'), events.get('to'), events.get('cut')]).toEqual(['build-key', from, to, cut]);
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export refreshed snapshot JSON' }).click();
+  const stream = await (await download).createReadStream();
+  let json = '';
+  for await (const chunk of stream!) json += chunk.toString();
+  const file = JSON.parse(json);
+  expect(file.metadata.filters.key).toEqual({ kind: 'credential', id: 'build-key' });
+  expect(file.metadata.range).toMatchObject({ from: Date.parse(from), to: Date.parse(to) });
+  expect(file.events).toHaveLength(1);
+  expect(file.events[0]).toMatchObject({ user: 'member@example.com', keyId: 'build-key', reportingCostMicros: null, recordedChargeMicros: 15 });
+
+  await page.getByRole('button', { name: 'Show all keys', exact: true }).click();
+  await expect(calls).toHaveText('144');
+  await expect(rows(page)).toHaveCount(100);
+  // Scanning mixed activity doesn't require opening each call or resolving today's names.
+  const activityTable = page.getByRole('region', { name: 'Recent calls table', exact: true });
+  for (const identity of ['Key: build-key', 'Key: retained-key', 'Dashboard session']) {
+   await expect(activityTable.getByText(identity, { exact: true }).first()).toBeVisible();
+  }
+  await expect(activityTable).not.toContainText('another-members-key');
+  await expect(activityTable).not.toContainText('Retired laptop');
+  const restored = reads(f, 'events').at(-1)!.searchParams;
+  expect([restored.get('groupBy'), restored.get('keyKind'), restored.get('from'), restored.get('to'), restored.get('cut')]).toEqual(['key', null, from, to, cut]);
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await ranks.getByRole('button', { name: 'Dashboard session', exact: true }).click();
+  await expect(calls).toHaveText('1');
+  await expect(scope).toContainText('Dashboard session');
+  expect(reads(f, 'report').at(-1)!.searchParams.get('keyKind')).toBe('session');
+
+  // A key with no matching rows is a valid filter. Clearing only that key
+  // keeps the member's applied provider and the original period.
+  await page.getByText('Custom dates & exact filters', { exact: true }).click();
+  await page.getByLabel('Key ID (exact)', { exact: true }).fill('unused-key');
+  await page.getByLabel('Provider (exact)', { exact: true }).fill('openai');
+  await page.getByRole('button', { name: 'Apply filters' }).click();
+  await expect(calls).toHaveText('0');
+  await expect(summary).toContainText('No calls in discovered locations for this range for your current access.');
+  await page.getByRole('button', { name: 'Show all keys' }).click();
+  await expect(calls).toHaveText('144');
+  await expect(summary).toContainText('provider = openai');
+  const reset = reads(f, 'report').at(-1)!.searchParams;
+  expect([reset.get('provider'), reset.get('keyKind'), reset.get('from'), reset.get('to')]).toEqual(['openai', null, from, to]);
+  await inventory.selectOption('key:retained-key');
+  await expect(calls).toHaveText('142');
+  await expect(summary.getByText('Selected key = retained-key', { exact: true })).toBeVisible();
+  await expect(summary).not.toContainText('Retired laptop');
+  expect(f.queries.some(url => url.pathname.startsWith('/v1/admin/'))).toBe(false);
+  expect(f.invalid).toEqual([]);
+ } finally { f.close(); }
 });
 
+test('a failed refresh keeps key ranks readable but not actionable until Retry succeeds', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  await f.ingest('session-call', { credential_id: null });
+  await page.goto('/dashboard/my-usage');
+  await page.getByRole('button', { name: 'Compare keys', exact: true }).click();
+  const ranks = page.getByRole('region', { name: 'Usage breakdown' });
+  const keys = ['retained-key', 'Dashboard session'];
+  for (const name of keys) await expect(ranks.getByRole('button', { name, exact: true })).toBeEnabled();
+  f.failReport();
+  await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Old displayed report');
+  for (const name of keys) {
+   await expect(ranks.getByText(name, { exact: true })).toBeVisible();
+   await expect(ranks.getByRole('button', { name, exact: true })).toHaveCount(0);
+  }
+  await ranks.getByLabel('Group ranking scope and coverage').click();
+  await expect(ranks).not.toContainText('Select a named group');
+  await expect(ranks).not.toContainText('select a name to filter');
+  await expect(page.getByRole('combobox', { name: 'Current own-key selector' })).toBeDisabled();
+  await page.getByRole('tab', { name: 'Details', exact: true }).click();
+  const exact = page.getByRole('region', { name: 'Retained usage ranking' });
+  for (const name of keys) await expect(exact.getByRole('button', { name: 'member@example.com · ' + name, exact: true })).toBeDisabled();
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await page.getByRole('button', { name: 'Retry report' }).click();
+  for (const name of keys) await expect(ranks.getByRole('button', { name, exact: true })).toBeEnabled();
+  await expect(ranks).toContainText('select a name to filter');
+  await expect(page.getByRole('combobox', { name: 'Current own-key selector' })).toBeEnabled();
+  expect(f.invalid).toEqual([]);
+ } finally { f.close(); }
+});
 
-async function customDates(page: Page, from: string, to: string, timezone: string) {
-  const advanced = page.locator('.personalAdvanced');
-  if (!await advanced.evaluate(element => element.hasAttribute('open'))) await page.getByText('Custom dates & exact filters', { exact: true }).click();
-  await page.getByLabel('Start', { exact: true }).fill(from);
-  await page.getByLabel('End (exclusive)', { exact: true }).fill(to);
-  await page.getByLabel('Timezone', { exact: true }).fill(timezone);
-  await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
+test('Activity distinguishes a pending page, a blocked report, and an independently retryable page', async ({ page }) => {
+ const f = await cursorUsage(page, { rows: 0 });
+ const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+ try {
+  await f.ingest('old', { credential_id: 'old-key', model: 'old-model' });
+  await f.ingest('new-1', { credential_id: 'new-key', model: 'new-model-1' });
+  await f.ingest('new-2', { credential_id: 'new-key', model: 'new-model-2' });
+  await page.route(url => url.pathname === '/v1/session/usage/events' && url.searchParams.get('key') === 'old-key', async route => {
+   const body = await f.read(route.request().url());
+   started.resolve();
+   await release.promise;
+   await route.fulfill({ json: body });
+  }, { times: 1 });
+  await page.goto('/dashboard/my-usage');
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const calls = summary.getByText('Model calls', { exact: true }).locator('+ dd');
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  const key = form.getByLabel('Key ID (exact)', { exact: true });
+  const apply = form.getByRole('button', { name: 'Apply filters' });
+  const recent = page.getByRole('region', { name: 'Recent model calls' });
+  const download = page.getByRole('button', { name: 'Export refreshed snapshot JSON' });
+  await expect(calls).toHaveText('3');
+  await form.getByText('Custom dates & exact filters').click();
+  await key.fill('old-key');
+  await apply.click();
+  await expect(calls).toHaveText('1');
+  await activity(page);
+  await started.promise;
+  await expect(recent.getByRole('status')).toHaveText('Loading recent model calls…');
+  await expect(download).toBeEnabled();
+
+  f.failReport();
+  await key.fill('new-key');
+  await apply.click();
+  const alert = summary.getByRole('alert');
+  await expect(alert).toContainText('Injected report failure');
+  await expect(alert).toContainText('Old displayed report');
+  await expect(summary).toContainText('Selected key = old-key');
+  release.resolve();
+  await expect(calls).toHaveText('1');
+  await expect(download).toBeDisabled();
+  await expect(recent.getByRole('button')).toHaveCount(0);
+  await expect(rows(page)).toHaveCount(0);
+  expect(reads(f, 'events').filter(url => url.searchParams.get('key') === 'new-key')).toHaveLength(0);
+  const blocked = await recent.innerText();
+  expect.soft(blocked).toContain('Retry the report above to load recent calls.');
+  expect.soft(blocked).not.toContain('Loading recent model calls');
+
+  f.failEvents();
+  await alert.getByRole('button', { name: 'Retry report' }).click();
+  await expect(calls).toHaveText('2');
+  await expect(summary).toContainText('Selected key = new-key');
+  await expect(download).toBeEnabled();
+  await expect(recent.getByRole('alert')).toContainText('Injected event failure');
+  const reportReads = reads(f, 'report').length;
+  const failedPage = reads(f, 'events').at(-1)!.search;
+  await recent.getByRole('button', { name: 'Retry recent calls' }).click();
+  await expect(rows(page)).toContainText(['new-model-2', 'new-model-1']);
+  await expect(recent.getByRole('alert')).toHaveCount(0);
+  expect(reads(f, 'events').at(-1)!.search).toBe(failedPage);
+  expect(reads(f, 'report')).toHaveLength(reportReads);
+  expect(f.invalid).toEqual([]);
+ } finally {
+  release.resolve();
+  await page.unrouteAll({ behavior: 'wait' });
+  f.close();
+ }
+});
+
+test('same-root retries preserve exact cursor; navigation retires roots and reentry starts page one',async({page})=>{
+ const f=await cursorUsage(page);try{
+  await page.goto('/dashboard/my-usage');await activity(page);await expect(rows(page)).toHaveCount(100);
+  f.failEvents();await page.getByRole('button',{name:'Next page',exact:true}).click();await expect(page.getByRole('alert')).toContainText('Injected event failure');
+  const failed=reads(f,'events').at(-1)!.search,reportCount=reads(f,'report').length;
+  await page.getByRole('button',{name:'Retry recent calls',exact:true}).click();await expect(rows(page)).toHaveCount(42);expect(reads(f,'events').at(-1)!.search).toBe(failed);expect(reads(f,'report')).toHaveLength(reportCount);
+  const oldCut=reads(f,'events').at(-1)!.searchParams.get('cut');
+  await page.getByRole('button',{name:'Catalog',exact:true}).click();await f.advance();
+  await page.getByRole('button',{name:'My usage',exact:true}).click();await activity(page);await expect(rows(page)).toHaveCount(100);await expect(page.getByText('Page 1',{exact:true})).toBeVisible();
+  expect(reads(f,'events').at(-1)!.searchParams.get('cut')).not.toBe(oldCut);expect(reads(f,'events').at(-1)!.searchParams.has('cursor')).toBe(false);
+  await expect(page.getByRole('button',{name:'Previous page',exact:true})).toBeDisabled();expect(f.invalid).toEqual([]);
+ }finally{f.close();}
+});
+test('invalid custom dates leave the last applied period, events and export intact', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  const day = 86_400_000, start = Math.floor(f.now / day) * day - 3 * day;
+  const date = (offset: number) => new Date(start + offset * day).toISOString().slice(0, 10);
+  for (const [id, at] of [['before', start - 1], ['first', start], ['last', start + day - 1], ['after', start + day]] as const) {
+   await f.ingest(id, { model: 'period-test', occurred_at_ms: at });
+  }
+  await f.ingest('other-model', { model: 'excluded', occurred_at_ms: start });
+  await page.goto('/dashboard/my-usage');
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const calls = summary.getByText('Model calls', { exact: true }).locator('+ dd');
+  await expect(calls).toHaveText('147');
+  await form.getByText('Custom dates & exact filters').click();
+  const model = form.getByLabel('Model (exact)', { exact: true });
+  const from = form.getByLabel('Start', { exact: true });
+  const to = form.getByLabel('End (exclusive)', { exact: true });
+  const apply = form.getByRole('button', { name: 'Apply filters' });
+  await model.fill('period-test');
+  await custom(page, date(0), date(1));
+  await activity(page);
+  await expect(calls).toHaveText('2');
+  await expect(rows(page)).toHaveCount(2);
+  const priorReads = f.queries.filter(url => url.pathname.startsWith('/v1/session/usage/')).length;
+  await model.fill('unapplied');
+  await from.fill(date(1));
+  await to.fill(date(0));
+  await apply.focus();
+  await page.keyboard.press('Enter');
+  const error = form.getByRole('alert');
+  await expect(error).toContainText('not applied');
+  await expect(error).toContainText('end is exclusive');
+  await expect(from).toHaveValue(date(1));
+  await expect(to).toHaveValue(date(0));
+  await expect(form.getByRole('button', { name: 'Last 7 days' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(calls).toHaveText('2');
+  await expect(rows(page)).toContainText(['period-test', 'period-test']);
+  await expect(summary).toContainText('model = period-test');
+  await expect(page.getByRole('button', { name: 'Retry report' })).toHaveCount(0);
+  await from.fill('2026-02-30');
+  await form.getByRole('combobox', { name: 'Group by' }).selectOption('provider');
+  await expect(error).toContainText('Invalid calendar date');
+  await expect(form.getByRole('combobox', { name: 'Group by' })).toHaveValue('model');
+  expect(f.queries.filter(url => url.pathname.startsWith('/v1/session/usage/'))).toHaveLength(priorReads);
+
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export refreshed snapshot JSON' }).click();
+  const stream = await (await download).createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream!) chunks.push(chunk);
+  const file = JSON.parse(Buffer.concat(chunks).toString());
+  expect(file.metadata.range).toMatchObject({ from: start, to: start + day, timezone: 'UTC' });
+  expect(file.metadata.filters.model).toBe('period-test');
+  expect(file.events.map((event: { id: string }) => event.id)).toEqual(['last', 'first']);
+  await expect(from).toHaveValue('2026-02-30');
+  await expect(model).toHaveValue('unapplied');
+
+  await model.fill('period-test');
+  await custom(page, date(1), date(2));
+  await expect(error).toHaveCount(0);
+  await expect(calls).toHaveText('1');
+  await expect(rows(page)).toHaveCount(1);
+  await custom(page, date(2), date(3));
+  await expect(calls).toHaveText('0');
+  await expect(page.getByText('No recent model calls for these filters.')).toBeVisible();
+  await custom(page, date(2), date(1));
+  await expect(error).toBeVisible();
+  await form.getByRole('button', { name: 'Last 7 days' }).click();
+  await expect(error).toHaveCount(0);
+  await expect(calls).toHaveText('4');
+  await expect(rows(page)).toHaveCount(4);
+  expect(f.invalid).toEqual([]);
+ } finally { f.close(); }
+});
+
+test('a replacement member does not inherit the invalid draft or the previous report', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  await page.goto('/dashboard/my-usage');
+  await expect(page.getByRole('heading', { name: 'Top models', exact: true })).toBeVisible();
+  await custom(page, 'not-a-date', f.end());
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  await expect(form.getByRole('alert')).toContainText('not applied');
+  await page.route('**/v1/session', route => route.fulfill({ json: {
+   ...(fixtureResponses['/v1/session'] as object), email: 'second@example.test', tenantId: 'second-tenant',
+  } }));
+  // The replacement identity has no access to the former member's usage fixture.
+  await page.route('**/v1/session/usage/report?**', route => route.fulfill({ json: { kind: 'no_access' } }));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('.tenantSwitch strong')).toHaveText('second@example.test');
+  await expect(page.getByRole('alert')).toHaveText(/No current access/);
+  await expect(form.getByRole('alert')).toHaveCount(0);
+  await form.getByText('Custom dates & exact filters').click();
+  await expect(form.getByLabel('Start', { exact: true })).toHaveValue('');
+  await expect(page.getByRole('heading', { name: 'Top models', exact: true })).toHaveCount(0);
+ } finally { f.close(); }
+});
+
+test('failed report retry creates a fresh root; custom range stays pinned on refresh and page stack resets',async({page})=>{
+ const f=await cursorUsage(page);try{
+  await page.goto('/dashboard/my-usage');await pageTwo(page);const from=new Date(f.now-3600000).toISOString(),to=f.end();
+  await custom(page,from,to);await expect(rows(page)).toHaveCount(100);await pageTwo(page);
+  const before=reads(f,'events').at(-1)!.searchParams.get('cut');f.failReport();await page.getByRole('button',{name:'Refresh report',exact:true}).click();
+  await expect(page.getByRole('alert')).toContainText('Injected report failure');await expect(page.getByRole('alert')).toContainText('Old displayed report');
+  await page.getByRole('button',{name:'Retry report',exact:true}).click();await expect(rows(page)).toHaveCount(100);await expect(page.getByText('Page 1',{exact:true})).toBeVisible();
+  const latest=reads(f,'events').at(-1)!.searchParams;expect(latest.get('from')).toBe(from);expect(latest.get('to')).toBe(to);expect(latest.get('cut')).not.toBe(before);expect(latest.has('cursor')).toBe(false);
+  await pageTwo(page);await page.getByRole('button',{name:'Previous page',exact:true}).click();await expect(rows(page)).toHaveCount(100);expect(f.invalid).toEqual([]);
+ }finally{f.close();}
+});
+for(const timezone of ['UTC','America/Los_Angeles']){
+ test('outside-retention is not a zero; controls/group/filter/retry remain recoverable: '+timezone,async({page})=>{
+  const f=await cursorUsage(page);try{
+   await page.goto('/dashboard/my-usage');await pageTwo(page);const count=reads(f,'events').length,from=new Date(f.now-40*86400000).toISOString(),to=new Date(f.now-39*86400000).toISOString();
+   await custom(page,from,to,timezone);await expect(page.getByRole('alert')).toContainText('Outside retained range');expect(reads(f,'events')).toHaveLength(count);
+   await expect(page.getByLabel('Start',{exact:true})).toHaveValue(from);await expect(page.getByLabel('End (exclusive)',{exact:true})).toHaveValue(to);
+   await page.getByRole('combobox',{name:'Group by',exact:true}).selectOption('provider');await expect(page.getByRole('alert')).toContainText('Outside retained range');
+   await page.getByLabel('Model (exact)',{exact:true}).fill('missing-model');await page.getByRole('button',{name:'Apply filters',exact:true}).click();await expect(page.getByRole('alert')).toContainText('Outside retained range');
+   await page.getByRole('button',{name:'Retry report',exact:true}).click();await expect(page.getByRole('alert')).toContainText('Outside retained range');expect(reads(f,'events')).toHaveLength(count);
+   await page.getByLabel('Model (exact)',{exact:true}).fill('');await custom(page,new Date(f.now-3600000).toISOString(),f.end(),timezone);await expect(rows(page)).toHaveCount(100);expect(f.invalid).toEqual([]);
+  }finally{f.close();}
+ });
+ test('retention clip is disclosed and events/retries use the effective fixed interval: '+timezone,async({page})=>{
+  const f=await cursorUsage(page);try{
+   await page.goto('/dashboard/my-usage');await activity(page);await expect(rows(page)).toHaveCount(100);
+   const from=new Date(f.now-30*86400000).toISOString(),to=new Date(f.now-86400000).toISOString();f.failEvents();await custom(page,from,to,timezone);
+   await expect(page.getByRole('alert')).toContainText('Injected event failure');const failed=reads(f,'events').at(-1)!;expect(Date.parse(failed.searchParams.get('from')!)).toBeGreaterThan(Date.parse(from));expect(failed.searchParams.get('to')).toBe(to);
+   await page.getByText('Report scope and capture dates',{exact:true}).click();await expect(page.locator('.personalRange')).toContainText('Start clipped from '+from);
+   await page.getByRole('button',{name:'Retry recent calls',exact:true}).click();await expect(page.getByText('No recent model calls for these filters.',{exact:true})).toBeVisible();expect(reads(f,'events').at(-1)!.search).toBe(failed.search);
+   await page.getByRole('combobox',{name:'Group by',exact:true}).selectOption('key');await expect(page.getByRole('alert')).toHaveCount(0);expect(f.invalid).toEqual([]);
+  }finally{f.close();}
+ });
+ test('current empty interval still reads a complete event page and Retry: '+timezone,async({page})=>{
+  const f=await cursorUsage(page);try{
+   await page.goto('/dashboard/my-usage');await activity(page);await expect(rows(page)).toHaveCount(100);f.failEvents();
+   await custom(page,new Date(f.now-2*86400000).toISOString(),new Date(f.now-86400000).toISOString(),timezone);
+   await expect(page.getByText('No calls in discovered locations for this range for your current access.',{exact:true})).toBeVisible();await expect(page.getByRole('alert')).toContainText('Injected event failure');
+   const failed=reads(f,'events').at(-1)!.search;await page.getByRole('button',{name:'Retry recent calls',exact:true}).click();await expect(page.getByText('No recent model calls for these filters.',{exact:true})).toBeVisible();expect(reads(f,'events').at(-1)!.search).toBe(failed);expect(f.invalid).toEqual([]);
+  }finally{f.close();}
+ });
 }
-
-for (const timezone of ['UTC', 'America/Los_Angeles']) {
-  test('fully expired custom controls stay usable across grouping, filters, refresh and report Retry: ' + timezone, async ({ page }) => {
-    const fixture = await cursorUsage(page);
-    try {
-      await page.goto('/dashboard/my-usage'); await pageTwo(page);
-      const eventsBefore = fixture.queries.filter(url => url.pathname.endsWith('/events')).length;
-      const from = '2026-10-01', to = '2026-10-02';
-      const resolvedEnd = timezone === 'UTC' ? '2026-10-02T00:00:00.000Z' : '2026-10-02T07:00:00.000Z';
-      await customDates(page, from, to, timezone);
-      const assertEmpty = async () => {
-        await expect(page.locator('.personalRange')).toContainText(resolvedEnd + ' → ' + resolvedEnd);
-        await expect(page.getByText('No recent model calls for these filters.', { exact: true })).toBeVisible();
-        await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
-        await expect(page.getByRole('button', { name: 'Previous page', exact: true })).toBeDisabled();
-        await expect(page.getByRole('button', { name: 'Next page', exact: true })).toBeDisabled();
-        await details(page);
-        await expect(page.getByRole('button', { name: 'Export activity page 1 CSV', exact: true })).toBeDisabled();
-        await activity(page);
-        await expect(page.getByLabel('Start', { exact: true })).toHaveValue(from);
-        await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue(to);
-        await expect(page.getByLabel('Timezone', { exact: true })).toHaveValue(timezone);
-        await expect(page.getByRole('alert')).toHaveCount(0);
-        await expect(page.getByRole('button', { name: 'Retry recent calls', exact: true })).toHaveCount(0);
-        expect(fixture.queries.filter(url => url.pathname.endsWith('/events'))).toHaveLength(eventsBefore);
-        const reportRead = fixture.queries.filter(url => url.pathname.endsWith('/report')).at(-1)!;
-        expect(reportRead.searchParams.get('from')).toBe(from); expect(reportRead.searchParams.get('to')).toBe(to);
-        expect(reportRead.searchParams.get('timezone')).toBe(timezone);
-      };
-      await assertEmpty();
-      await page.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('provider');
-      await details(page);
-      await expect(page.getByRole('heading', { name: 'By provider', exact: true })).toBeVisible();
-      await activity(page); await assertEmpty();
-      await page.getByLabel('Model (exact)', { exact: true }).fill('missing-model');
-      await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
-      await expect(page.locator('.personalActiveFilters').filter({ hasText: 'Exact filters:' })).toContainText('model = missing-model'); await assertEmpty();
-      await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
-      await expect(page.locator('.personalActiveFilters').filter({ hasText: 'Exact filters:' })).toHaveCount(0); await assertEmpty();
-      await page.getByRole('button', { name: 'Refresh report', exact: true }).click(); await assertEmpty();
-      fixture.failNextReport(); await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
-      await expect(page.getByRole('alert')).toContainText('Injected report failure');
-      await expect(page.getByLabel('Start', { exact: true })).toHaveValue(from);
-      await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue(to);
-      await page.getByRole('button', { name: 'Retry report', exact: true }).click(); await assertEmpty();
-      const count = fixture.queries.length; await page.waitForTimeout(100); expect(fixture.queries).toHaveLength(count);
-      expect(fixture.invalid).toEqual([]);
-    } finally { fixture.close(); }
-  });
-
-  test('partially expired custom uses clipped event instants but original controls and pinned refresh: ' + timezone, async ({ page }) => {
-    const fixture = await cursorUsage(page);
-    try {
-      await page.goto('/dashboard/my-usage'); await activity(page); await expect(calls(page)).toHaveCount(25);
-      const from = '2026-10-02', to = '2026-11-01';
-      const clipped = new Date(fixtureNow - 30 * 86400000).toISOString();
-      const resolvedEnd = timezone === 'UTC' ? '2026-11-01T00:00:00.000Z' : '2026-11-01T07:00:00.000Z';
-      fixture.failNextEvents(); await customDates(page, from, to, timezone);
-      await expect(page.locator('.personalRange')).toContainText(clipped + ' → ' + resolvedEnd);
-      await expect(page.getByLabel('Start', { exact: true })).toHaveValue(from);
-      await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue(to);
-      await expect(page.getByRole('alert')).toContainText('Injected event failure');
-      const failed = fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!;
-      expect(failed.searchParams.get('from')).toBe(clipped); expect(failed.searchParams.get('to')).toBe(resolvedEnd);
-      expect(Date.parse(failed.searchParams.get('to')!)).toBeLessThanOrEqual(fixtureNow); expect(failed.searchParams.has('cursor')).toBe(false);
-      await page.getByRole('button', { name: 'Retry recent calls', exact: true }).click();
-      await expect(page.getByText('No recent model calls for these filters.', { exact: true })).toBeVisible();
-      expect(fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!.search).toBe(failed.search);
-      await page.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('key');
-      await details(page);
-      await expect(page.getByRole('heading', { name: 'By key', exact: true })).toBeVisible();
-      await activity(page);
-      await page.getByLabel('Model (exact)', { exact: true }).fill('missing-model');
-      await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
-      await expect(page.locator('.personalActiveFilters').filter({ hasText: 'Exact filters:' })).toContainText('model = missing-model');
-      await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
-      await expect(page.getByText('No recent model calls for these filters.', { exact: true })).toBeVisible();
-      await expect(page.getByLabel('Start', { exact: true })).toHaveValue(from);
-      await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue(to);
-      const reports = fixture.queries.filter(url => url.pathname.endsWith('/report') && url.searchParams.has('from'));
-      expect(reports.every(url => url.searchParams.get('from') === from && url.searchParams.get('to') === to && url.searchParams.get('timezone') === timezone)).toBe(true);
-      const events = fixture.queries.filter(url => url.pathname.endsWith('/events') && url.searchParams.get('to') === resolvedEnd);
-      expect(events.length).toBeGreaterThanOrEqual(4);
-      expect(events.every(url => url.searchParams.get('from') === clipped && !url.searchParams.has('cursor'))).toBe(true);
-      expect(fixture.invalid).toEqual([]);
-    } finally { fixture.close(); }
-  });
-
-  test('current custom interval with no calls still fetches a valid event page and Retry: ' + timezone, async ({ page }) => {
-    const fixture = await cursorUsage(page);
-    try {
-      await page.goto('/dashboard/my-usage'); await activity(page); await expect(calls(page)).toHaveCount(25);
-      const eventsBefore = fixture.queries.filter(url => url.pathname.endsWith('/events')).length;
-      fixture.failNextEvents(); await customDates(page, '2026-11-01', '2026-11-02', timezone);
-      await expect(page.getByText('No model calls in this period for these filters.', { exact: true })).toBeVisible();
-      await expect(page.getByRole('alert')).toContainText('Injected event failure');
-      const failed = fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!;
-      expect(Date.parse(failed.searchParams.get('from')!)).toBeLessThan(Date.parse(failed.searchParams.get('to')!));
-      expect(Date.parse(failed.searchParams.get('to')!)).toBeLessThanOrEqual(fixtureNow);
-      await page.getByRole('button', { name: 'Retry recent calls', exact: true }).click();
-      await expect(page.getByText('No recent model calls for these filters.', { exact: true })).toBeVisible();
-      expect(fixture.queries.filter(url => url.pathname.endsWith('/events'))).toHaveLength(eventsBefore + 2);
-      expect(fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!.search).toBe(failed.search);
-      await expect(page.getByLabel('Start', { exact: true })).toHaveValue('2026-11-01');
-      await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue('2026-11-02');
-      expect(fixture.invalid).toEqual([]);
-    } finally { fixture.close(); }
-  });
-}
+test('fresh JSON export reconciles a new capture, all pages, final validation and cleanup',async({page})=>{
+ const f=await cursorUsage(page);try{
+  await page.goto('/dashboard/my-usage');await pageTwo(page);const browse=reads(f,'events').at(-1)!.searchParams.get('cut');await f.ingest('late');
+  const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export refreshed snapshot JSON',exact:true}).click();const file=await download,stream=await file.createReadStream();let content='';for await(const chunk of stream!)content+=chunk.toString();const parsed=JSON.parse(content);
+  expect(parsed.events).toHaveLength(143);expect(parsed.metadata.totals.metrics.calls).toBe(143);expect(parsed.metadata.coverage.historicalLocations).toBe('not_exhaustively_assessed');expect(content).not.toContain(browse);
+  const fresh=reads(f,'report').find(u=>u.searchParams.get('intent')==='export')!;expect(fresh.searchParams.has('cut')).toBe(false);expect(fresh.searchParams.has('days')).toBe(false);expect(reads(f,'validate')).toHaveLength(1);expect(f.invalid).toEqual([]);
+ }finally{f.close();}
+});

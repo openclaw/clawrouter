@@ -1,5 +1,5 @@
 import { readGoogleJson } from "./google-json.ts";
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 
 export const googleMusicModels = ["lyria-3-clip-preview", "lyria-3-pro-preview"] as const;
 const encoder = new TextEncoder();

@@ -1,6 +1,6 @@
 import { readSearchJson, searchJsonBytes, type MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import type { InputRetirement } from "./input-retirement.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const miniMaxSearchPath = "/v1/coding_plan/search";
 export const miniMaxSearchOrigins = { global: "https://api.minimax.io", cn: "https://api.minimaxi.com" } as const;

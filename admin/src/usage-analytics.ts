@@ -1,4 +1,4 @@
-import type { ProviderUsageSummary, UsageAuditEvent, UsageDailySummary, UsageSnapshot, UsageSummary } from "./ui-types";
+import type { ProviderUsageSummary, UsageAuditEvent, UsageDailySummary, UsageSnapshot } from "./ui-types";
 
 export const usageDayMs = 86_400_000;
 
@@ -104,43 +104,22 @@ export function niceChartMaximum(value: number, ticks = 4): number {
   return niceStep * ticks;
 }
 
-export function syntheticUsageTimeline(now: number, summary: UsageSummary): UsageDailySummary[] {
-  const today = Math.floor(now / usageDayMs) * usageDayMs;
-  const weights = [31, 34, 29, 36, 39, 33, 27, 41, 44, 38, 46, 49, 43, 35, 52, 55, 48, 58, 62, 54, 47, 64, 69, 61, 73, 67, 76, 81, 72, 88];
-  const requestSeries = distributeTotal(summary.requestCount, weights);
-  const errorSeries = distributeTotal(summary.errorCount, weights.map((weight, index) => weight * (index % 7 === 2 ? 2 : 1)));
-  const tokenSeries = distributeTotal(summary.totalTokens, weights.map((weight, index) => weight * (index % 5 === 0 ? 1.18 : 1)));
-  const costSeries = distributeTotal(summary.actualCostMicros, weights.map((weight, index) => weight * (index % 6 === 4 ? 1.25 : 1)));
-  const unpricedSeries = distributeTotal(summary.unpricedRequestCount ?? 0, weights);
-  return weights.map((_, index) => ({
-    dayStartMs: today - (weights.length - index - 1) * usageDayMs,
-    requestCount: requestSeries[index],
-    successCount: requestSeries[index] - errorSeries[index],
-    errorCount: errorSeries[index],
-    totalTokens: tokenSeries[index],
-    actualCostMicros: costSeries[index],
-    unpricedRequestCount: unpricedSeries[index],
-  }));
-}
-
-function distributeTotal(total: number, weights: number[]) {
-  const sum = weights.reduce((value, weight) => value + weight, 0);
-  const values = weights.map((weight) => Math.floor((total * weight) / sum));
-  let remainder = total - values.reduce((value, amount) => value + amount, 0);
-  for (let index = values.length - 1; remainder > 0; index = (index - 1 + values.length) % values.length) {
-    values[index] += 1;
-    remainder -= 1;
-  }
-  return values;
-}
-
 function emptyUsageDay(dayStartMs: number): UsageDailySummary {
   return { dayStartMs, requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 };
 }
 
-export function providerChartRows(providers: ProviderUsageSummary[], limit: number): ProviderUsageSummary[] {
+// Only incomplete aggregates carry a lower bound; unpricedRequestCount remains an exact count.
+export type ProviderChartRow = ProviderUsageSummary & { minimumUnpricedCount?: number };
+
+export function providerChartRows(providers: ProviderUsageSummary[], limit: number): ProviderChartRow[] {
   if (providers.length <= limit) return providers;
   const visibleCount = Math.max(1, limit - 1);
-  const remainder = providers.slice(visibleCount).reduce<ProviderUsageSummary>(addUsageCounters, { provider: "other-providers", requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 });
-  return [...providers.slice(0, visibleCount), remainder];
+  const hidden = providers.slice(visibleCount);
+  const remainder = hidden.reduce<ProviderUsageSummary>(addUsageCounters, { provider: "other-providers", requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 });
+  const visible = providers.slice(0, visibleCount);
+  if (hidden.some(provider => provider.unpricedRequestCount == null)) {
+    const { unpricedRequestCount: minimumUnpricedCount = 0, ...totals } = remainder;
+    return [...visible, { ...totals, minimumUnpricedCount }];
+  }
+  return [...visible, remainder];
 }

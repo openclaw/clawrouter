@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ServerCog } from "lucide-react";
-import { BrandMark } from "./components";
-import { formatCount } from "./ui-helpers";
-import { presentAccountedSpend } from "./cost-presentation";
+import { BrandMark, InlineNote } from "./components";
+import { formatCount, formatTimestamp } from "./ui-helpers";
+import { presentAccountedSpend, presentProviderChartSpend } from "./cost-presentation";
 import { niceChartMaximum, providerChartRows, usageTimeline } from "./usage-analytics";
 import type { ProviderUsageSummary, ServiceItem, UsageDailySummary, UsageSnapshot } from "./ui-types";
 
@@ -81,27 +81,41 @@ export function TrafficAreaChart({ usage, compact = false }: { usage: UsageSnaps
 
 export function ProviderUsageChart({ providers, services, limit = 6 }: { providers: ProviderUsageSummary[]; services: ServiceItem[]; limit?: number }) {
   const visible = providerChartRows(providers, limit);
+  if (!visible.length) return <div className="chartListEmpty"><ServerCog aria-hidden="true" /><strong>No provider activity</strong><span>Provider distribution will appear after the first routed request.</span></div>;
   const maximum = Math.max(1, ...visible.map((provider) => provider.requestCount));
   const serviceByProvider = new Map(services.map((service) => [service.provider, service]));
   return (
-    <div className="providerChart" role="list" aria-label="Requests by provider">
-      {visible.map((provider) => {
-        const service = serviceByProvider.get(provider.provider);
-        const providerLabel = provider.provider === "other-providers" ? "Other providers" : service?.name ?? provider.provider;
-        const successWidth = (provider.successCount / maximum) * 100;
-        const errorWidth = (provider.errorCount / maximum) * 100;
-        const successRate = provider.requestCount ? Math.round((provider.successCount / provider.requestCount) * 100) : 0;
-        const cost = presentAccountedSpend(provider);
-        return (
-          <div className="providerChartRow" role="listitem" key={provider.provider}>
-            <span className="providerChartIdentity"><span className="providerChartMark"><BrandMark brandIcon={service?.brandIcon} fallback={ServerCog} /></span><span><strong>{providerLabel}</strong><small>{formatCount(provider.totalTokens)} tokens · {successRate}% success</small></span></span>
-            <span className="providerChartTrack" role="img" aria-label={`${provider.requestCount} requests, ${provider.errorCount} errors`}><span className="providerChartSuccess" style={{ width: `${successWidth}%` }} /><span className="providerChartErrors" style={{ width: `${errorWidth}%` }} /></span>
-            <span className="providerChartValue"><strong>{formatCount(provider.requestCount)}</strong><small title={cost.note}>{cost.value}</small></span>
-          </div>
-        );
-      })}
-      {visible.length ? <div className="providerChartLegend"><span><i className="success" />Successful</span><span><i className="errors" />Errors</span><span className="providerChartLegendMeta">Requests · accounted spend · may include estimates</span></div> : null}
-      {!visible.length ? <div className="chartListEmpty"><ServerCog aria-hidden="true" /><strong>No provider activity</strong><span>Provider distribution will appear after the first routed request.</span></div> : null}
+    <div className="providerChart">
+      <table aria-label="Requests by provider">
+        <thead><tr><th scope="col">Provider</th><th scope="col">Requests</th><th scope="col">Accounted spend <small>(USD)</small></th></tr></thead>
+        <tbody>{visible.map((provider) => {
+          const service = serviceByProvider.get(provider.provider);
+          const name = provider.provider === "other-providers" ? "Other providers" : service?.name ?? provider.provider;
+          const errors = `${provider.errorCount.toLocaleString("en-US")} ${provider.errorCount === 1 ? "error" : "errors"}`;
+          const successRate = provider.requestCount ? Math.round((provider.successCount / provider.requestCount) * 100) : 0;
+          const cost = presentProviderChartSpend(provider);
+          return <tr key={provider.provider}>
+            <th scope="row">
+              <span className="providerChartIdentity">
+                <span className="providerChartMark"><BrandMark brandIcon={service?.brandIcon} fallback={ServerCog} /></span>
+                <span><strong>{name}</strong><small>{formatCount(provider.totalTokens)} tokens</small></span>
+              </span>
+            </th>
+            <td>
+              <span className="providerChartVolume">
+                <strong>{formatCount(provider.requestCount)}</strong>
+                <span className="providerChartTrack" role="img" aria-label={`${provider.requestCount} requests, ${errors}`}>
+                  <span className="providerChartSuccess" style={{ width: `${provider.successCount / maximum * 100}%` }} />
+                  <span className="providerChartErrors" style={{ width: `${provider.errorCount / maximum * 100}%` }} />
+                </span>
+              </span>
+              <small>{successRate === 100 && provider.errorCount > 0 ? ">99" : successRate}% success · {errors}</small>
+            </td>
+            <td title={cost.note}>{cost.value}</td>
+          </tr>;
+        })}</tbody>
+      </table>
+      <div className="providerChartLegend"><span><i />Successful</span><span><i className="errors" />Errors</span><small>Spend may include estimates</small></div>
     </div>
   );
 }
@@ -180,4 +194,11 @@ export function PersonalUsageTimeSeries({ points, label, formatValue, formatAxis
     </div>
     <div className="personalChartReadout" role="status" aria-live="polite">{selected ? <><span>{selected.label}</span><strong>{formatValue(selected.value)}</strong>{selected.partial ? <span>Partial coverage</span> : null}<small>{new Date(selected.start).toISOString()} → {new Date(selected.end).toISOString()} (exclusive)</small></> : <span>Hover, tap, or use arrow keys to inspect a day.</span>}</div>
   </div>;
+}
+
+export function UsageFreshness({ loaded, stale, error, updatedAt }: { loaded: boolean; stale: boolean; error: string; updatedAt: number | null }) {
+  if (loaded && !stale) return null;
+  return <div className="usageFreshness" role="status"><InlineNote>{loaded && updatedAt !== null
+    ? <>Showing last known usage from <time dateTime={new Date(updatedAt).toISOString()}>{formatTimestamp(updatedAt, true)}</time>. Balances may have changed.</>
+    : error ? "Usage unavailable. Spend and remaining balances are unknown." : "Loading usage…"}</InlineNote></div>;
 }

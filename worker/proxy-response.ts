@@ -1,7 +1,8 @@
+import { gemini4Hop, googleStreamBilling } from "./google-hop-billing.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { extractVoyageEmbeddingUsage } from "./voyage-embeddings.ts";
 import type { ValidatedNativeUsage } from "./native-response.ts";
-import { createResponseReceiptInspection, type RequestTariff } from "./request-tariff.ts";
+import { createResponseReceiptInspection, perplexitySearchOutcome, type RequestTariffOutcome, type RequestTariff } from "./request-tariff.ts";
 import { createNativeEventObserver } from "./native-events.ts";
 import { createRadiusEventInspector } from "./provider-radius.ts";
 import { createOllamaChatInspector, ollamaChatFormat } from "./provider-ollama.ts";
@@ -37,6 +38,9 @@ export function proxyResponseHeaders(response: Response, providerId: string): He
 export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>): { response: Response; result: Promise<ObservedUsage>; retired: Promise<void> } {
   const signal = operation.signal;
   const speech = responseFormat === "audio.binary";
+  const gemini = response.ok && gemini4Hop(usageContext);
+  if (!response.body && gemini) { operation.stop("complete"); return { response, retired: Promise.resolve(),
+    result: Promise.resolve({ tokens: null, nonbillable: true, outcome: "provider_error", delivery: "complete" }) }; }
   if (!response.body) { operation.stop("complete"); return { response, retired: Promise.resolve(), result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const mime = contentType.split(";")[0].trim();
@@ -51,10 +55,16 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const radius = responseFormat === "radius.messages" && eventStream ? createNativeEventObserver(createRadiusEventInspector()) : null;
   const nativeChat = responseFormat === ollamaChatFormat || responseFormat === "radius.messages";
   const ollama = responseFormat === ollamaChatFormat && ["application/json", "application/x-ndjson"].includes(mime) ? createOllamaChatInspector(mime === "application/json" ? "json" : "ndjson") : null;
-  const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson, usageContext) : null;
+  const checkpoints = gemini && responseFormat === "google.stream_generate_content" && mime === "text/event-stream" ? googleStreamBilling(usageContext?.googleCandidates) : undefined;
+  const unaryHop = gemini && responseFormat === "google.generate_content" && mime === "application/json";
+  let upstreamEof = false;
+  const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson, usageContext, checkpoints?.accept) : null;
   let inspect = !validated && !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
-  const decoder = new TextDecoder();
-  const reader = response.body.getReader(), input = inputRetirement(reader);
+  const searchTariff = responseFormat === "perplexity.search" && tariff?.kind === "successful_request";
+  const decoder = new TextDecoder("utf-8", { fatal: searchTariff });
+  let requestTariffOutcome: RequestTariffOutcome = "unknown";
+  const reader = response.body.getReader(), sourceRetired = replayRetirements.get(response.body);
+  const input = sourceRetired ? replayInputOwner(reader, sourceRetired) : inputRetirement(reader);
   let text = "", bytes = 0, nonempty = false, finished = false;
   let completedJson: UsageInspection | undefined;
   let resolve!: (result: ObservedUsage) => void;
@@ -68,6 +78,11 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   async function publication<T>(pending: Promise<T>): Promise<T> {
     try { return await pending; }
     catch (error) { operation.stop("publication", error); throw error; }
+  }
+  function inspectJson(value: unknown): UsageInspection {
+    return { tokens: responseFormat === "voyage.embeddings"
+      ? response.ok && mime === "application/json" ? extractVoyageEmbeddingUsage(value) : null
+      : extractUsageTokens(value, usageContext), outcome: responseOutcome(value) };
   }
   function finish(delivery: ObservedUsage["delivery"], reason?: unknown): void {
     if (finished) return;
@@ -83,11 +98,12 @@ export function observeUsage(response: Response, operation = new HttpOperation()
       try {
         text += decoder.decode();
         const value: unknown = JSON.parse(text);
-        inspection = { tokens: responseFormat === "voyage.embeddings"
-          ? response.ok && mime === "application/json" ? extractVoyageEmbeddingUsage(value) : null
-          : extractUsageTokens(value, usageContext), outcome: responseOutcome(value) };
+        if (searchTariff && mime === "application/json") requestTariffOutcome = perplexitySearchOutcome(value, response.status);
+        inspection = inspectJson(value);
       } catch { inspection.outcome = "provider_error"; }
     }
+    if (responseFormat === "perplexity.search") inspection.tokens = null;
+    if (searchTariff && requestTariffOutcome === "failed") inspection.outcome = "provider_error";
     responses?.stop(); text = "";
     // Binary delivery supplies completion only, never synthetic token usage.
     // A partial, empty, or wrong-MIME response cannot discount the reservation.
@@ -95,8 +111,13 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     if (speech && !binaryComplete) inspection.outcome = "provider_error";
     const hostedSearch = responses && !images && !compact ? responses.hostedUsage(delivery === "complete") : undefined;
     const requestCostReceipt = receipt?.result(delivery === "complete") ?? validated?.requestCostReceipt;
+    // A local publication failure after upstream EOF is not a dropped Google hop.
+    const hop = checkpoints?.finish(inspection) ?? (unaryHop && (!upstreamEof && delivery !== "complete" || upstreamEof && inspection.outcome === "provider_error")
+      ? { tokens: null, outcome: "provider_error" as const, nonbillable: true as const } : undefined);
+    if (hop) inspection = hop;
     resolve({ ...inspection, delivery, ...(operation.receivedRejection ? { nonbillable: true as const } : {}), ...(binaryComplete ? { binaryComplete: true as const } : {}),
-      ...(hostedSearch ? { hostedSearch } : {}), ...(requestCostReceipt ? { requestCostReceipt } : {}) });
+      ...(hostedSearch ? { hostedSearch } : {}), ...(requestCostReceipt ? { requestCostReceipt } : {}),
+      ...(searchTariff ? { requestTariffOutcome: delivery === "complete" ? requestTariffOutcome : "unknown" as const } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
     const cleanup = input.retire(delivery === "complete" ? "eof" : "cancel", reason);
@@ -120,12 +141,13 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         const next = await input.read(() => reader.read());
         if (finished) return; // A pending read can resolve after consumer cancellation.
         if (next.done) {
+          upstreamEof = true;
           sse?.end();
           if (inspect && bodyInspection?.acceptJson) {
             try {
               text += decoder.decode();
               const value: unknown = JSON.parse(text);
-              completedJson = { tokens: extractUsageTokens(value, usageContext), outcome: responseOutcome(value) };
+              completedJson = inspectJson(value);
               bodyInspection.acceptJson(value);
             } catch { completedJson = { tokens: null, outcome: "provider_error" }; }
             text = ""; inspect = false;
@@ -139,7 +161,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         if (bodyInspection?.observe) await publication(bodyInspection.push(next.value));
         if (finished) return;
         if (responses) { await (bodyInspection?.observe ? publication(responses.push(next.value)) : responses.push(next.value)); if (finished) return; }
-        sse?.push(next.value);
+        if (!checkpoints) sse?.push(next.value);
         bedrock?.push(next.value);
         ollama?.push(next.value);
         radius?.push(next.value);
@@ -153,7 +175,12 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         if (bodyInspection && !bodyInspection.observe) await publication(bodyInspection.push(next.value));
         if (finished) return;
         if (responses && bodyInspection?.qualify) await publication(bodyInspection.qualify());
-        if (!finished) controller.enqueue(next.value);
+        if (!finished) {
+          // A Google receipt commits when its frame reaches the downstream reader,
+          // not while a publication callback may still reject the chunk.
+          if (checkpoints) sse?.push(next.value);
+          controller.enqueue(next.value);
+        }
       } catch (error) { if (!finished) { finish("failed", error); controller.error(error); } }
       })();
       pulling = work;
@@ -166,6 +193,32 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   if (signal.aborted) aborted();
   else signal.addEventListener("abort", aborted, { once: true });
   return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result, retired };
+}
+
+// Inspect only a bounded error prefix and replay it through the original reader.
+// Oversized, fragmented or malformed errors retain their original wire response.
+export async function inspectJsonError(response: Response, operation: HttpOperation): Promise<{ response: Response; body?: string }> {
+  if (!response.body) return { response };
+  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  const decoder = new TextDecoder();
+  let bytes = 0, body = "", done = false;
+  try {
+    for (let reads = 0; reads < 128; reads++) {
+      const next = await operation.wait(reader.read());
+      done = next.done;
+      if (done) return { response: replayResponse(response, reader, chunks, true), body: body + decoder.decode() };
+      chunks.push(next.value);
+      bytes += next.value.byteLength;
+      if (bytes > 64 * 1024) break;
+      body += decoder.decode(next.value, { stream: true });
+    }
+  } catch {
+    if (operation.signal.aborted) {
+      void reader.cancel(operation.signal.reason).catch(() => undefined); reader.releaseLock();
+      operation.signal.throwIfAborted();
+    }
+  }
+  return { response: replayResponse(response, reader, chunks, done) };
 }
 
 export async function normalizePreStreamError(response: Response, streamingRequested: boolean, operation = new HttpOperation(), native?: NativeErrorContext): Promise<Response> {
@@ -240,28 +293,66 @@ async function normalizeFirstSseEvent(response: Response, errorStatus: number | 
   }
 }
 
+// The published body carries its predecessor's physical retirement independently
+// of cancellation's data-error policy. Weak keys do not extend response lifetime.
+const replayRetirements = new WeakMap<ReadableStream<Uint8Array>, Promise<void>>();
+function replayInputOwner(reader: ReadableStreamDefaultReader<Uint8Array>, predecessor?: Promise<void>) {
+  const failures: unknown[] = [];
+  const source = predecessor?.then(() => undefined, error => { failures.push(error); });
+  const input = inputRetirement({
+    cancel(reason) {
+      try { return reader.cancel(reason); }
+      catch (error) { failures.push(error); throw error; }
+    },
+    releaseLock() { try { reader.releaseLock(); } catch (error) { failures.push(error); } },
+  }, source);
+  let started = false, resolve!: () => void, reject!: (error: unknown) => void;
+  const retired = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  void retired.catch(() => undefined);
+  return {
+    read: input.read,
+    retired,
+    retire(kind: "eof" | "cancel", reason?: unknown) {
+      if (started) return retired;
+      started = true;
+      // Publish first: a native cancel can synchronously re-enter this owner.
+      void input.retire(kind, reason).then(() => {
+        if (failures.length === 1) reject(failures[0]);
+        else if (failures.length) reject(new AggregateError(failures, "replay retirement failed"));
+        else resolve();
+      }, error => { failures.push(error); reject(failures.length === 1 ? error : new AggregateError(failures, "replay retirement failed")); });
+      return retired;
+    },
+  };
+}
 function replayResponse(response: Response, reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], readerDone: boolean): Response {
-  let chunkIndex = 0;
+  const owner = replayInputOwner(reader, response.body ? replayRetirements.get(response.body) : undefined);
+  let chunkIndex = 0, canceled = false;
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (chunkIndex < chunks.length) {
-        controller.enqueue(chunks[chunkIndex++]);
-        return;
-      }
-      if (readerDone) {
-        reader.releaseLock();
-        controller.close();
-        return;
-      }
+      if (canceled) return;
+      const end = async (failed: boolean, primary?: unknown) => {
+        const failures: unknown[] = failed ? [primary] : [];
+        try { await owner.retire("eof"); } catch (error) { failures.push(error); }
+        if (canceled) return;
+        if (failures.length) controller.error(failures.length === 1 ? failures[0] : new AggregateError(failures, "replay read and retirement failed"));
+        else controller.close();
+      };
+      let next: ReadableStreamReadResult<Uint8Array>;
       try {
-        const { done, value } = await reader.read();
-        if (done) { reader.releaseLock(); controller.close(); }
-        else controller.enqueue(value);
-      } catch (error) { reader.releaseLock(); controller.error(error); }
+        if (chunkIndex < chunks.length) { controller.enqueue(chunks[chunkIndex++]); return; }
+        if (readerDone) { await end(false); return; }
+        next = await owner.read(() => reader.read());
+      } catch (error) { if (!canceled) await end(true, error); return; }
+      if (canceled) return;
+      if (next.done) await end(false);
+      else { try { controller.enqueue(next.value); } catch (error) { await end(true, error); } }
     },
-    cancel(reason) { void reader.cancel(reason).catch(() => undefined); reader.releaseLock(); },
+    cancel(reason) { canceled = true; return owner.retire("cancel", reason); },
   }, { highWaterMark: 0 });
-  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  const replay = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  replayRetirements.set(replay.body!, owner.retired);
+  return replay;
 }
 
 export interface SseBoundaryCursor { offset: number; lineStart: number; eof?: boolean }

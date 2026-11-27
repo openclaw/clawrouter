@@ -65,19 +65,16 @@ export async function playgroundRequest(
   const contentType = response.headers.get("content-type") ?? "";
   const retention = response.headers.get("x-clawrouter-content-retention") ?? "unknown";
   const body = await response.arrayBuffer();
-  const text = isTextualResponse(contentType) ? new TextDecoder().decode(body) : "";
-  let raw = "";
-  if (response.status === 204 || body.byteLength === 0) raw = `HTTP ${response.status} ${response.statusText || "No Content"}`.trim();
-  if (contentType.includes("application/json") || contentType.includes("+json")) {
-    try {
-      raw = JSON.stringify(JSON.parse(text), null, 2);
-    } catch {
-      raw = text;
-    }
-  } else if (text) {
-    raw = text;
-  } else if (!raw) {
-    raw = `HTTP ${response.status} ${response.statusText || "OK"}\n${contentType || "binary"} response (${body.byteLength} bytes)`;
+  const reason = response.statusText || (response.status === 204 ? "No Content" : "");
+  const statusLine = `HTTP ${response.status}${reason ? ` ${reason}` : ""}`;
+  let raw: string;
+  if (response.status === 204 || body.byteLength === 0) {
+    raw = statusLine;
+  } else if (isTextualResponse(contentType)) {
+    // The inspector shows the received text. Re-serializing JSON can round IDs and decimals.
+    raw = new TextDecoder().decode(body);
+  } else {
+    raw = `${statusLine}\n${contentType || "binary"} response (${body.byteLength} bytes)`;
   }
   return { ok: response.ok, raw, status: response.status, statusText: response.statusText, contentType, retention };
 }

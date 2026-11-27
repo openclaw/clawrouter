@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,8 +6,7 @@ import { legacySnapshot, snapshotRequest, syntheticUsage, usageFixture } from ".
 
 // Synthetic data only. External-volume scratch avoids filling the internal disk.
 const count = Number(process.env.USAGE_BENCH_EVENTS ?? 1_000_000), now = Date.parse("2026-11-05T12:00:00Z"), samples = 5;
-const externalScratch = "/Volumes/Clawstudio-Storage/CodexWorktrees";
-const scratchRoot = process.env.USAGE_BENCH_SCRATCH ?? (existsSync(externalScratch) ? externalScratch : tmpdir());
+const scratchRoot = process.env.USAGE_BENCH_SCRATCH ?? tmpdir();
 const scratch = await mkdtemp(join(scratchRoot, "usage-rollup-bench-"));
 const realNow = Date.now, log = console.log;
 Date.now = () => now;

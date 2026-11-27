@@ -1,4 +1,4 @@
-import { accessCertsResponse } from "./access-byte-fixture.mjs";
+import { accessBytesResponse, accessCertsResponse } from "./access-byte-fixture.mjs";
 import "./typescript-setup.mjs";
 import { captureTimeouts } from "../../test/helpers/timeout-capture.mjs";
 import assert from "node:assert/strict";
@@ -51,7 +51,7 @@ function accessEnv(kv = new Map(), users = new Map()) {
       },
       async get(key, type) {
         const value = kv.get(key);
-        return value === undefined ? null : type === "json" ? structuredClone(value) : value;
+        return value === undefined ? null : type === "stream" ? accessBytesResponse(JSON.stringify(value), "").body : type === "json" ? structuredClone(value) : value;
       },
     },
     ACCESS_CONTROL: {

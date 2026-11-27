@@ -1,5 +1,6 @@
 name = "clawrouter-edge"
-main = "worker/index.ts"
+main = ".wrangler/large-http/worker.mjs"
+no_bundle = true
 compatibility_date = "2026-06-05"
 compatibility_flags = ["enable_request_signal"]
 keep_vars = true
@@ -10,14 +11,17 @@ enabled = true
 head_sampling_rate = 1
 invocation_logs = false
 
+[triggers]
+crons = ["*/5 * * * *"]
+
 [version_metadata]
 binding = "CF_VERSION_METADATA"
 
 [build]
-command = "pnpm provider:compile -- --output worker/generated/provider-snapshot.json && pnpm --dir admin build"
+command = "pnpm provider:compile -- --output worker/generated/provider-snapshot.json && pnpm --dir admin build && node scripts/build-default-worker.mjs"
 
 [assets]
-directory = "./admin/dist"
+directory = ".wrangler/large-http/assets"
 binding = "ASSETS"
 run_worker_first = true
 
@@ -56,6 +60,19 @@ class_name = "GrantCredentialObject"
 name = "CONTENT_CLEANUP"
 class_name = "ContentArchiveCleanupObject"
 
+[[durable_objects.bindings]]
+name = "LARGE_HTTP_POOL"
+class_name = "LargeHttpPool"
+
+[[durable_objects.bindings]]
+name = "LARGE_HTTP_SLOTS"
+class_name = "LargeHttpSlot"
+
+[[containers]]
+name = "clawrouter-edge-large-http"
+class_name = "LargeHttpSlot"
+scheduling_policy = "durable_object"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["BudgetLedgerObject"]
@@ -75,6 +92,10 @@ new_sqlite_classes = ["GrantCredentialObject"]
 [[migrations]]
 tag = "v5"
 new_sqlite_classes = ["ContentArchiveCleanupObject"]
+
+[[migrations]]
+tag = "v6-large-http"
+new_sqlite_classes = ["LargeHttpPool", "LargeHttpSlot"]
 
 [[routes]]
 pattern = "clawrouter.openclaw.ai"

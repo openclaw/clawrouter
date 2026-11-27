@@ -1,19 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { costCell, csvCell, csvRows, eventsCsv, reportCsv, rollingUsageQuery, UsageQueryCache, usageGroupLabel, usageKeyLabel, usageQueryString } from '../src/personal-usage.ts';
+import { costCell, csvCell, csvRows, eventsCsv, reportCsv, usageGroupLabel, usageKeyLabel } from '../src/personal-usage.ts';
 
-test('rolling presets send server-time days; custom ranges and filters stay exact', () => {
-  const query = rollingUsageQuery(7);
-  assert.equal(query.from, ''); assert.equal(query.to, '');
-  assert.equal(new URLSearchParams(usageQueryString(rollingUsageQuery(30))).get('days'), '30');
-  query.filters.model = 'provider/model + custom'; query.filters.key = '=key';
-  const params = new URLSearchParams(usageQueryString(query));
-  assert.equal(params.get('days'), '7'); assert.equal(params.has('from'), false); assert.equal(params.has('to'), false);
-  assert.equal(params.get('model'), query.filters.model); assert.equal(params.get('key'), '=key');
-  assert.equal(params.has('provider'), false);
-  query.rollingDays = undefined; query.from = '2026-10-31'; query.to = '2026-11-02'; query.timezone = 'America/New_York';
-  assert.equal(new URLSearchParams(usageQueryString(query)).get('from'), '2026-10-31');
-});
 test('cost presentation never sums price quality or billing lanes and unknown is never zero', () => {
   const costs = [{ lane: 'api', costClass: 'calculated', amountMicros: 1_000_000, calls: 1 }, { lane: 'api', costClass: 'fixed', amountMicros: 500_000, calls: 2 }, { lane: 'api', costClass: 'estimated', amountMicros: 9_000_000, calls: 1 }, { lane: 'subscription', costClass: 'calculated', amountMicros: 4_000_000, calls: 1 }, { lane: 'unattributed', costClass: 'unknown', amountMicros: 0, calls: 3 }, { lane: 'api', costClass: 'no_charge', amountMicros: 0, calls: 1 }];
   assert.equal(costCell(costs, 'api', ['calculated', 'fixed']), '$1.50 · 3 calls');
@@ -41,16 +29,6 @@ test('bounded report export includes coverage/completeness and unknown amount st
   const events = eventsCsv([{ id: '+unsafe', costClass: 'unknown', reportingCostMicros: 0 }]);
   assert.match(events, /"'\+unsafe"/); assert.doesNotMatch(events.split('\r\n')[1], /"0"/);
 });
-test('query cache is 15s fresh, LRU bounded to eight, clearable and instance-local', () => {
-  const cache = new UsageQueryCache();
-  cache.set('old', 1, 0); assert.equal(cache.get('old', 14999), 1); assert.equal(cache.get('old', 15000), undefined);
-  for (let index = 0; index < 8; index++) cache.set(String(index), index, 20000);
-  cache.get('0', 20001); cache.set('8', 8, 20001);
-  assert.equal(cache.get('1', 20001), undefined); assert.equal(cache.get('0', 20001), 0);
-  assert.equal(new UsageQueryCache().get('0', 20001), undefined);
-  cache.clear(); assert.equal(cache.get('0', 20001), undefined);
-});
-
 test('event CSV keeps reporting-only estimates and recorded budget charges in separate columns', () => {
   const csv = eventsCsv([{ id: 'estimated', costClass: 'estimated', reportingCostMicros: 18000, recordedChargeMicros: 0, costBasis: 'token_pricing', estimateReason: 'max_declared_rate', pricingRef: 'fixture' }]);
   assert.match(csv.split('\r\n')[0], /"reportingCostMicros","recordedChargeMicros","costBasis","estimateReason"/);
