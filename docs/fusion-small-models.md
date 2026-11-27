@@ -10,6 +10,11 @@ Research baseline reviewed on 2026-11-05; routing follow-up on 2026-11-24.
 Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
 
+The [existing-module repair comparison](fusion-existing-fix-study.md) uses fresh
+cheap-only and strong-only controls. All three arms passed, but the cascade
+cost more and took longer than strong-only. Its fallback rescue did not
+establish an improvement over the independently successful cheap-only draw.
+
 The [frozen three-arm repository confirmation](fusion-final-confirmation-study.md)
 retains 30 tasks, three trials and all 270 outcomes. Cheap-first saved 23.0% in
 model charges but passed 81/90 versus strong-only's 85/90; cheap-only passed
