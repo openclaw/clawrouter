@@ -2701,6 +2701,11 @@ and 25.59% less time than cascade. The fusion-value gate failed. All six
 candidate qualifications, twelve arms and thirteen calls are retained.
 ## Cheap-repair policy follow-up
 
+The [fractional-score study](fusion-fractional-score-study.md) records two false
+accepts: cheap-only and cascade passed 22 public tests but failed the withheld
+test; strong-only passed all 23. Lower cost and time did not preserve quality,
+and the cascade never invoked its fallback.
+
 The [matched cheap-repair study](fusion-native-cheap-repair-study.md) rejects replacing
 the first strong fallback with another cheap attempt: 29/30 passes versus
 30/30 for the current cascade, with 17.12% savings and 11.05% more workflow time.

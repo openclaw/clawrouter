@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "design": "one-historical-task-three-independent-arms",
+  "taskId": "openclaw/clawrouter@47dad40e9cfba52a9b349b392d1687a15e26e496",
+  "qualification": {
+    "expectedFull": 23,
+    "expectedPublic": 22,
+    "expectedHidden": 1
+  },
+  "provenance": {
+    "screenProtocolSha256": "e5ebf85374c4b944a778b9f81adfeecc68496939ac463ca9d5f7412c7b5d34d3",
+    "screenResultSha256": "1bd2260200872e171f15c96602af98df5c0ee816e6d31df5cf2ff1c0764d7a4c",
+    "trialProtocolSha256": "639a3026f04f33baf8ac111e5d91157d8c69dad9e967c91fafa686fe3dcbe2fb",
+    "trialResultSha256": "22c4c4e1a09c1f597c153bf8babcc616e1c7a3c7aca6967028e09c35ec131fe8"
+  },
+  "order": [
+    "cheap",
+    "strong",
+    "cascade"
+  ],
+  "rows": [
+    {
+      "strategy": "cheap",
+      "costMicros": 1203,
+      "normalizedMicros": 1203,
+      "workflowMs": 10278.62925,
+      "publicPassed": true,
+      "fullPassed": false,
+      "fullTests": 23,
+      "fullFailures": 1,
+      "fullSkipped": 0,
+      "calls": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 1203,
+          "normalizedMicros": 1203,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "strategy": "strong",
+      "costMicros": 10229,
+      "normalizedMicros": 10229,
+      "workflowMs": 13033.306792,
+      "publicPassed": true,
+      "fullPassed": true,
+      "fullTests": 23,
+      "fullFailures": 0,
+      "fullSkipped": 0,
+      "calls": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 10229,
+          "normalizedMicros": 10229,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "strategy": "cascade",
+      "costMicros": 1135,
+      "normalizedMicros": 1135,
+      "workflowMs": 10440.961167000001,
+      "publicPassed": true,
+      "fullPassed": false,
+      "fullTests": 23,
+      "fullFailures": 1,
+      "fullSkipped": 0,
+      "calls": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 1135,
+          "normalizedMicros": 1135,
+          "publicPassed": true
+        }
+      ]
+    }
+  ],
+  "newModelCalls": 3,
+  "newModelCostMicros": 12567,
+  "falseAccepts": 2,
+  "failedRequirement": "fractional scores do not receive a binary loss bound",
+  "gates": {
+    "qualityPreserved": false,
+    "incrementalQualityOverCheap": false,
+    "costGate": true,
+    "normalizedCostGate": true,
+    "timeGate": true,
+    "productionQualified": false,
+    "populationQualified": false,
+    "developmentLead": false
+  },
+  "independentControlDraws": true,
+  "reusedModelCalls": 0,
+  "hiddenGradingAfterAllInference": true,
+  "costBasis": "frozen-tariffs-and-recorded-usage-not-invoice-reconciliation",
+  "latencyScope": "model-generation-and-public-verification-including-caller-overhead-excluding-final-hidden-grading",
+  "independentPopulationConfirmation": false
+}

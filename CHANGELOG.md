@@ -60,6 +60,7 @@
 
 - Record a two-repair native Fusion controller study: six cascade passes, one fallback rescue, 71.24% lower API cost and 8.39% higher mean workflow time than direct Terra.
 - Add an offline Fusion cascade feasibility calculator to separate cost and latency acceptance targets before larger benchmark runs. Invalid inputs report the field and its accepted range.
+- Document a fractional-score Fusion false accept: public-test success hid a quality regression in both cheap outputs, despite lower cost and time.
 
 - Document Fusion repair experiments: faster paired fallback API calls, but a full-workflow replay still trails cheap-only and fails the latency gate.
 
