@@ -455,6 +455,60 @@ type Panel = typeof panels[number];
 
 type CurrentKey = UsageKeyName & { enabled?: boolean };
 
+// Keep a distinguishing cue at the *start* of same-name options so a closed,
+// narrow native select doesn't clip it. Ordinals are display-only and based on
+// full IDs (not inventory order) when even the short ID endings collide.
+function sameNameCues(keys: readonly CurrentKey[]) {
+  const byName = new Map<string, string[]>();
+  for (const {name, credentialId} of keys) {
+    const label = name?.trim() ?? '';
+    const ids = byName.get(label);
+    if (ids) ids.push(credentialId);
+    else byName.set(label, [credentialId]);
+  }
+  const cues = new Map<string, string>();
+  for (const ids of byName.values()) {
+    if (ids.length < 2) continue;
+    ids.sort();
+    const endings = ids.map(id => id.slice(-6));
+    const distinct = new Set(endings).size === ids.length;
+    ids.forEach((id, i) => cues.set(id, distinct ? (id.length > 6 ? '…' : '') + endings[i] : 'Key ' + (i + 1) + ' of ' + ids.length));
+  }
+  return cues;
+}
+
+function OwnKeySelector({keys, selected, disabled, onSelect}: {
+  keys: readonly CurrentKey[]; selected: CompleteUsageQuery['filters']['key']; disabled: boolean;
+  onSelect: (key: CompleteUsageQuery['filters']['key']) => void;
+}) {
+  const description = useId();
+  const cues = useMemo(() => sameNameCues(keys), [keys]);
+  const id = selected?.kind === 'credential' ? selected.id : undefined;
+  const current = id === undefined ? undefined : keys.find(key => key.credentialId === id);
+  return <>
+    <label>Current own-key selector<select disabled={disabled} aria-describedby={id === undefined ? undefined : description}
+      value={selected?.kind === 'session' ? 'session' : id === undefined ? '' : 'key:' + id}
+      onChange={event => {
+        const choice = event.target.value;
+        onSelect(choice === 'session' ? {kind: 'session'} : choice ? {kind: 'credential', id: choice.slice(4)} : undefined);
+      }}>
+      <option value="">All keys</option><option value="session">Dashboard session</option>
+      {id !== undefined && !current ? <option value={'key:' + id}>Retained key: {id}</option> : null}
+      {keys.map(key => {
+        const cue = cues.get(key.credentialId);
+        const label = (key.name ? 'Current name: ' + key.name + ' — ' : '') + key.credentialId;
+        return <option key={key.credentialId} value={'key:' + key.credentialId}>
+          {cue ? cue + (key.enabled === false ? ' · Revoked · ' : ' · ') + label : label + (key.enabled === false ? ' (revoked)' : '')}
+        </option>;
+      })}
+    </select></label>
+    {id !== undefined && <p id={description} className="personalNote" style={{flexBasis: '100%', margin: 0}}>
+      <strong>{!current ? 'Retained key' : current.enabled === false ? 'Revoked key' : 'Current key'}</strong>{' · '}<code>{id}</code>
+      {current?.name ? ' · Current name: ' + current.name : !current ? ' · Not in current key list' : ' · No current name'}
+    </p>}
+  </>;
+}
+
 // Use the same breakpoint at which the overview charts stack in personal-usage.css.
 const stackedCharts = '(max-width: 800px)';
 function subscribeToChartLayout(notify: () => void) {
@@ -541,14 +595,7 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
         <label>Grain<select disabled={Boolean(report.error)} value={q.grain} onChange={event => data.refine({ ...q, grain: event.target.value as 'day' | 'minute', rankOffset: 0 })}>
           <option value="day">Day</option><option value="minute">Minute (up to 24 hours)</option>
         </select></label>
-        <label>Current own-key selector<select disabled={Boolean(report.error)} value={selectedKey?.kind === 'session' ? 'session' : selectedKey ? 'key:' + selectedKey.id : ''} onChange={event => {
-          const choice = event.target.value;
-          selectKey(choice === 'session' ? { kind: 'session' } : choice ? { kind: 'credential', id: choice.slice(4) } : undefined);
-        }}>
-          <option value="">All keys</option><option value="session">Dashboard session</option>
-          {selectedKey?.kind === 'credential' && !currentKeys.some(key => key.credentialId === selectedKey.id) ? <option value={'key:' + selectedKey.id}>Retained key: {selectedKey.id}</option> : null}
-          {currentKeys.map(key => <option key={key.credentialId} value={'key:' + key.credentialId}>{key.name ? 'Current name: ' + key.name + ' — ' : ''}{key.credentialId}{key.enabled === false ? ' (revoked)' : ''}</option>)}
-        </select></label>
+        <OwnKeySelector keys={currentKeys} selected={selectedKey} disabled={Boolean(report.error)} onSelect={selectKey} />
       </> : null}
     </UsageControls>
     {!comparisonFirst && <PersonalUsageSummary data={data} />}
