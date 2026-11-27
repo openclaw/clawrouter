@@ -594,6 +594,11 @@ attempt before dispatch and retain every charge, including failed drafts.
 This caller-side option does not enable a routing default or establish a
 quality or cost advantage for a workload.
 
+The [syntax-repair development study](fusion-syntax-repair-study.md) records one
+case where retaining a rejected source artifact and compact diagnostics enabled
+a cheap repair. It includes the earlier negative comparison and reused-call
+accounting; it does not establish population quality or comparable latency.
+
 Set `fallbackAttempts: 2` with `strategy: 'cascade'` to allow one repair of a
 failed strong fallback. The maximum then becomes three calls: cheap draft,
 strong fallback, and `strong-fallback-repair`. The third call receives the

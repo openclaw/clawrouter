@@ -8,6 +8,7 @@
 
 - Record a 30-task native Fusion confirmation: matched strong-only quality at 52.71% lower model cost, with a failed population latency qualification and explicit historical-task limits.
 - Allow caller-side Fusion cascades to skip an extra cheap repair when the initial artifact is missing, preserving default behavior and call limits.
+- Record a single-task Fusion syntax-repair study with shared-call accounting, the earlier negative comparison, and explicit quality and latency limits.
 - Add opt-in Fusion regression holdouts with separate public and hidden native qualification, rejecting preservation-only evidence before inference.
 - Add opt-in Tape assertion regression holdouts with separate native qualification of public and hidden failures.
 
