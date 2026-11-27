@@ -76,8 +76,10 @@ test.describe("Catalog launch return focus", () => {
 
   test("Back restores the same keyboard launch action without moving the viewport", async ({ page }) => {
     await openTavily(page);
-    // Tab out of the only result, as a member navigating the filtered Catalog would.
+    // Follow the member's tab order from the filtered result through the inspector.
     await page.locator(".tableRow").press("Tab");
+    await expect(page.getByRole("link", { name: "Proxy route API reference (opens in a new tab)", exact: true })).toBeFocused();
+    await page.keyboard.press("Tab");
     await expect(launch(page)).toBeFocused();
     const sourceScroll = await page.evaluate(() => window.scrollY);
     await page.keyboard.press("Enter");
