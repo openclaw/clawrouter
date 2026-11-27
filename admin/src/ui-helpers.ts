@@ -431,7 +431,10 @@ export function catalogPlaygroundTarget(service: ServiceItem, query: string, mod
   }
 
   const proxy = proxyModels.find((item) => item.model === matchedModel);
-  const route = matchedModel ? proxy?.route : providerRoutes[0];
+  // Route search matches without case or surrounding whitespace. Only an exact
+  // published path selects an operation; fragments keep the service default.
+  const route = matchedModel ? proxy?.route
+    : providerRoutes.find((candidate) => candidate.route.toLowerCase() === folded) ?? providerRoutes[0];
   if (route) {
     const preset = playgroundServicePreset(route, proxy?.model);
     if (!matchedModel || serviceModelFromForm(preset, route) === matchedModel) return { matchedModel, preset: { mode: "service" as const, ...preset } };
