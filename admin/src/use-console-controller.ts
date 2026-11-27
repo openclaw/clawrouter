@@ -29,6 +29,8 @@ import type {
   UsageSnapshot,
 } from "./ui-types";
 
+type ManualRetry = { quota?: Promise<void> };
+
 export function useConsoleController({ session, credentialOwner, request, scope, verifySession }: {
   session: ReturnType<typeof useSession> & { setValue: (value: SessionResponse) => void };
   credentialOwner: CredentialOperations;
@@ -48,6 +50,8 @@ export function useConsoleController({ session, credentialOwner, request, scope,
   useEffect(() => () => memberQuotaRead.current.controller?.abort(), []);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const refreshBackgroundRef = useRef(false);
+  const manualRetry = useRef<ManualRetry | null>(null);
+  const [retryPending, setRetryPending] = useState(false);
   const catalogLoadedRef = useRef(false);
   const initialSession = useRef<SessionResponse | null>(session.value);
   const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(async () => undefined);
@@ -115,7 +119,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
   useEffect(() => {
     if (session.demoMode) return;
     return installAutoRefresh(() => {
-      if (!busyRef.current) void refreshRef.current({ background: true });
+      if (!busyRef.current && !manualRetry.current) void refreshRef.current({ background: true });
     });
   }, [session.demoMode]);
 
@@ -134,6 +138,20 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       void usage.refreshLedger(session.gatewayOrigin);
     }
   }, [access.loaded, session.demoMode, session.value.role, session.view, usage.loaded, usage.stale, usage.error, usage.revision]);
+
+  async function retryRefresh() {
+    if (manualRetry.current || !scope.isCurrent()) return;
+    const retry: ManualRetry = {};
+    manualRetry.current = retry;
+    setRetryPending(true);
+    try {
+      await refresh(); // Includes the foreground read queued behind an automatic read.
+      await retry.quota;
+    } finally {
+      manualRetry.current = null;
+      if (scope.isCurrent()) setRetryPending(false);
+    }
+  }
 
   function refresh(options: RefreshOptions = {}): Promise<void> {
     if (!scope.isCurrent()) return Promise.resolve();
@@ -206,7 +224,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       if (!scope.isCurrent()) return;
       const result = sessionData.role === "admin"
         ? await loadAdminData(sessionData, providerData, background, warnings, keySnapshot, policySnapshot, upstreamSnapshot, fusionSnapshot)
-        : await loadUserData(sessionData, warnings, keySnapshot);
+        : await loadUserData(sessionData, warnings, keySnapshot, background ? null : manualRetry.current);
       if (!scope.isCurrent()) return;
       session.setRefreshError(result.warnings.join("; "));
       if (result.complete) session.setLastUpdatedAt(Date.now());
@@ -251,7 +269,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     return { warnings, complete: !warnings.length && usageFresh };
   }
 
-  async function loadUserData(sessionData: SessionResponse, initialWarnings: string[], keySnapshot: number) {
+  async function loadUserData(sessionData: SessionResponse, initialWarnings: string[], keySnapshot: number, retry: ManualRetry | null) {
     let warnings = initialWarnings;
     const user: AccessUser = {
       email: sessionData.email ?? "access-user",
@@ -277,7 +295,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     const inlinePolicies = sessionData.entitlements?.policies?.map(policy => policy.policyId);
     credentialOwner.reportPersonal(keySnapshot, credentialResult.ok ? credentialResult.value.credentials : null, inlinePolicies);
     if (!credentialResult.ok) warnings = [...warnings, "personal credentials unavailable: " + credentialResult.error];
-    void quotaRead.then(result => {
+    const quotaPublished = quotaRead.then(result => {
       if (!ownsQuota()) return;
       if (result.ok) {
         usage.hydrate(result.value.policies, result.value.usage);
@@ -287,6 +305,9 @@ export function useConsoleController({ session, credentialOwner, request, scope,
         usage.fail("Quota status unavailable: " + result.error);
       }
     });
+    // Only a manual retry waiting for quota/policy recovery owns this extra wait.
+    // Keep metadata, navigation and ordinary background refresh independent of it.
+    if (retry && (!inlinePolicies || usage.error)) retry.quota = quotaPublished;
     return { warnings, complete: !warnings.length };
   }
 
@@ -327,7 +348,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     session.navigateTo(...args);
   }
 
-  return { session: { ...session, navigateTo }, catalog: { ...catalog, gatewayReadiness }, access, usage, personalUsage, adminUsage, subscriptions, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
+  return { session: { ...session, navigateTo }, catalog: { ...catalog, gatewayReadiness }, access, usage, personalUsage, adminUsage, subscriptions, selfServiceKeys, credentialOwner, playground, request, refresh, retryRefresh, retryPending, refreshMetadataAfterMutation };
 }
 
 export type ConsoleController = ReturnType<typeof useConsoleController>;
