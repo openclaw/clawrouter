@@ -1,11 +1,27 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { kieTaskPath, parseKieResultUrls, parseKieSubmission, parseKieTask, prepareKieTask, validateKieTaskId, KIE_MAX_ENVELOPE_BYTES } from "../kie-jobs.ts";
+import { kieTaskPath, observeKieSubmission, observeKieTask, parseKieResultUrls, parseKieSubmission, parseKieTask, prepareKieTask, validateKieTaskId, KIE_MAX_ENVELOPE_BYTES } from "../kie-jobs.ts";
 
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/kie/jobs.json", import.meta.url), "utf8"));
 const id = wire.submission.data.taskId;
 const parse = (body) => parseKieTask(JSON.stringify(body), 200, id);
+
+test("Kie parsed observations preserve text codec verdicts", () => {
+  const verdict = read => { try { return { value: read() }; } catch (error) { return { error: error.message }; } };
+  const bodies = [wire.submission, ...Object.values(wire.responses), {}, { code: 200, data: null },
+    ...[undefined, null, 0, 0.5, -1, "50"].map(creditsConsumed => ({ ...wire.responses.success,
+      data: { ...wire.responses.success.data, creditsConsumed } }))];
+  for (const body of bodies) for (const status of [200, 503, NaN]) {
+    assert.deepEqual(verdict(() => observeKieSubmission(body, status)),
+      verdict(() => parseKieSubmission(JSON.stringify(body), status)));
+    for (const expectedId of [id, "other_task", ""]) {
+      assert.deepEqual(verdict(() => observeKieTask(body, status, expectedId)),
+        verdict(() => parseKieTask(JSON.stringify(body), status, expectedId)));
+    }
+  }
+  assert.throws(() => parseKieTask("{", 503, id), /invalid_kie_envelope/);
+});
 
 test("Kie create preserves native model input and refuses callbacks in the polling slice", () => {
   assert.deepEqual(prepareKieTask(wire.request.body), { body: wire.request.body, model: wire.request.body.model });

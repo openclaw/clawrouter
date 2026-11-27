@@ -44,7 +44,7 @@ export interface VydraJobObservation {
   refundStatus: string | null;
 }
 
-function observation(body: Record<string, unknown>, expectedId?: string): VydraJobObservation {
+export function observeVydraJob(body: Record<string, unknown>, expectedId?: string): VydraJobObservation {
   const id = validateVydraJobId(body.id);
   if (expectedId !== undefined && id !== validateVydraJobId(expectedId)) throw new Error("vydra_job_id_mismatch");
   const status = body.status;
@@ -64,18 +64,22 @@ function observation(body: Record<string, unknown>, expectedId?: string): VydraJ
 }
 
 export function parseVydraSubmission(text: string, httpStatus: number): { observation: VydraJobObservation; retrieveResult: true } {
+  return observeVydraSubmission(envelope(text, httpStatus));
+}
+
+export function observeVydraSubmission(body: Record<string, unknown>): { observation: VydraJobObservation; retrieveResult: true } {
   // Canonical /jobs is top-level and not the Studio data envelope. Even immediate
   // completion needs a scoped GET for output; POST retries can create new charges.
-  return { observation: observation(envelope(text, httpStatus)), retrieveResult: true };
+  return { observation: observeVydraJob(body), retrieveResult: true };
 }
 
 export function parseVydraJob(text: string, httpStatus: number, expectedId: string): VydraJobObservation {
-  return observation(envelope(text, httpStatus), expectedId);
+  return observeVydraJob(envelope(text, httpStatus), expectedId);
 }
 
 export function parseVydraResult(text: string, httpStatus: number, expectedId: string): Record<string, unknown> {
   const body = envelope(text, httpStatus);
-  if (observation(body, expectedId).status !== "completed") throw new Error("vydra_result_not_completed");
+  if (observeVydraJob(body, expectedId).status !== "completed") throw new Error("vydra_result_not_completed");
   if (body.output !== undefined && body.result !== undefined) throw new Error("ambiguous_vydra_result");
   const output = body.output ?? body.result;
   if (!record(output)) throw new Error("invalid_vydra_result");
@@ -87,7 +91,12 @@ export function parseVydraResult(text: string, httpStatus: number, expectedId: s
 export function parseVydraCancelAcknowledgement(text: string, httpStatus: number): {
   observeJob: true; refundApplied: boolean | null; refundedLedgerUnits: number | null;
 } {
-  const body = envelope(text, httpStatus);
+  return observeVydraCancelAcknowledgement(envelope(text, httpStatus));
+}
+
+export function observeVydraCancelAcknowledgement(body: Record<string, unknown>): {
+  observeJob: true; refundApplied: boolean | null; refundedLedgerUnits: number | null;
+} {
   if (body.success !== true) throw new Error("vydra_cancel_not_acknowledged");
   if (body.refund !== undefined && body.refund !== null && !record(body.refund)) throw new Error("invalid_vydra_refund");
   const refund = record(body.refund) ? body.refund : null;

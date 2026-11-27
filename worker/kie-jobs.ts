@@ -11,8 +11,7 @@ export const KIE_MAX_ENVELOPE_BYTES = 1024 * 1024;
 
 const jsonObject = createJobEnvelopeParser(KIE_MAX_ENVELOPE_BYTES, "kie_envelope_too_large", "invalid_kie_envelope");
 
-function taskData(text: string, httpStatus: number): Record<string, unknown> {
-  const body = jsonObject(text);
+function taskData(body: Record<string, unknown>, httpStatus: number): Record<string, unknown> {
   // Market endpoints can report authentication/ownership errors with HTTP 200.
   // Such an observation is not a terminal job failure or proof of a refund.
   if (!Number.isInteger(httpStatus) || httpStatus < 200 || httpStatus >= 300
@@ -66,7 +65,11 @@ function prepareKieKlingTask(body: Record<string, unknown>): { body: Record<stri
 }
 
 export function parseKieSubmission(text: string, httpStatus: number): { id: string } {
-  return { id: validateKieTaskId(taskData(text, httpStatus).taskId) };
+  return observeKieSubmission(jsonObject(text), httpStatus);
+}
+
+export function observeKieSubmission(body: Record<string, unknown>, httpStatus: number): { id: string } {
+  return { id: validateKieTaskId(taskData(body, httpStatus).taskId) };
 }
 
 export interface KieTaskObservation {
@@ -77,7 +80,11 @@ export interface KieTaskObservation {
 }
 
 export function parseKieTask(text: string, httpStatus: number, expectedId: string): KieTaskObservation {
-  return taskObservation(taskData(text, httpStatus), expectedId);
+  return observeKieTask(jsonObject(text), httpStatus, expectedId);
+}
+
+export function observeKieTask(body: Record<string, unknown>, httpStatus: number, expectedId: string): KieTaskObservation {
+  return taskObservation(taskData(body, httpStatus), expectedId);
 }
 
 function taskObservation(data: Record<string, unknown>, expectedId: string): KieTaskObservation {
@@ -98,7 +105,7 @@ function taskObservation(data: Record<string, unknown>, expectedId: string): Kie
 }
 
 export function parseKieResultUrls(text: string, httpStatus: number, expectedId: string): string[] {
-  const data = taskData(text, httpStatus);
+  const data = taskData(jsonObject(text), httpStatus);
   const observation = taskObservation(data, expectedId);
   if (observation.state !== "success") throw new Error("kie_result_not_successful");
   if (typeof data.resultJson !== "string") throw new Error("invalid_kie_result");
