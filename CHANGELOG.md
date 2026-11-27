@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add an opt-in native-test cascade adapter that rejects incomplete verification before fallback and preserves parser receipt types.
 - Record a two-repair big-integer Fusion controller check: 6/6 cascade passes, no fallback, 89.78% lower API cost and 10.01% lower observed mean workflow time than direct Terra, with explicit sampling limits.
 
 - Record a three-task Fusion HTTP pilot with one successful fallback and 61.01% lower estimated API cost; report the fragile latency margin and native Mocha test accounting.

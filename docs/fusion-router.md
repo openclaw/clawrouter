@@ -405,6 +405,35 @@ execution of generated code. Adapter errors, malformed receipts, deadlines and
 cancellation stop the workflow rather than triggering fallback. This caller-side
 mode does not enable a Worker routing policy or establish a model-quality gain.
 
+For a caller with one complete native test suite, use
+`runNativeCascade` from `scripts/fusion-native-cascade.mjs`:
+
+```js
+const result = await runNativeCascade({
+  draftModel: 'provider/cheap-model',
+  fallbackModel: 'provider/fallback-model',
+  expectedTests: 53,
+  invokeAndVerify: async ({ phase, model, signal }) => {
+    // These two functions are supplied by the caller.
+    const { artifact, costMicros } = await invokeModel({ phase, model, signal });
+    const tests = artifact === null ? null : await checkInSandbox(artifact, { signal });
+    return { artifact, costMicros, tests }; // tests: { valid, passed, assertions }
+  },
+  signal,
+});
+```
+
+The adapter accepts only valid native receipts at the exact expected assertion
+count. A valid test failure permits one fresh fallback. An incomplete test run,
+incorrect count, malformed receipt or callback error stops execution. An
+unusable candidate is explicitly `{ artifact: null, tests: null, costMicros }`;
+its charge is retained and it may use the fallback. The caller must reserve
+before each model call, honor the signal and choose adequate tests. Both models
+use the same gate, with no separate compiler check implied. The result retains
+native `checks` without stripping parser prototypes; those receipts may include
+source or diagnostic content. The existing `steps` and `onStep` metadata remain
+content-free. This adapter changes no serving defaults and makes no quality claim.
+
 For selector repairs, include preservation checks for inputs that must remain
 unselected. Build these checks from the baseline contract before generating a
 candidate, and run them for both strong controls and cheap drafts. Keep the
