@@ -4,7 +4,7 @@ import { fixtureResponses } from "./fixtures/personal-usage";
 
 const expiresAt = "2026-11-27T12:00:00.000Z";
 const policyId = "studio";
-const reason = "This key does not match the current policy and cannot be renewed.";
+const reason = "This key cannot be renewed because its policy changed. If you hold a policy, create a replacement key under it and update your client to use the new key.";
 
 for (const offset of [-1, 0, 1]) {
   test(`member renewal eligibility at expiry ${offset}ms: an explicitly mismatched policy never becomes renewable`, async ({ page }) => {

@@ -300,7 +300,7 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
           const mismatch = credential.enabled && credential.generationMatches === false;
           const reasonId = mismatch ? `renew-policy-mismatch-${credential.credentialId}` : undefined;
           const renewalReason = !credential.enabled ? "Revoked keys cannot be renewed."
-            : mismatch ? "This key does not match the current policy and cannot be renewed."
+            : mismatch ? "This key cannot be renewed because its policy changed. If you hold a policy, create a replacement key under it and update your client to use the new key."
             : held === "ready" && !policyIds.includes(credential.policyId) ? "Policy not held; renewal unavailable."
             : !credential.active && !credential.expired ? "This key is inactive and cannot be renewed." : undefined;
           return <article key={credential.credentialId}>
