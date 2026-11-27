@@ -149,6 +149,43 @@ accounting checks; rerunning the router requires the retained encoder and
 private development fixtures. These already exposed tasks cannot qualify
 fresh generalization, even if a later screen produces savings.
 
+## Public-test complexity routing screen
+
+A second zero-call screen tested features available before generation: public
+test count, public test text bytes, and the original broken baseline's public
+failure count. It preserved **29/30** correct outcomes, but saved only **17.13%**
+of model cost and added **21.72%** elapsed time. It fails the same 20% cost-saving
+and no-slowdown requirements. This rule is rejected for further paid testing.
+
+Each outer fold held out an entire source file and its sibling tasks. The
+training set fitted a single threshold in either direction on one of the three
+features. Thresholds came only from training values. A policy had to pass the
+quality, cost and time gates on that training set; otherwise the fold selected
+constant strong. Eligible policies were ranked by training cost, fewer cheap
+routes, then lexicographic policy order. Held-out outcomes did not select the
+policy. This uses training-fit selection, unlike the semantic screen's nested
+neighbor selection.
+
+The candidate used the same independent cheap control and public-failure
+fallback accounting as the semantic screen. Across thirty held-out tasks it
+selected eleven cheap routes, three of which required strong fallback. There
+were no observed lost strong successes or false accepts. Model cost was
+$0.268152 versus $0.323571 for strong-only; cache-neutral totals were $0.268156
+versus $0.323573. Summed elapsed time was 473.76 versus 389.22 seconds.
+
+A nominal one millisecond per decision was added to every task, including
+constant-strong decisions. The implementation checked that mean selection
+execution stayed below that allowance. This excludes production integration
+and feature-loading costs; it is not a latency guarantee. The screen already
+fails without needing to estimate those additional costs.
+
+The [complete screen data](fusion-test-complexity-routing-screen.json) includes
+all thirty rows, pre-generation feature values, held-out decisions, fold
+policies and audit hashes. Accounting and fold coverage were independently
+recomputed. The screen spent $0 on inference and used no model downloads or
+new runtime allocation. These exposed historical traces do not demonstrate
+fresh generalization, and no deployment or default changes follow.
+
 ## Recompute
 
 The [sanitized data](fusion-hard-anchor-study.json) includes every task outcome,
