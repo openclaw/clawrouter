@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Document Fusion repair experiments: faster paired fallback API calls, but a full-workflow replay still trails cheap-only and fails the latency gate.
+
 - Document a six-task Fusion transfer check: matched strong-only quality and 55.88% lower estimated model cost, but 24.68% more workflow time and a failed latency gate.
 
 - Preflight only the models used by a Fusion benchmark, including selected strategy advisers and fallbacks; unrelated model availability or credentials no longer block a run.
