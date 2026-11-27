@@ -2659,3 +2659,7 @@ for cascade and strong-only, versus 5/9 for independent cheap-only. Aggregate
 model cost fell 51.92% and workflow time fell 3.31%, but two rounds were slower
 than strong-only. The stricter repeated-development gate failed. These are
 three independent tasks sampled three times, not nine independent tasks.
+A zero-call follow-up recovered every rejected cheap edit through a unique
+exact-source match, and all seven recovered batches passed the original tests.
+The observed quality gap reflects edit-format rejection on this sample;
+prospective decoder validation is still required.

@@ -2,6 +2,8 @@
 
 The predeclared repeated-development gate failed. This study uses **three independent historical tasks**, each sampled three times. Nine task-draws do not mean nine independent tasks. No production or routing-default change is qualified.
 
+A subsequent zero-call diagnostic recovered every rejected cheap batch by correcting one wrong line number against a unique exact source match. All recovered edits passed the original public and held-out tests. The observed quality gap therefore does not establish a reasoning advantage for the strong fallback; edit-format rejection caused it on this sample.
+
 ## Measured outcome
 
 | Strategy | Full success | Estimated model cost | Workflow time |
@@ -19,6 +21,14 @@ There were 3 fallback rescues, 0 false accepts and 0 lost strong successes. The 
 | 1 | 2/3 | 3/3 | 3/3 | 52.21% | 1.118x | Fail |
 | 2 | 2/3 | 3/3 | 3/3 | 7.75% | 1.183x | Fail |
 | 3 | 1/3 | 3/3 | 3/3 | 89.48% | 0.574x | Pass |
+
+## Posthoc edit-format diagnostic
+
+All four failed cheap-only outputs and all three rejected cascade drafts had one incorrect line number. Their search text matched exactly one location in the frozen original source. A separate diagnostic moved only those invalid anchors, retained already-valid anchors, and required the normal edit and overlap checks plus a line-boundary match.
+
+All seven recovered batches passed both original public and full suites with the expected assertion counts. No search or replacement text changed, no new model call was made, and no tests or snapshots were relaxed. This shows a concrete path to avoiding these failures and fallback calls, not an additional live benchmark result. The original 5/9 cheap-only score, 9/9 cascade score, costs and timings above remain unchanged.
+
+This posthoc result needs a prospective comparison of the improved decoder. It does not qualify new timing, cost or production claims. The [sanitized diagnostic rows](fusion-lru-repeat-study.json) retain every relocation, original journal digest and test outcome.
 
 ## Qualification and scope
 

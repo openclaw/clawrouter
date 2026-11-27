@@ -308,6 +308,184 @@
       }
     ]
   },
+  "diagnostic": {
+    "schema": "lru-anchor-relocation-diagnostic-v1",
+    "protocolSha256": "ba7c0734bcac7d1ab7820d054c6e46bf0483bb485ed8f7d935d1d8d42891d35b",
+    "noPaidCalls": true,
+    "scope": "Posthoc replay of every original cheap/draft source-anchor rejection. Only move an invalid line number when exact original search text is unique and begins at a line boundary. No original outcome, timing or gain claim changes.",
+    "rows": [
+      {
+        "id": "lru-cache-05942bcc1023-r1",
+        "stage": "case-0/cheap/cheap",
+        "journalSha256": "8f5e49674a59f691a5e911c0bec35ee1718c10fcd1aab6dd8855068314617018",
+        "moves": [
+          {
+            "path": "index.js",
+            "from": 670,
+            "to": 676
+          }
+        ],
+        "public": {
+          "valid": true,
+          "passed": true,
+          "assertions": 166,
+          "expected": 166
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "assertions": 172,
+          "expected": 172
+        }
+      },
+      {
+        "id": "lru-cache-44c5ec96b87b-r1",
+        "stage": "case-2/cascade/draft",
+        "journalSha256": "1595f465230a8644e0027f88aa7160d96b43ee4c0fc5dde16f7f0d11ddbf8d49",
+        "moves": [
+          {
+            "path": "index.js",
+            "from": 559,
+            "to": 558
+          }
+        ],
+        "public": {
+          "valid": true,
+          "passed": true,
+          "assertions": 221,
+          "expected": 221
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "assertions": 355,
+          "expected": 355
+        }
+      },
+      {
+        "id": "lru-cache-05942bcc1023-r2",
+        "stage": "case-3/cheap/cheap",
+        "journalSha256": "325f6f72944d4d00534551c411ad03d4bf0c5ff1cdddea6afcd0e357e0f51b92",
+        "moves": [
+          {
+            "path": "index.js",
+            "from": 670,
+            "to": 677
+          }
+        ],
+        "public": {
+          "valid": true,
+          "passed": true,
+          "assertions": 166,
+          "expected": 166
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "assertions": 172,
+          "expected": 172
+        }
+      },
+      {
+        "id": "lru-cache-05942bcc1023-r2",
+        "stage": "case-3/cascade/draft",
+        "journalSha256": "0336542d6cafb9d4c7abbc2e437cb9654cd744743eef2a5270e86bae60dbeba6",
+        "moves": [
+          {
+            "path": "index.js",
+            "from": 670,
+            "to": 677
+          }
+        ],
+        "public": {
+          "valid": true,
+          "passed": true,
+          "assertions": 166,
+          "expected": 166
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "assertions": 172,
+          "expected": 172
+        }
+      },
+      {
+        "id": "lru-cache-44c5ec96b87b-r2",
+        "stage": "case-5/cascade/draft",
+        "journalSha256": "89454a57891c667489934515ece6b0c7419b79439d4efb880a688922b5b07fbd",
+        "moves": [
+          {
+            "path": "index.js",
+            "from": 97,
+            "to": 98
+          }
+        ],
+        "public": {
+          "valid": true,
+          "passed": true,
+          "assertions": 221,
+          "expected": 221
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "assertions": 355,
+          "expected": 355
+        }
+      },
+      {
+        "id": "lru-cache-05942bcc1023-r3",
+        "stage": "case-6/cheap/cheap",
+        "journalSha256": "7a1359c61319e3acd9f2d5a27515ccc4a2d416d28d4363a31be0319f712f84c4",
+        "moves": [
+          {
+            "path": "index.js",
+            "from": 677,
+            "to": 676
+          }
+        ],
+        "public": {
+          "valid": true,
+          "passed": true,
+          "assertions": 166,
+          "expected": 166
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "assertions": 172,
+          "expected": 172
+        }
+      },
+      {
+        "id": "lru-cache-44c5ec96b87b-r3",
+        "stage": "case-8/cheap/cheap",
+        "journalSha256": "89618d3252b31b48185a1e075ed5e4bcebeef89ad9ce75bad9619cdc6a317e44",
+        "moves": [
+          {
+            "path": "index.js",
+            "from": 101,
+            "to": 100
+          }
+        ],
+        "public": {
+          "valid": true,
+          "passed": true,
+          "assertions": 221,
+          "expected": 221
+        },
+        "full": {
+          "valid": true,
+          "passed": true,
+          "assertions": 355,
+          "expected": 355
+        }
+      }
+    ],
+    "sha256": "28c6880e5ea6595ad41fdbe22c0e3afe5c7d0d8aea1b076e61f730a851e0935e",
+    "conclusion": "All four failed cheap-only batches and all three rejected cascade drafts pass after unique exact-search relocation. Posthoc replay, not a new live result; no original metric or timing changed."
+  },
   "workflow": {
     "protocolSha256": "ba7c0734bcac7d1ab7820d054c6e46bf0483bb485ed8f7d935d1d8d42891d35b",
     "auditSha256": "e616a3adaa925d5133c1158471f1aa0dfe4f20b7cccd03d88d6621c12e38000b",

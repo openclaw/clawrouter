@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Document a repeated Fusion comparison on three LRU-cache tasks, retaining all ten qualification outcomes and separate cost, latency, and cheap-only quality gates for each round.
+- Document a repeated Fusion comparison on three LRU-cache tasks, including per-round gate failures and a zero-call diagnostic that recovers rejected cheap edits through unique exact-source matches.
 
 - Document Fusion repair experiments: faster paired fallback API calls, but a full-workflow replay still trails cheap-only and fails the latency gate.
 
