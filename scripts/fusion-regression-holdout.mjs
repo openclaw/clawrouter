@@ -3,33 +3,58 @@ import { createHash } from 'node:crypto';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 
+function literalTableValue(node, depth = 0) {
+  if (!node || depth >= 8) return false;
+  if (['StringLiteral', 'NumericLiteral', 'BooleanLiteral', 'NullLiteral', 'RegExpLiteral',
+    'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) return true;
+  if (node.type === 'Identifier') return node.name === 'undefined';
+  if (node.type === 'UnaryExpression') return ['+', '-'].includes(node.operator) && node.argument?.type === 'NumericLiteral';
+  return node.type === 'ArrayExpression' && node.elements.length <= 16
+    && node.elements.every(value => literalTableValue(value, depth + 1));
+}
+
+function staticTestName(node, bindings, depth = 0) {
+  if (!node || depth >= 16) return false;
+  if (node.type === 'StringLiteral') return true;
+  if (node.type === 'Identifier') return bindings.has(node.name);
+  if (node.type === 'TemplateLiteral') return node.expressions.every(value => value.type === 'Identifier' && bindings.has(value.name));
+  return node.type === 'BinaryExpression' && node.operator === '+'
+    && staticTestName(node.left, bindings, depth + 1) && staticTestName(node.right, bindings, depth + 1);
+}
+
 function staticLoopCount(node, bindings = new Set(), depth = 0) {
   const declaration = node.left, values = node.right?.elements;
   const binding = declaration?.declarations?.[0];
+  const tuple = binding?.id?.type === 'ArrayPattern';
+  const names = tuple ? binding.id.elements : [binding?.id];
   assert.ok(node.type === 'ForOfStatement' && !node.await && depth < 8
     && declaration?.type === 'VariableDeclaration' && declaration.kind === 'const'
-    && declaration.declarations.length === 1 && binding.id?.type === 'Identifier' && binding.init === null
+    && declaration.declarations.length === 1 && binding.init === null
+    && names.length > 0 && names.length <= 16 && names.every(name => name?.type === 'Identifier')
+    && new Set(names.map(name => name.name)).size === names.length
     && node.right?.type === 'ArrayExpression' && values.length > 0 && values.length <= 256
-    && values.every(value => ['StringLiteral', 'NumericLiteral', 'BooleanLiteral', 'NullLiteral'].includes(value?.type)
-      || value?.type === 'Identifier' && value.name === 'undefined')
-    && node.body?.type === 'BlockStatement', 'unsupported_static_regression_loop');
-  const names = new Set([...bindings, binding.id.name]);
+    && values.every(value => tuple
+      ? value?.type === 'ArrayExpression' && value.elements.length === names.length && literalTableValue(value)
+      : ['StringLiteral', 'NumericLiteral', 'BooleanLiteral', 'NullLiteral'].includes(value?.type)
+        || value?.type === 'Identifier' && value.name === 'undefined')
+    && ['BlockStatement', 'ExpressionStatement'].includes(node.body?.type), 'unsupported_static_regression_loop');
+  const boundNames = new Set([...bindings, ...names.map(name => name.name)]);
   function count(nodes) {
     return nodes.reduce((total, child) => {
       if (child.type === 'EmptyStatement') return total;
       if (child.type === 'BlockStatement') return total + count(child.body);
-      if (child.type === 'ForOfStatement') return total + staticLoopCount(child, names, depth + 1);
+      if (child.type === 'ForOfStatement') return total + staticLoopCount(child, boundNames, depth + 1);
       const call = child.expression, [name, fn] = call?.arguments ?? [];
       assert.ok(call?.type === 'CallExpression' && ['test', 'it'].includes(call.callee?.name)
+        && !boundNames.has(call.callee.name)
         && call.arguments.length === 2
-        && (name?.type === 'StringLiteral' || name?.type === 'TemplateLiteral'
-          && name.expressions.every(value => value.type === 'Identifier' && names.has(value.name)))
+        && staticTestName(name, boundNames)
         && ['FunctionExpression', 'ArrowFunctionExpression'].includes(fn?.type)
         && fn.body?.type === 'BlockStatement', 'unsupported_static_regression_loop');
       return total + 1;
     }, 0);
   }
-  const registrations = values.length * count(node.body.body);
+  const registrations = values.length * count(node.body.type === 'BlockStatement' ? node.body.body : [node.body]);
   assert.ok(Number.isSafeInteger(registrations) && registrations > 0 && registrations <= 256,
     'unsupported_static_regression_loop');
   return registrations;
