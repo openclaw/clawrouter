@@ -102,6 +102,47 @@ for (const typed of [false, true]) {
   });
 }
 
+for (const allowed of [true, false]) {
+  test(`an early edit can explicitly select the sole model before a late ${allowed ? "grant" : "denial"}`, async ({ page }) => {
+    const { state, routes } = await fixture(page);
+    routes.openaiCompatible = routes.openaiCompatible.filter(route => route.provider === "openai");
+    routes.manifestProxy = [];
+    state.members = [access("openai", allowed, true)];
+    const inventory = Promise.withResolvers<void>();
+    const entitlement = Promise.withResolvers<void>();
+    state.hold = entitlement.promise;
+    await page.route("**/v1/routes", async route => { await inventory.promise; await route.fallback(); });
+    const pending = page.waitForRequest("**/v1/routes");
+    const picker = page.getByRole("combobox", { name: "Model or route" });
+    const message = page.getByRole("textbox", { name: "Message", exact: true });
+    const heading = page.locator(".chatHeader strong");
+    try {
+      await page.goto("/dashboard/playground");
+      await pending;
+      await message.fill("Keep this draft");
+      await message.press("Enter"); // No dispatch, and nothing queued to replay.
+      inventory.resolve();
+      await expect(picker.getByRole("option", { name: "chat", exact: true })).toHaveCount(1);
+      await expect(heading).toHaveText("Select a model");
+      await expect(picker.locator("option:checked")).toHaveText("Select a model or route");
+      await expect(send(page)).toBeDisabled();
+
+      await picker.press("ArrowDown");
+      await expect(heading).toHaveText("openai/chat");
+      await expect(picker).toHaveValue("model:openai/chat");
+      await expect(picker).toBeFocused();
+      await expect(send(page)).toBeDisabled(); // Selecting a model doesn't grant access.
+      entitlement.resolve();
+      await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+      await expect(message).toHaveValue("Keep this draft");
+      if (allowed) await expect(send(page)).toBeEnabled();
+      else await expect(send(page)).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Inspect assistant response" })).toHaveCount(0);
+      expect(state.unexpected).toEqual([]);
+    } finally { inventory.resolve(); entitlement.resolve(); }
+  });
+}
+
 test("service-only inventory initializes a model-bearing proxy preset using its real body field", async ({ page }) => {
   const { state, routes } = await fixture(page);
   routes.openaiCompatible = [];
