@@ -36,6 +36,8 @@
 
 - Allow trusted caller-side Fusion tasks to opt into replacements of package-root `index.js` and `default.js`, retaining source-path, test-file and size restrictions.
 
+- Keep admin bootstrap credential counts consistent with its credential snapshot when a key expires during assembly.
+
 ## 0.6.0 - 2026-11-26
 
 **Highlights:** Expand provider and model support, strengthen routing and usage accounting, improve native session continuity, and add bounded caller-side Fusion workflows with explicit qualification evidence.
