@@ -1,7 +1,7 @@
 import { googleSpeechModels, observeGoogleSpeech, prepareGoogleSpeech } from "./google-speech.ts";
 import { jsonBodyBytes } from "./json-body.ts";
 import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
-import { readNativeJson } from "./native-json.ts";
+import { readIdentityNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { HttpError } from "./http-error.ts";
@@ -36,15 +36,7 @@ export function prepareNativeGoogleSpeech(selection: ProxySelection): NativeResp
     origin: "https://generativelanguage.googleapis.com", path: prepared.path,
     acquire: () => nativeResponseLease(32 * 1024 * 1024),
     async read(response, signal) {
-      const encoding = response.headers.get("content-encoding");
-      if (response.status !== 200 || response.redirected || encoding !== null && encoding.trim().toLowerCase() !== "identity") {
-        void response.body?.cancel().catch(() => undefined); invalid();
-      }
-      if (encoding !== null) {
-        const headers = new Headers(response.headers); headers.delete("content-encoding");
-        response = new Response(response.body, { status: response.status, headers });
-      }
-      return readNativeJson(response, signal, responseLimit, original => {
+      return readIdentityNativeJson(response, signal, responseLimit, original => {
         const root = object(original), blocks: unknown[] = [];
         let output: Record<string, unknown>;
         if (interactions) {
