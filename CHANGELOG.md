@@ -28,6 +28,8 @@
 
 - Preflight only the models used by a Fusion benchmark, including selected strategy advisers and fallbacks; unrelated model availability or credentials no longer block a run.
 
+- Document Fusion cost pilots: a one-task WebSocket saving failed to transfer to three redaction repairs; retain higher workflow time and study limitations.
+
 - Stage Fusion public test files in one sandbox command while preserving file and symlink checks.
 
 - Document a seven-task Fusion comparison with independent cheap-only and strong-only controls: 7/7 cascade success, three fallback rescues and 51.33% lower model cost than strong-only, with 5.99% higher measured time and explicit study limits.
