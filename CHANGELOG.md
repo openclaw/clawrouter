@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add an opt-in native-test cascade adapter that rejects incomplete verification before fallback and preserves parser receipt types.
+- Record a three-task Fusion HTTP pilot with one successful fallback and 61.01% lower estimated API cost; report the fragile latency margin and native Mocha test accounting.
 
 - Record a five-task Fusion cost study with four successful fallbacks, 58.49% lower estimated API cost and a failed no-slowdown gate.
 
