@@ -5,6 +5,11 @@ wire/result fixture is `providers/_fixtures/kie/jobs.json`. No provider manifest
 raw task-ID route is enabled by this slice. Run
 `node --test worker/test/kie-jobs.test.mjs` without dependencies.
 
+The `parseKie*` entry points accept bounded JSON text. Managed responses use
+`observeKieSubmission` and `observeKieTask` after `readMediaJson` has checked the
+response, bounded its bytes and parsed its object. Both paths share task and
+credit validation; the parsed path does not decode the same envelope again.
+
 Use bearer auth at `https://api.kie.ai`: submit `/api/v1/jobs/createTask`, then read
 `/api/v1/jobs/recordInfo?taskId=...`. Reject callbacks for this polling slice.
 Bind the returned task ID to the original caller, policy, credential and selected
