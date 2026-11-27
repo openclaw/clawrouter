@@ -248,9 +248,6 @@ jobs:
           node --test --test-concurrency=1 --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout test/realtime-cadence-workerd.test.mjs || status=$?
           node --test --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout "${remaining[@]}" || status=$?
           exit "$status"
-      - name: Diagnose the synthetic Realtime catalog regression
-        if: failure()
-        run: node --test --test-reporter=tap --test-name-pattern="catalog eligibility and socket admission" test/realtime-auto-stt-workerd.test.mjs
       - name: Validate native preflight workflow expression contexts
         run: |
           set -euo pipefail

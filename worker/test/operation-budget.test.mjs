@@ -46,7 +46,7 @@ test("pricing and zero-limit guards agree with mandatory reservation admission",
   assert.deepEqual(operationAffordability(noPrincipal, connection, priced, "llm.chat", endpoint, observation), { status: "exact-blocked", reasonCode: "principal_required" });
 });
 
-test("Realtime soft budgets require a positive balance, while reserve mode requires capacity", () => {
+test("Realtime soft budgets preserve exhaustion checks, while reserve mode requires capacity", () => {
   const provider = providerById("openai");
   const realtime = provider.endpoints.find(({ id }) => id === "realtime");
   const model = provider.models.find(({ id }) => id === "openai/gpt-realtime-2.1");

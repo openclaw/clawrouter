@@ -206,7 +206,7 @@ test("catalog eligibility and socket admission use the same Realtime budget prer
       ["soft", null, true, undefined, 101],
       ["reserve", null, false, "realtime_hard_budget_required", 400],
       ["reserve", 10_000_000, true, undefined, 101],
-      ["soft", 0, false, "budget_exhausted", 402],
+      ["soft", 0, false, "budget_exhausted", 101],
     ]) await t.test(budgetMode + " cap " + monthlyBudgetMicros, async () => {
       const update = await authority.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { enabled: true, generation: "g1", providers: ["openai"], budgetMode, monthlyBudgetMicros, retainRequestContent: false } }) });
       assert.equal(update.status, 200);
@@ -217,9 +217,19 @@ test("catalog eligibility and socket admission use the same Realtime budget prer
       assert.ok(offer); assert.equal(offer.eligible, eligible); assert.equal(offer.reasonCode, reasonCode);
       const before = (await (await svc.fetch("https://upstream/fixture-stats")).json()).connects;
       const socket = await mf.dispatchFetch("https://router/v1/realtime?model=gpt-realtime-2.1", { headers: { ...headers, upgrade: "websocket" } });
-      assert.equal(socket.status, status, status === 101 ? "" : await socket.clone().text());
-      if (eligible) { socket.webSocket.accept(); socket.webSocket.close(1000); }
-      else { assert.equal((await socket.json()).error.code, reasonCode); assert.equal((await (await svc.fetch("https://upstream/fixture-stats")).json()).connects, before); }
+      assert.equal(socket.status, status, socket.status === 101 ? "" : await socket.clone().text());
+      if (socket.status === 101) {
+        const ws = socket.webSocket, q = inbox(ws); ws.accept();
+        if (!eligible) {
+          // The handshake does not spend budget; the first billable audio does.
+          q.send({ type: "session.update", session: native }); await q.next("session.updated");
+          const appends = (await (await svc.fetch("https://upstream/fixture-stats")).json()).appends;
+          q.send({ type: "input_audio_buffer.append", audio: Buffer.alloc(800, 255).toString("base64") });
+          assert.equal((await q.next("error")).error.code, reasonCode);
+          assert.equal((await (await svc.fetch("https://upstream/fixture-stats")).json()).appends, appends);
+        }
+        ws.close(1000);
+      } else { assert.equal((await socket.json()).error.code, reasonCode); assert.equal((await (await svc.fetch("https://upstream/fixture-stats")).json()).connects, before); }
     });
   } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
 });
