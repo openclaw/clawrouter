@@ -1,7 +1,136 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceReadPaths, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, appendHandoffEvidence, retainRegressionProbe, executorModel, advisoryBody, actionFeedback, repositoryActionSchema, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
+
+test('a predecessor cannot modify visible tests or inject duplicate source paths', async () => {
+  const task = { editPaths: ['worker/a.ts'], visibleTests: ['worker/test/a.test.mjs'] };
+  for (const initialFiles of [[{ path: task.visibleTests[0], content: 'weakened' }],
+    [{ path: 'worker/a.ts', content: 'a' }, { path: 'worker/a.ts', content: 'b' }]]) {
+    await assert.rejects(runAgent(task, 'invalid-image', 'strong', 'fixture', {}, async () => {}, undefined,
+      { initialFiles }), /invalid_edit/);
+  }
+});
+
+test('both contract executors isolate source handoff and independently check the final repair offline', () => {
+  const exercise = async scripts => {
+    const { default: assert } = await import('node:assert/strict');
+    const { mock } = await import('node:test');
+    const { default: childProcess } = await import('node:child_process');
+    const { syncBuiltinESMExports } = await import('node:module');
+    for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {
+      childProcess[name] = () => assert.fail('offline fixture must not start a workload');
+    }
+    syncBuiltinESMExports();
+    globalThis.fetch = () => assert.fail('offline fixture must not contact a service');
+    const workloads = new URL('fusion-workloads.mjs', scripts).href;
+    const actual = await import(workloads);
+    const path = 'worker/value.ts', original = 'export const value = 0;\n';
+    const task = { instruction: 'Return the required value 2.', editPaths: [path], visibleTests: ['worker/test/value.test.mjs'] };
+    let boxes, checks;
+    mock.module(workloads, { namedExports: { ...actual,
+      taskSandbox: async () => {
+        const box = { files: new Map([[path, original], [task.visibleTests[0], 'unchanged test example']]),
+          closed: false, async close() { this.closed = true; } };
+        boxes.push(box); return box;
+      },
+      readSource: async (box, paths) => paths.map(path => ({ path, content: box.files.get(path) })),
+      readTaskContext: async () => [],
+      writeFiles: async (box, files) => {
+        for (const file of actual.validateEdits(task, files)) box.files.set(file.path, file.content);
+      },
+      check: async () => ({ valid: true, passed: true, tests: 1, skipped: 0, feedback: '' }),
+      probe: async box => {
+        const content = box.files.get(path), passed = content === original.replace('0', '2');
+        checks.push({ box, content });
+        return { valid: true, passed, assertionFailed: !passed, feedback: passed ? '' : 'required value not returned' };
+      },
+    } });
+    const { runAgent } = await import(new URL('fusion-agent-benchmark.mjs', scripts));
+    const { runContractAgent, runSingleDraft } = await import(new URL('fusion-contract-agent.mjs', scripts));
+    const { models } = await import(new URL('fusion-benchmark-accounting.mjs', scripts));
+    for (const agent of [runAgent, runSingleDraft]) for (const handoffCandidate of [false, true]) {
+      boxes = []; checks = [];
+      const calls = new Map();
+      const invoke = async (_id, role, body) => {
+        const turn = (calls.get(role) ?? 0) + 1; calls.set(role, turn);
+        const cheap = role === models.cheap;
+        assert.ok(cheap || role === models.strong);
+        const current = cheap || !handoffCandidate ? original : original.replace('0', '1');
+        if (turn === 1) {
+          const prompt = body.messages[1].content;
+          assert.ok(prompt.includes(JSON.stringify(current).slice(1, -1)));
+          if (!cheap) {
+            assert.ok(!JSON.stringify(body).includes('cheap-only-note'));
+            assert.equal(prompt.includes('untrusted source changes'), handoffCandidate);
+          }
+        }
+        const edits = [{ path, search: current, replace: original.replace('0', cheap ? '1' : '2') }];
+        const action = agent === runSingleDraft ? { edits } : {
+          action: turn === 1 ? 'edit' : 'finish', paths: [], edits: turn === 1 ? edits : [], query: '',
+          memory: cheap ? 'cheap-only-note' : '',
+        };
+        return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
+      };
+      const result = await runContractAgent(task, 'offline-fixture', 'source-handoff',
+        { maxTurns: 8, outputTokens: 256, deadlineMs: 10000 }, invoke,
+        { agent, providedProbe: 'synthetic fixed check', cheapMaxCalls: 2, handoffCandidate });
+      assert.deepEqual(result.files, [{ path, content: original.replace('0', '2') }]);
+      assert.equal(result.outcome, agent === runAgent ? 'submitted' : 'draft_submitted');
+      assert.equal(result.contractPassed, true);
+      assert.equal(result.escalated, true);
+      assert.equal(result.turns, agent === runAgent ? 4 : 2);
+      assert.equal(result.candidateHandedOff, handoffCandidate ? true : undefined);
+      assert.equal(calls.size, 2);
+      assert.equal(boxes.length, 5);
+      assert.equal(new Set(boxes).size, 5);
+      assert.ok(boxes.every(box => box.closed && box.files.get(task.visibleTests[0]) === 'unchanged test example'));
+      assert.deepEqual(checks.map(check => check.content), [original, original.replace('0', '1'), original.replace('0', '2')]);
+      assert.equal(new Set(checks.map(check => check.box)).size, 3);
+      assert.equal(boxes[0].files.get(path), original);
+    }
+  };
+  const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--input-type=module', '--eval',
+    `(${exercise.toString()})(${JSON.stringify(new URL('../scripts/', import.meta.url).href)})`],
+  { encoding: 'utf8', env: {}, timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+});
+
+test('a fresh executor installs predecessor source before preload and verifies independently', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { loadTasks, command, verify } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  assert.equal(receipt.qualified, true);
+  const source = async revision => (await command('git', ['show', `${revision}:${task.editPaths[0]}`])).stdout.toString();
+  const repaired = await source(task.oracle), original = await source(task.base);
+  let calls = 0;
+  const invoke = async (_id, _role, body) => {
+    const prompt = body.messages[1].content;
+    assert.match(prompt, /untrusted predecessor repair/);
+    assert.ok(prompt.includes(JSON.stringify(repaired).slice(1, -1)));
+    calls++;
+    return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+      action: 'finish', paths: [], edits: [], query: '', memory: '',
+    }) } }] };
+  };
+  const config = { maxTurns: 1, outputTokens: 256, deadlineMs: 120000 };
+  const output = await runAgent(task, receipt.image, 'strong', 'fixture', config, invoke, undefined,
+    { preloadSource: true, initialFiles: [{ path: task.editPaths[0], content: repaired }] });
+  assert.equal(calls, 1);
+  assert.equal(output.publicPassed, true);
+  assert.equal((await verify(task, receipt.image, output.files, process.cwd())).passed, true);
+  // The predecessor was installed only in its own sandbox, not the immutable baseline.
+  const baseline = await runAgent(task, receipt.image, 'strong', 'baseline', config, async () => ({
+    choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ action: 'finish', paths: [], edits: [], query: '', memory: '' }) } }],
+  }));
+  assert.equal(baseline.files[0].content, original);
+});
 
 test('compact actions put the decision before bounded notes without mutating legacy requests', () => {
   const legacy = repositoryActionSchema(), compact = repositoryActionSchema('compact');
