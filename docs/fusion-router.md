@@ -442,6 +442,16 @@ diagnostics into the fallback request. Include only feedback the model may see,
 and keep held-out evaluation results separate. A missing artifact remains `null`.
 The repair still uses the same native verification gate and two-call limit.
 Existing callers keep fresh fallback behavior and their original request shape.
+Set `fallbackAttempts: 2` to allow one repair of a failed strong fallback. The
+third request has `phase: 'fallback-repair'` and receives an isolated copy of the
+failed strong artifact plus its explicit `publicFeedback`, bounded to 12,000
+UTF-8 bytes. This applies with either fallback mode; feedback from the initial
+draft is not substituted for missing feedback from the strong fallback. A
+successful earlier attempt stops execution. The default remains one fallback
+and at most two calls. Only values 1 and 2 are accepted. Callers enabling this
+option must reserve for all three possible calls. Invalid verification,
+callback errors, cancellation and deadlines still stop execution without a
+repair call. This option does not establish a workload quality or cost gain.
 This is an in-memory helper; it has no stored state, pending callbacks or native
 deployment transition. Callers continue to own provider admission and accounting.
 
