@@ -11,7 +11,9 @@ import test from "node:test";
 import { localAdminEnvironment } from "../scripts/grant-target.mjs";
 
 const { default: worker } = await import("../worker/index.ts");
-const { PolicyBindingIndexObject } = await import("../worker/authority.ts");
+const { createGrantAuthority } = await import("../worker/test/grant-authority-fixture.mjs");
+const { sqliteStorage } = await import("../worker/test/sqlite-storage.mjs");
+const { accessBytesResponse } = await import("../worker/test/access-byte-fixture.mjs");
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const secretA = "synthetic-secret-a", secretB = "synthetic-secret-b", rotated = "synthetic-rotated-secret";
 const putArgs = (kid, providers = "openai") => ["--kid", kid, "--providers", providers, "--secret-stdin", "--local"];
@@ -175,24 +177,24 @@ async function scriptFixture(t) {
   function restart() {
     db?.close();
     db = new DatabaseSync(join(dir, "authority.sqlite"));
-    authority = new PolicyBindingIndexObject({ storage: { sql: { exec(query, ...bindings) {
-      const statement = db.prepare(query);
-      if (statement.columns().length) return statement.all(...bindings);
-      statement.run(...bindings);
-      return [];
-    } } } });
+    authority = createGrantAuthority(undefined, env, sqliteStorage(db));
   }
-  restart();
   const env = {
     CLAWROUTER_ADMIN_TOKEN_SHA256: hash("admin-fixture"),
     CLAWROUTER_CONTENT_RETENTION_DEFAULT: "false",
-    ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: (url, init) => authority.fetch(new Request(url, init)) }) },
+    ACCESS_CONTROL: { idFromName: (name) => name, get: () => authority },
     POLICY_KV: {
-      async get(key) { assert.equal(closed, false, "closed migration read KV"); return structuredClone(values.get(key) ?? null); },
+      async get(key, type) {
+        assert.equal(closed, false, "closed migration read KV");
+        if (!values.has(key)) return null;
+        const value = structuredClone(values.get(key));
+        return type === "stream" ? accessBytesResponse(JSON.stringify(value), "").body : value;
+      },
       async list({ prefix }) { assert.equal(closed, false, "closed migration listed KV"); return { list_complete: true, keys: [...values.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })) }; },
       async put() { writes++; assert.fail("key mutation wrote KV"); },
     },
   };
+  restart();
   const dispatch = (request) => worker.fetch(request, env, { waitUntil() { assert.fail("key administration started background work"); } });
   const server = createServer(async (incoming, outgoing) => {
     try {
