@@ -28,7 +28,7 @@
 
 - Preflight only the models used by a Fusion benchmark, including selected strategy advisers and fallbacks; unrelated model availability or credentials no longer block a run.
 
-- Document a multi-file WebSocket Fusion pilot: matched Terra controls at lower estimated API cost, with higher workflow time and explicit one-task limits.
+- Document Fusion cost pilots: a one-task WebSocket saving failed to transfer to three redaction repairs; retain higher workflow time and study limitations.
 
 - Stage Fusion public test files in one sandbox command while preserving file and symlink checks.
 

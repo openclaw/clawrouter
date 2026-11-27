@@ -50,6 +50,12 @@ individual model-call costs and API times.
   excludes initial runtime admission and final grading. API time in the JSON is
   a separate measurement, not workflow time.
 
+## Transfer check
+
+A [subsequent three-task redaction study](fusion-redaction-cost-pilot.md) did not
+repeat the cost saving: every Luna attempt required fallback, and the cascade
+cost more than both Terra controls. The WebSocket result is case-specific.
+
 ## Limits
 
 Three repetitions of one historical public repair cannot establish general
