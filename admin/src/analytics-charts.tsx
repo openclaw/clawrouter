@@ -91,6 +91,7 @@ export function ProviderUsageChart({ providers, services, limit = 6 }: { provide
         <tbody>{visible.map((provider) => {
           const service = serviceByProvider.get(provider.provider);
           const name = provider.provider === "other-providers" ? "Other providers" : service?.name ?? provider.provider;
+          const errors = `${provider.errorCount.toLocaleString("en-US")} ${provider.errorCount === 1 ? "error" : "errors"}`;
           const successRate = provider.requestCount ? Math.round((provider.successCount / provider.requestCount) * 100) : 0;
           const cost = presentAccountedSpend(provider);
           return <tr key={provider.provider}>
@@ -103,12 +104,12 @@ export function ProviderUsageChart({ providers, services, limit = 6 }: { provide
             <td>
               <span className="providerChartVolume">
                 <strong>{formatCount(provider.requestCount)}</strong>
-                <span className="providerChartTrack" role="img" aria-label={`${provider.requestCount} requests, ${provider.errorCount} errors`}>
+                <span className="providerChartTrack" role="img" aria-label={`${provider.requestCount} requests, ${errors}`}>
                   <span className="providerChartSuccess" style={{ width: `${provider.successCount / maximum * 100}%` }} />
                   <span className="providerChartErrors" style={{ width: `${provider.errorCount / maximum * 100}%` }} />
                 </span>
               </span>
-              <small>{successRate}% success</small>
+              <small>{successRate === 100 && provider.errorCount > 0 ? ">99" : successRate}% success · {errors}</small>
             </td>
             <td title={cost.note}>{cost.value}</td>
           </tr>;
