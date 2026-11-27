@@ -1,18 +1,25 @@
 import snapshot from "../../worker/generated/provider-snapshot.json" with { type: "json" };
+import { emptyUsageSnapshot } from "../../worker/usage-sharding";
 import { expect, test, type Page } from "@playwright/test";
 
 const now = new Date("2030-01-01T00:00:00Z");
 const policy = { policyId: "pool", enabled: true, providers: ["anthropic"], grantRouting: { eligibleGrants: {}, environmentFallback: true, staleState: "allow", staleAfterSeconds: 300, includedQuotaReservePercent: 0 } };
 const grant = { key: "oauth/pool/claude", scope: "policies", scopeId: "pool", tokenRef: "claude", provider: "anthropic", kind: "subscription", label: "Fixture login", enabled: true, usable: true, hasRefreshToken: true, credentialStatus: "active", credentialFields: [], scopes: [], selectedCount: 1, priority: 100, weight: 1, quotaWindows: [], quotaStatus: "unknown" };
 async function fixture(page: Page, fields: Record<string, unknown> = {}, role = "admin", failed = false) {
+  const session = { authenticated: true, auth: "cloudflare_access", role, email: "operator@example.test", subject: null, tenantId: "default", groups: [] };
   await page.clock.setFixedTime(now);
   await page.route("**/v1/**", async route => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path === "/v1/session/usage" && url.search === "?budgets_only=true") {
+      await route.fulfill({ json: { session, policies: [], usage: emptyUsageSnapshot("not_requested") } });
+      return;
+    }
     if (failed && path === "/v1/admin/bootstrap") { await route.fulfill({ status: 503, json: { error: { message: "fixture read unavailable" } } }); return; }
     const bodies: Record<string, unknown> = {
       "/v1/providers": { providers: snapshot.providers.filter(provider => provider.id === "anthropic") }, "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-      "/v1/session": { authenticated: true, auth: "cloudflare_access", role, email: "operator@example.test", entitlements: { providers: [] } },
-      "/v1/session/credentials": { credentials: [] }, "/v1/session/usage": { policies: [] },
+      "/v1/session": { ...session, entitlements: { providers: [] } },
+      "/v1/session/credentials": { credentials: [] },
       "/v1/admin/bootstrap": { policies: [policy], credentials: [], users: [], bindings: [], grants: [{ ...grant, ...fields }, { ...grant, key: "oauth/pool/setup", tokenRef: "setup", label: "Healthy fallback", hasRefreshToken: false }], rules: [], providers: [], connections: [], fusion: { enabled: false, adviserModels: [], aggregatorModel: "" }, overview: null, tenants: [] },
       "/v1/admin/upstream-grants/usage": { days: 7, retentionDays: 30, grants: [], lanes: [], daily: [] },
     };
@@ -56,6 +63,8 @@ test("failed admin reads say expiry health is unavailable, not all clear", async
 test("member dashboard never exposes private grant deadlines", async ({ page }) => {
   await fixture(page, { refreshTokenExpiresAt: "2030-01-01T12:00:00Z" }, "user");
   await page.goto("/dashboard");
+  await expect(page.getByText("No quota pools assigned", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Your gateway, operator" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Pool refresh expiry health" })).toHaveCount(0);
+  expect(await page.pageErrors()).toEqual([]);
 });
