@@ -3,6 +3,7 @@ import { Info } from 'lucide-react';
 import type { PersonalUsageEvent, UsageCostSummary, UsageMetrics } from '../../../shared/usage-report';
 import { UsageCoverage, CompleteExport, ExactRanking } from './complete-usage';
 import { UsagePeriod } from '../usage-period';
+import { parseUsageRangeInput } from '../usage-range';
 import { usageCaveats, prepareUsageFile, downloadUsageFile } from '../complete-usage';
 import type { CompleteUsageQuery, CompleteUsageReport } from '../../../shared/usage-report';
 import type { PersonalUsageData } from '../hooks/use-personal-usage';
@@ -180,16 +181,35 @@ export function PersonalUsageSummary({ data, onOpen, comparison }: { data: Perso
   </section>;
 }
 
-function UsageControls({ query, onChange, onRefresh, onClear, onPreset, onBack, loading, children }: { children?: ReactNode; onBack?: () => void; query: PersonalUsageQuery; onChange: (query: PersonalUsageQuery) => void; onRefresh: () => void; onClear: () => void; onPreset:(days:7|30,draft:PersonalUsageQuery)=>void; loading: boolean }) {
+function UsageControls({ query, appliedRange, onChange, onRefresh, onClear, onPreset, onBack, loading, children }: { appliedRange?: CompleteUsageQuery; children?: ReactNode; onBack?: () => void; query: PersonalUsageQuery; onChange: (query: PersonalUsageQuery) => void; onRefresh: () => void; onClear: () => void; onPreset:(days:7|30,draft:PersonalUsageQuery)=>void; loading: boolean }) {
   const [draft, setDraft] = useState(query);
-  useEffect(() => setDraft(query), [query]);
-  const apply = (next: PersonalUsageQuery) => { setDraft(next); onChange(next); };
+  const [rangeError, setRangeError] = useState('');
+  const advanced = useRef<HTMLDetailsElement>(null);
+  const rangeErrorId = useId();
+  useEffect(() => { setDraft(query); setRangeError(''); }, [query]);
+  function apply(next: PersonalUsageQuery) {
+    try {
+      parseUsageRangeInput(next);
+    } catch (error) {
+      // An invalid draft is not a new report selection (or a retryable read failure).
+      if (advanced.current) advanced.current.open = true;
+      setRangeError(error instanceof Error ? error.message : 'Check the dates and timezone.');
+      return;
+    }
+    setRangeError('');
+    setDraft(next);
+    onChange(next);
+  }
+  function editRange(next: Partial<Pick<PersonalUsageQuery, 'from' | 'to' | 'timezone' | 'rollingDays'>>) {
+    setRangeError('');
+    setDraft({ ...draft, ...next });
+  }
   const setFilter = (key: keyof PersonalUsageQuery['filters'], value: string) => setDraft({ ...draft, filters: { ...draft.filters, [key]: value } });
   function submit(event: FormEvent) {
     event.preventDefault();
-    onChange(draft);
+    apply(draft);
   }
-  return <form className="dashboardPanel personalControls personalCompactControls" aria-label="Usage filters" onSubmit={submit}>
+  return <form noValidate className="dashboardPanel personalControls personalCompactControls" aria-label="Usage filters" onSubmit={submit}>
     <div className="personalControlRow">
       <h2 className="srOnly">Report controls</h2>
       <div className="personalActions">
@@ -201,13 +221,13 @@ function UsageControls({ query, onChange, onRefresh, onClear, onPreset, onBack, 
     </select></label>
       {children}
     </div>
-    <details className="personalAdvanced">
+    <details ref={advanced} className="personalAdvanced">
       <summary>Custom dates & exact filters</summary>
       <p className="personalNote">Start/end accept YYYY-MM-DD in the chosen IANA timezone, or RFC3339 instants with Z or an explicit UTC offset. End is exclusive. Maximum 30 days; server-confirmed boundaries appear below.</p>
       <div className="personalFilterGrid">
-        <label>Start<input value={draft.from} onChange={event => setDraft({ ...draft, from: event.target.value, rollingDays: undefined })} required={!draft.rollingDays} /></label>
-        <label>End (exclusive)<input value={draft.to} onChange={event => setDraft({ ...draft, to: event.target.value, rollingDays: undefined })} required={!draft.rollingDays} /></label>
-        <label>Timezone<input value={draft.timezone} placeholder="Europe/Berlin" onChange={event => setDraft({ ...draft, timezone: event.target.value })} required /></label>
+        <label>Start<input value={draft.from} aria-describedby={rangeError ? rangeErrorId : undefined} onChange={event => editRange({ from: event.target.value, rollingDays: undefined })} required={!draft.rollingDays} /></label>
+        <label>End (exclusive)<input value={draft.to} aria-describedby={rangeError ? rangeErrorId : undefined} onChange={event => editRange({ to: event.target.value, rollingDays: undefined })} required={!draft.rollingDays} /></label>
+        <label>Timezone<input value={draft.timezone} aria-describedby={rangeError ? rangeErrorId : undefined} placeholder="Europe/Berlin" onChange={event => editRange({ timezone: event.target.value })} required /></label>
         {(['model', 'provider', 'key', 'status'] as const).map(key => <label key={key}>
           {key === 'key' ? 'Key ID' : key[0].toUpperCase() + key.slice(1)} (exact)
           <input value={draft.filters[key]} maxLength={256} onChange={event => setFilter(key, event.target.value)} />
@@ -221,6 +241,10 @@ function UsageControls({ query, onChange, onRefresh, onClear, onPreset, onBack, 
           {costLanes.map(value => <option key={value} value={value}>{laneLabel[value]}</option>)}
         </select></label>
       </div>
+      {rangeError && <p role="alert" className="personalWarning" id={rangeErrorId}>
+        <strong>Changes not applied.</strong> {rangeError}
+        {appliedRange && <> Current report: <UsagePeriod query={appliedRange} compact /> ({appliedRange.timezone}, end exclusive).</>}
+      </p>}
       <div className="personalActions">
         <button type="submit">Apply filters</button>
         <button type="button" className="buttonSecondary" onClick={onClear}>Clear filters</button>
@@ -489,7 +513,7 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
     return <UsageDetails value={value} data={data} />;
   }
   return <div className="personalUsageCanvas">
-    <UsageControls query={query} onChange={setQuery} onRefresh={data.reload} onPreset={data.choosePreset} onClear={data.clearFilters} onBack={q && !report.error ? data.back : undefined} loading={report.loading}>
+    <UsageControls query={query} appliedRange={value?.query} onChange={setQuery} onRefresh={data.reload} onPreset={data.choosePreset} onClear={data.clearFilters} onBack={q && !report.error ? data.back : undefined} loading={report.loading}>
       <button ref={compareButton} type="button" className="buttonSecondary" aria-disabled={!q || Boolean(report.error) || comparingKeys} onClick={event => {
         if (!q || report.error || comparingKeys) return;
         if (selectedKey) selectKey(undefined);
