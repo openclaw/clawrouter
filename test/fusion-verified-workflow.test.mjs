@@ -12,6 +12,55 @@ function fixture(verdicts) {
     verify: async ({ stage }) => verdicts[stage] ?? good,
     onStep: step => { receipts.push(step); } };
 }
+test('missing draft can skip cheap repair without reallocating its call or losing feedback and costs', async () => {
+  for (const fallbackMode of ['fresh', 'repair']) {
+    for (const fallbackAttempts of [1, 2]) {
+      const f = fixture({ 'strong-fallback': runtimeError, 'strong-fallback-repair': runtimeError });
+      const invoke = f.invoke;
+      f.invoke = async request => request.stage === 'draft'
+        ? (f.requests.push(request), { artifact: null, feedback: 'invalid edit', costMicros: 5 }) : invoke(request);
+      const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', draftAttempts: 2,
+        repairMissingDraft: false, fallbackAttempts, fallbackMode });
+      assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'strong-fallback', 'strong-fallback-repair'].slice(0, fallbackAttempts + 1));
+      assert.equal(f.requests[1].draft, null);
+      assert.deepEqual(f.requests[1].feedback, fallbackMode === 'fresh' ? null
+        : { runtimePassed: false, compilerPassed: false, feedback: 'invalid edit' });
+      assert.equal(r.costMicros, 5 + fallbackAttempts * 7);
+      assert.equal(r.passed, false);
+    }
+  }
+});
+test('missing-draft policy preserves default repairs and still repairs usable artifacts', async () => {
+  for (const repairMissingDraft of [undefined, true, false]) {
+    for (const artifact of [null, { failed: true }]) {
+      const f = fixture({ draft: runtimeError });
+      const invoke = f.invoke;
+      f.invoke = async request => request.stage === 'draft'
+        ? (f.requests.push(request), { artifact, costMicros: 5 }) : invoke(request);
+      const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', draftAttempts: 2, repairMissingDraft });
+      assert.deepEqual(f.requests.map(x => x.stage), ['draft', repairMissingDraft === false && artifact === null
+        ? 'strong-fallback' : 'draft-repair']);
+      assert.equal(r.passed, true);
+      assert.equal(r.costMicros, 12);
+    }
+  }
+});
+test('missing-draft policy rejects invalid options and never converts provider errors into fallback', async () => {
+  for (const repairMissingDraft of [null, 0, 1, 'false']) {
+    const f = fixture({});
+    await assert.rejects(runVerifiedWorkflow({ ...f, strategy: 'cascade', repairMissingDraft }), /invalid_verified_workflow/);
+    assert.equal(f.requests.length, 0);
+  }
+  for (const strategy of ['strong', 'fusion']) {
+    const f = fixture({});
+    await assert.rejects(runVerifiedWorkflow({ ...f, strategy, repairMissingDraft: false }), /invalid_verified_workflow/);
+    assert.equal(f.requests.length, 0);
+  }
+  let calls = 0;
+  await assert.rejects(runVerifiedWorkflow({ models, strategy: 'cascade', draftAttempts: 2, repairMissingDraft: false,
+    invoke: async () => { calls++; throw Error('provider failed'); }, verify: async () => assert.fail('unexpected verification') }), /provider failed/);
+  assert.equal(calls, 1);
+});
 test('cascade accepts a verified draft with only two configured models', async () => {
   const f = fixture({});
   const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', models: { draft: models.draft, repair: models.repair } });
