@@ -109,6 +109,46 @@ research target.
 This remains a caller-side development study. No service is deployed and no
 production default changes. It is separate from the Worker ensemble endpoint.
 
+## Semantic pre-routing screen
+
+A follow-up used the saved independent controls for all thirty tasks to test
+whether instruction similarity could avoid unproductive cheap attempts.
+It made **zero model calls** and spent **$0**. All twenty held-out source-file
+folds selected the constant strong-only policy: **29/30**, no cost reduction
+and no workflow-time reduction. This router is rejected for further paid testing.
+
+The fixed encoder was cached `all-MiniLM-L6-v2`: normalized 384-dimensional
+mean-pooled vectors, with input limited to 256 tokens. Only the original task
+instruction, minus its trailing issue number, entered the encoder. Candidate
+policies used 1, 3 or 5 nearest neighbors and similarity thresholds of 0, 0.5,
+0.7, 0.85 or 0.95, plus an all-strong policy. A cheap route required every
+selected neighbor to preserve strong success and cost less than strong.
+
+Both inner policy selection and outer evaluation held out an entire source
+file, including sibling tasks. Inner selection required the same quality,
+20% cost-saving and no-slowdown gates as this study. Eligible policies were
+ranked by cost, then fewer cheap routes, then fixed grid order. If none passed,
+the fold used strong-only. Policy selection never saw its outer fold's outcomes.
+
+This screen's candidate was the original independent cheap control, with up
+to two attempts, followed by the original independent strong control when
+public tests failed. Both traces were charged on fallback. Public-pass/full-fail
+outputs remained false accepts; hidden outcomes never triggered fallback.
+This differs from the live study's one-draft cascade. Historical trace sums
+are not live routed latency measurements.
+
+The measured cold single-query encoder process took 261.67 ms; the slowest
+warm query took 1.62 ms. The full cold time was charged per task whenever a
+fold selected a nonconstant policy, including decisions that chose strong.
+Constant strong-only did not invoke the encoder and received no charge.
+
+The [screen summary](fusion-semantic-routing-screen.json) retains the fixed
+grid, source-group decisions, accounting and audit hashes. The audit reproduced
+all vectors and decisions from cached inputs. The sanitized summary supports
+accounting checks; rerunning the router requires the retained encoder and
+private development fixtures. These already exposed tasks cannot qualify
+fresh generalization, even if a later screen produces savings.
+
 ## Recompute
 
 The [sanitized data](fusion-hard-anchor-study.json) includes every task outcome,

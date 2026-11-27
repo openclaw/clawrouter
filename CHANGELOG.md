@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Record a zero-call semantic Fusion routing screen: all twenty source-file holdouts choose strong-only, providing no savings.
+
 - Document the complete thirty-task Fusion exact-anchor repeat: matched strong-only quality and 41.65% lower estimated model cost, but 13.97% more workflow time and a failed no-slowdown gate.
 
 - Allow Fusion transfer reports to enforce a stricter declared workflow-time ceiling while preserving the historical 1.2x default.
