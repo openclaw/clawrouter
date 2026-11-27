@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow Fusion transfer reports to enforce a stricter declared workflow-time ceiling while preserving the historical 1.2x default.
+
 - Document a fresh four-task Fusion URI comparison: all arms passed, and cheaper, faster independent small-model results prevented a fusion-value claim.
 
 - Document a repeated Fusion comparison on three LRU-cache tasks, including per-round gate failures and a zero-call diagnostic that recovers rejected cheap edits through unique exact-source matches.

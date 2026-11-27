@@ -8,7 +8,7 @@ const totals = (rows, normalized) => ({
   elapsedMs: rows.reduce((sum, row) => sum + row.elapsedMs, 0),
 });
 
-function summarize(rows, normalized) {
+function summarize(rows, normalized, maxElapsedRatio = 1.2) {
   const result = Object.fromEntries(strategies.map(strategy =>
     [strategy, totals(rows.filter(row => row.strategy === strategy), normalized)]));
   assert.ok(result.strong.costMicros > 0 && result.strong.elapsedMs > 0, 'missing_strong_denominator');
@@ -21,7 +21,7 @@ function summarize(rows, normalized) {
   result.falseAccepts = rows.filter(row => row.strategy === 'cascade' && row.publicPassed && !row.passed).length;
   result.strongLosses = rows.filter(row => row.strategy === 'strong' && row.passed
     && !rows.find(peer => peer.repeat === row.repeat && peer.caseId === row.caseId && peer.strategy === 'cascade').passed).length;
-  result.efficiencyGate = result.costRatio <= 0.8 && result.elapsedRatio <= 1.2
+  result.efficiencyGate = result.costRatio <= 0.8 && result.elapsedRatio <= maxElapsedRatio
     && (!normalized || result.normalizedCostRatio <= 0.8);
   return result;
 }
@@ -80,11 +80,13 @@ export function summarizeRepeatability(records, taskIds, { expectedTasks = 6, co
 }
 
 /** Summarize one draw on every declared task, independent of accounting batches. */
-export function summarizeTransfer(records, taskIds, { expectedTasks = 30 } = {}) {
+export function summarizeTransfer(records, taskIds, { expectedTasks = 30, maxElapsedRatio = 1.2 } = {}) {
+  assert.ok(Number.isFinite(maxElapsedRatio) && maxElapsedRatio > 0 && maxElapsedRatio <= 1.2,
+    'invalid_elapsed_ceiling');
   const costBasis = 'invoice-and-cache-neutral-v1';
   validateStudy(records, taskIds, expectedTasks, costBasis, [undefined],
     'complete_single_draw_study_required');
-  const aggregate = summarize(records, true);
+  const aggregate = summarize(records, true, maxElapsedRatio);
   return {
     uniqueTasks: expectedTasks,
     drawsPerTask: 1,
