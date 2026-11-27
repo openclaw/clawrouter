@@ -79,3 +79,28 @@ final passes, at least one fallback rescue, lower cost than Terra and no slower
 mean complete workflow. The cascade met the quality and cost conditions but
 failed the time condition. The three draws on one task cannot qualify a serving
 policy even if all conditions pass. No serving default or deployment changes.
+
+
+## Follow-up: reduce verification overhead
+
+One verification-only replay attributed about 3.20 seconds to the TAP CLI test
+phase and 1.52 seconds to sandbox creation. A separate frozen comparison tested
+running the original single test file directly with Node and its existing TAP
+library. It kept the same sandbox, protected files, strict result parser and
+assertion counts, with a stricter 30-second process deadline.
+
+Before timing, the direct runner matched all four reference/baseline outcomes
+and full/public counts. Three alternating pairs then ran the same recorded
+passing candidate:
+
+| Runner | Mean verification seconds | Samples |
+| --- | ---: | ---: |
+| Existing TAP CLI | 4.387 | 3 |
+| Direct single-file TAP | 2.116 | 3 |
+
+The direct runner reduced mean verification time by 51.76% in this small
+comparison. Every timed run passed all 84,927 public assertions. This is a
+measured verifier improvement, not an end-to-end fusion speedup: both cascade
+and strong-only workflows could benefit. The original inference timings and
+failed no-slowdown result above remain unchanged. The direct runner is an
+explicit experimental option, and its generality beyond this task is unproven.

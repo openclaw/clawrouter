@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Record a one-task serializer Fusion pilot with two fallback rescues and lower model cost, while retaining its failed workflow-time target and independent cheap-only comparison.
+- Record a one-task serializer Fusion pilot with two fallback rescues and lower model cost, while retaining its failed workflow-time target and independent cheap-only comparison; report a separate direct-TAP verifier improvement.
 
 - Record a parser Fusion feedback pilot: both cascades cost more than direct Terra; precise source context recovered one rejected edit in a small conditional study.
 

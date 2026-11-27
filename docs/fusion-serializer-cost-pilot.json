@@ -242,5 +242,351 @@
   "timing": "workflow: API calls, accounting, public verification; excludes initial runtime admission and final grading",
   "costSavingVsStrongPercent": 23.357342348963694,
   "workflowExtraVsStrongPercent": 35.72137942493332,
-  "productionQualified": false
+  "productionQualified": false,
+  "verificationProfile": {
+    "protocolSha256": "d501718ad444834157b85584127e2c1472b47db227b4b485ec02e218f6ee6058",
+    "resultSha256": "c06303f738b6a606b480736bd6f682e2ab9480fcc9a0f55ea468d2df7b700255",
+    "noModelCalls": true,
+    "parity": true,
+    "qualification": [
+      {
+        "phase": "referenceFull",
+        "valid": true,
+        "passed": true,
+        "assertions": 84928
+      },
+      {
+        "phase": "baselineFull",
+        "valid": true,
+        "passed": false,
+        "assertions": 84928
+      },
+      {
+        "phase": "referencePublic",
+        "valid": true,
+        "passed": true,
+        "assertions": 84927
+      },
+      {
+        "phase": "baselinePublic",
+        "valid": true,
+        "passed": false,
+        "assertions": 84927
+      }
+    ],
+    "measurements": [
+      {
+        "repeat": 0,
+        "runnerMode": "cli",
+        "totalMs": 4296.169333,
+        "phases": [
+          {
+            "name": "load-tools",
+            "ms": 5.138958999999886
+          },
+          {
+            "name": "load-helper",
+            "ms": 0.13720800000010058
+          },
+          {
+            "name": "create-sandbox",
+            "ms": 201.1768749999992
+          },
+          {
+            "name": "check-seed",
+            "ms": 41.54612500000076
+          },
+          {
+            "name": "unpack-tools",
+            "ms": 304.41862500000025
+          },
+          {
+            "name": "stage-files",
+            "ms": 44.486291999999594
+          },
+          {
+            "name": "protect-tests",
+            "ms": 229.14116699999977
+          },
+          {
+            "name": "run-tests",
+            "ms": 3215.0060829999984
+          },
+          {
+            "name": "verify-tests",
+            "ms": 50.41837499999929
+          },
+          {
+            "name": "close-sandbox",
+            "ms": 126.47358300000087
+          }
+        ],
+        "assertions": 84927,
+        "stdoutSha256": "84bfb5612718293d44e0e63274aa32beece19e8bb44971a752226116e36ef17d",
+        "valid": true,
+        "passed": true
+      },
+      {
+        "repeat": 0,
+        "runnerMode": "direct-single",
+        "totalMs": 2069.2409590000007,
+        "phases": [
+          {
+            "name": "load-tools",
+            "ms": 5.2370000000009895
+          },
+          {
+            "name": "load-helper",
+            "ms": 0.13700000000062573
+          },
+          {
+            "name": "create-sandbox",
+            "ms": 203.77679100000023
+          },
+          {
+            "name": "check-seed",
+            "ms": 41.373999999999796
+          },
+          {
+            "name": "unpack-tools",
+            "ms": 298.60133400000086
+          },
+          {
+            "name": "stage-files",
+            "ms": 44.44733400000041
+          },
+          {
+            "name": "protect-tests",
+            "ms": 194.0779590000002
+          },
+          {
+            "name": "run-tests",
+            "ms": 1058.0096249999988
+          },
+          {
+            "name": "verify-tests",
+            "ms": 41.186791000000085
+          },
+          {
+            "name": "close-sandbox",
+            "ms": 119.33079100000032
+          }
+        ],
+        "assertions": 84927,
+        "stdoutSha256": "0113a5e89d93a7072c264a1c3017b208285de9b20c1b760fb08c316acf342f68",
+        "valid": true,
+        "passed": true
+      },
+      {
+        "repeat": 1,
+        "runnerMode": "direct-single",
+        "totalMs": 2082.1013329999987,
+        "phases": [
+          {
+            "name": "load-tools",
+            "ms": 5.200375000000349
+          },
+          {
+            "name": "load-helper",
+            "ms": 0.16625000000021828
+          },
+          {
+            "name": "create-sandbox",
+            "ms": 183.5345839999991
+          },
+          {
+            "name": "check-seed",
+            "ms": 40.3804999999993
+          },
+          {
+            "name": "unpack-tools",
+            "ms": 302.7412080000013
+          },
+          {
+            "name": "stage-files",
+            "ms": 39.46879099999933
+          },
+          {
+            "name": "protect-tests",
+            "ms": 204.65962500000023
+          },
+          {
+            "name": "run-tests",
+            "ms": 1073.4474169999994
+          },
+          {
+            "name": "verify-tests",
+            "ms": 44.09820799999943
+          },
+          {
+            "name": "close-sandbox",
+            "ms": 124.8536669999994
+          }
+        ],
+        "assertions": 84927,
+        "stdoutSha256": "0b85aa0502ff76381033600a798bcaf80a0396a8370252ef08731f42dcb873a8",
+        "valid": true,
+        "passed": true
+      },
+      {
+        "repeat": 1,
+        "runnerMode": "cli",
+        "totalMs": 4393.356250000001,
+        "phases": [
+          {
+            "name": "load-tools",
+            "ms": 5.12724999999773
+          },
+          {
+            "name": "load-helper",
+            "ms": 0.13804099999833852
+          },
+          {
+            "name": "create-sandbox",
+            "ms": 195.60370799999873
+          },
+          {
+            "name": "check-seed",
+            "ms": 42.23833300000115
+          },
+          {
+            "name": "unpack-tools",
+            "ms": 323.06483300000036
+          },
+          {
+            "name": "stage-files",
+            "ms": 43.542874999999185
+          },
+          {
+            "name": "protect-tests",
+            "ms": 197.0635000000002
+          },
+          {
+            "name": "run-tests",
+            "ms": 3333.422292000003
+          },
+          {
+            "name": "verify-tests",
+            "ms": 54.185208999999304
+          },
+          {
+            "name": "close-sandbox",
+            "ms": 122.68325000000186
+          }
+        ],
+        "assertions": 84927,
+        "stdoutSha256": "2cfeb0e124c574f0b37c6388610610a832237c2b22a2615ab0a88e8698ccee7a",
+        "valid": true,
+        "passed": true
+      },
+      {
+        "repeat": 2,
+        "runnerMode": "cli",
+        "totalMs": 4469.985207999998,
+        "phases": [
+          {
+            "name": "load-tools",
+            "ms": 5.229707999998936
+          },
+          {
+            "name": "load-helper",
+            "ms": 0.13716700000077253
+          },
+          {
+            "name": "create-sandbox",
+            "ms": 189.12225000000035
+          },
+          {
+            "name": "check-seed",
+            "ms": 35.52874999999767
+          },
+          {
+            "name": "unpack-tools",
+            "ms": 303.27666699999827
+          },
+          {
+            "name": "stage-files",
+            "ms": 38.8159169999999
+          },
+          {
+            "name": "protect-tests",
+            "ms": 200.02391699999862
+          },
+          {
+            "name": "run-tests",
+            "ms": 3466.3481659999998
+          },
+          {
+            "name": "verify-tests",
+            "ms": 45.75816699999996
+          },
+          {
+            "name": "close-sandbox",
+            "ms": 106.82237499999974
+          }
+        ],
+        "assertions": 84927,
+        "stdoutSha256": "8d7b2b65a2477d5cfff43d8e695abe6d0ac6710673bb4af8998396c1e38a6409",
+        "valid": true,
+        "passed": true
+      },
+      {
+        "repeat": 2,
+        "runnerMode": "direct-single",
+        "totalMs": 2196.5071669999998,
+        "phases": [
+          {
+            "name": "load-tools",
+            "ms": 5.275290999998106
+          },
+          {
+            "name": "load-helper",
+            "ms": 0.12370800000280724
+          },
+          {
+            "name": "create-sandbox",
+            "ms": 191.2935839999991
+          },
+          {
+            "name": "check-seed",
+            "ms": 38.817833000000974
+          },
+          {
+            "name": "unpack-tools",
+            "ms": 310.27549999999974
+          },
+          {
+            "name": "stage-files",
+            "ms": 43.683915999998135
+          },
+          {
+            "name": "protect-tests",
+            "ms": 190.4986659999995
+          },
+          {
+            "name": "run-tests",
+            "ms": 1142.2753330000014
+          },
+          {
+            "name": "verify-tests",
+            "ms": 47.169958000002225
+          },
+          {
+            "name": "close-sandbox",
+            "ms": 164.52691699999923
+          }
+        ],
+        "assertions": 84927,
+        "stdoutSha256": "f90c64ab5e5f9d811eb4c3b06a30f29e1da67c3aa5404555bd1a3325edf41360",
+        "valid": true,
+        "passed": true
+      }
+    ],
+    "meanMs": {
+      "cli": 4386.503597,
+      "direct-single": 2115.9498196666664
+    },
+    "reductionPercent": 51.76226867535687,
+    "scope": "Three alternating verification-only pairs on one recorded passing candidate. Original inference times unchanged; no end-to-end fusion speed claim."
+  }
 }
