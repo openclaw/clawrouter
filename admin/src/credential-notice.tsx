@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { InlineError, InlineNote } from "./components";
 import type { CredentialOperations } from "./hooks/use-credential-operations";
 
@@ -16,15 +16,27 @@ export function CredentialNotice({ state }: { state: CredentialFeedback }) {
 }
 
 function IssuedCredential({ reveal, onDismiss }: { reveal: NonNullable<CredentialFeedback["reveal"]>; onDismiss: () => void }) {
-  const [copyStatus, setCopyStatus] = useState("");
-  async function copy() {
+  const statusId = useId();
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "manual" | "focus-manual">("idle");
+  async function copy(button: HTMLButtonElement) {
     try {
       if (!navigator.clipboard) throw new Error("clipboard unavailable");
       await navigator.clipboard.writeText(reveal.key);
-      setCopyStatus("Copied");
+      setCopyState("copied");
     } catch {
-      setCopyStatus("Copy failed. Select and copy the key manually before dismissing it.");
+      // A delayed permission prompt must not take focus back from another control.
+      setCopyState(document.activeElement === button ? "focus-manual" : "manual");
     }
   }
-  return <div className="issuedKey"><div><span>copy now · shown once · stored nowhere else</span><span>{reveal.credentialId} · {reveal.policyId}</span><code>{reveal.key}</code>{copyStatus ? <span role="status">{copyStatus}</span> : null}</div><div><button type="button" className="buttonSecondary" onClick={() => void copy()}>Copy</button><button type="button" className="buttonSecondary" onClick={onDismiss}>Dismiss</button></div></div>;
+  const manual = copyState === "manual" || copyState === "focus-manual";
+  return <div className="issuedKey"><div>
+    <span>copy now · shown once · stored nowhere else</span><span>{reveal.credentialId} · {reveal.policyId}</span>
+    {manual
+      ? <input aria-label="One-time key" aria-describedby={statusId} readOnly autoFocus={copyState === "focus-manual"} value={reveal.key} onFocus={(event) => event.currentTarget.select()} />
+      : <code>{reveal.key}</code>}
+    {copyState !== "idle" ? <span id={statusId} role="status">{manual ? "Automatic copy unavailable. Use your device’s Copy command before dismissing the key." : "Copied"}</span> : null}
+  </div><div>
+    {!manual ? <button type="button" className="buttonSecondary" onClick={(event) => void copy(event.currentTarget)}>Copy</button> : null}
+    <button type="button" className="buttonSecondary" onClick={onDismiss}>Dismiss</button>
+  </div></div>;
 }

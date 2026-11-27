@@ -591,21 +591,38 @@ for (const inactive of ["owner", "generation", "policy"] as const) {
   });
 }
 
-test("clipboard failure is visible, Dismiss works by keyboard, and refresh cannot re-reveal", async ({ page }) => {
-  await fixture(page);
+test("a denied clipboard write selects the one-time key for keyboard copy without reissuing it", async ({ page }) => {
+  const state = await fixture(page);
   await page.addInitScript(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("denied"); } } }));
   await openAdmin(page);
   await draft(page, "copy_key");
   await page.getByRole("button", { name: "Issue credential", exact: true }).click();
-  await page.getByRole("button", { name: "Copy", exact: true }).click();
-  await expect(page.locator(".issuedKey")).toContainText("Copy failed");
+  const issued = page.locator(".issuedKey");
+  await issued.getByRole("button", { name: "Copy", exact: true }).press("Enter");
+  const field = issued.getByRole("textbox", { name: "One-time key" });
+  await expect(field).toHaveAccessibleDescription("Automatic copy unavailable. Use your device’s Copy command before dismissing the key.");
+  const hasFullSelection = () => field.evaluate((el: HTMLInputElement) => el.readOnly && /^clawrouter-live-copy_key-[0-9a-f]{48}$/.test(el.value) && el.selectionStart === 0 && el.selectionEnd === el.value.length);
+  await expect(field).toBeFocused();
+  expect(await hasFullSelection()).toBe(true);
+  // Observe native Copy without writing the fixture key to the host clipboard.
+  await field.evaluate(el => el.addEventListener("copy", event => { event.preventDefault(); el.dataset.copyObserved = "true"; }, { once: true }));
+  await page.keyboard.press("ControlOrMeta+c");
+  await expect(field).toHaveAttribute("data-copy-observed", "true");
+  await field.click();
+  expect(await hasFullSelection()).toBe(false);
+  await page.keyboard.press("Tab");
+  await expect(issued.getByRole("button", { name: "Dismiss" })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(field).toBeFocused();
+  expect(await hasFullSelection()).toBe(true);
   expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   const dismiss = page.getByRole("button", { name: "Dismiss", exact: true });
   await dismiss.focus();
   await page.keyboard.press("Enter");
-  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  await expect(issued).toHaveCount(0);
   await focusRefresh(page);
-  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  await expect(issued).toHaveCount(0);
+  expect(state.writes).toHaveLength(1);
   expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   for (const theme of ["light", "dark"] as const) {
     if (theme === "dark") await page.getByRole("switch", { name: "Light mode", exact: true }).click();
@@ -614,6 +631,28 @@ test("clipboard failure is visible, Dismiss works by keyboard, and refresh canno
     await expect.poll(() => button.evaluate((element) => getComputedStyle(element.querySelector("span")!).color === getComputedStyle(element).color)).toBe(true);
     expect((await new AxeBuilder({ page }).include(".tableSectionHeader").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   }
+});
+
+test("a late clipboard denial does not steal focus from Dismiss in My keys", async ({ page }) => {
+  const state = await fixture(page);
+  type ClipboardWindow = Window & { denyCopy?: () => void };
+  await page.addInitScript(() => Object.defineProperty(navigator, "clipboard", { value: {
+    writeText: () => new Promise<void>((_resolve, reject) => { (window as ClipboardWindow).denyCopy = () => reject(new Error("denied")); }),
+  } }));
+  await page.goto("/");
+  await connected(page);
+  await page.getByRole("button", { name: "Create key", exact: true }).click();
+  const issued = page.locator(".myKeysPanel .issuedKey");
+  await issued.getByRole("button", { name: "Copy", exact: true }).press("Enter");
+  await page.keyboard.press("Tab");
+  const dismiss = issued.getByRole("button", { name: "Dismiss", exact: true });
+  await expect(dismiss).toBeFocused();
+  await page.evaluate(() => (window as ClipboardWindow).denyCopy!());
+  await expect(issued.getByRole("textbox", { name: "One-time key" })).toBeVisible();
+  await expect(dismiss).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(issued).toHaveCount(0);
+  expect(state.writes).toHaveLength(1);
 });
 
 type HashWindow = Window & { releaseHash?: () => void };
