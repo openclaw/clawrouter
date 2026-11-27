@@ -540,6 +540,8 @@ still get their configured repair attempt. The default is `true`, preserving
 the existing sequence. Only cascades accept `false`. A skipped attempt is not
 reassigned to the fallback: deadlines, maximum calls and cost accounting stay
 unchanged. This option does not turn provider errors into missing artifacts.
+The [development check](fusion-missing-draft-study.md) records its limited
+quality and cost evidence, including the failed savings gate.
 
 The default `draftAttempts: 1` preserves the current sequence. Only 1 and 2
 are accepted, and only cascades may use 2. Combining `draftAttempts: 2` with
