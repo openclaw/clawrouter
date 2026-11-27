@@ -98,6 +98,11 @@ grading attempt remain failures; a supplied incomplete grade invalidates the run
 Grounded and checked repair profiles also stop on incomplete visible checks,
 including checks after an edit or a review submission.
 
+## Independent cheap and strong controls
+
+The [seven-task, two-repository comparison](fusion-independent-controls.md) includes matched independent cheap-only and strong-only arms: cascade 7/7, strong-only 7/7 and cheap-only 2/7, with three fallback rescues. Cascade model cost was 51.33% lower than strong-only and measured time 5.99% higher. This is a bounded development result, not production qualification.
+
+
 ## Bounded caller-side tool trajectories
 
 `scripts/fusion-trajectory.mjs` exports `runTrajectory`,
