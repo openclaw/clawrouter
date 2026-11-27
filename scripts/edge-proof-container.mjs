@@ -57,9 +57,9 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "package.json",
-    "blob": "639c899f294dbfe1fb374891f47f694598f051ac",
-    "sha256": "070c6e64cafd5d6c08819bce2621d345d48cdf0ed5a067a0a96b320fad083dc3",
-    "bytes": 2859
+    "blob": "c041c37429b26f14d29bef125ca4182661002c65",
+    "sha256": "35d99c5dc343c182750d691f983f985a517d99de45568b13fe480900ad6a6fb4",
+    "bytes": 2888
   },
   {
     "path": "packages/provider-plugin-contract/LICENSE",
@@ -195,9 +195,9 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "pnpm-lock.yaml",
-    "blob": "6bbea6484ace8dcadba5a1b82ac74a095ab10e2a",
-    "sha256": "00dfde610072dfde318c87a2a9f9905d737a108e7bef29fb3a16577d9cb18f53",
-    "bytes": 57136
+    "blob": "35bf0158fc6e5777f7cc44abbd42e7c0069b9a65",
+    "sha256": "cdee8518fd85ac4f192c3f873beb54acb47687c2efc493faadb11c492ba68a6b",
+    "bytes": 58642
   },
   {
     "path": "pnpm-workspace.yaml",
