@@ -99,6 +99,9 @@ current arithmetic pass does not establish a robust cost advantage.
 The [sanitized follow-up records](fusion-retained-repair-followup.json) identify
 the six distinct calls, their reuse and the private receipt hashes. These are
 previously exposed tasks, not independent confirmation. There is no comparable
-end-to-end timing. The expanded semantic audit was not rerun for these selected
-artifacts; the full-suite score cannot replace it. Production qualification and
-Worker routing defaults remain unchanged.
+end-to-end timing. No expanded semantic tests were rerun. The one changed
+artifact covered by the existing 23-task semantic audit is byte-identical to
+its previously audited strong control. Reusing that exact-source receipt
+preserves two reference mismatches and leaves the expanded result at **17/23**.
+The full-suite score cannot replace that broader check. Production qualification
+and Worker routing defaults remain unchanged.

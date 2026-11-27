@@ -7,6 +7,20 @@
   "collaborationGainEstablished": false,
   "timingComparable": false,
   "expandedSemanticAuditRun": false,
+  "semanticEvidence": {
+    "method": "reuse-byte-identical-previously-audited-strong-artifact",
+    "taskId": "juliangruber/balanced-match@a508f2cb510d0848684caba628355852384d85be",
+    "sourceSha256": "438aaac99e1379b1e9cbec894145bb4b9f1b37070a50665ed3f31233a1b87aee",
+    "protocolSha256": "2e9b7cefdfa8af78f45085eaeceda579b9bbd55ed626eeaed23aed9a20e8271e",
+    "resultSha256": "25a9618b949dbe62c0ee9a984fac6881efaa9d6d6ed246876156bd44c3d0c525",
+    "changedArtifactsCovered": 1,
+    "changedMatchesReference": false,
+    "changedMismatches": 2,
+    "matchesReference": 17,
+    "tasks": 23,
+    "newNativeRuns": 0,
+    "newModelCalls": 0
+  },
   "provenance": {
     "originalProtocolSha256": "475b870aa9f4003f17fba5f1e23718d934b1024c9633bb18e9ff14f0a1e9ac61",
     "originalAggregateSha256": "6392c8c5ad3f000f4c0c177ce20204e0fabedd4d5555f14723602f7d6f9a5b89",

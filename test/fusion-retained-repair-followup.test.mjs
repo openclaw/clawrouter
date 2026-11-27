@@ -44,5 +44,12 @@ test('cached-control threshold crossing does not establish independent qualifica
   for (const key of ['populationQualified', 'productionQualified', 'collaborationGainEstablished',
     'timingComparable', 'expandedSemanticAuditRun']) assert.equal(study[key], false);
   for (const digest of Object.values(study.provenance)) assert.match(digest, /^[a-f0-9]{64}$/);
+  const semantic = study.semanticEvidence;
+  assert.equal(study.cases.filter(row => row.taskId === semantic.taskId).length, semantic.changedArtifactsCovered);
+  assert.equal(semantic.changedMatchesReference, false);
+  assert.equal(semantic.changedMismatches, 2);
+  assert.equal(semantic.matchesReference, 17); assert.equal(semantic.tasks, 23);
+  assert.equal(semantic.newNativeRuns, 0); assert.equal(semantic.newModelCalls, 0);
+  for (const key of ['sourceSha256', 'protocolSha256', 'resultSha256']) assert.match(semantic[key], /^[a-f0-9]{64}$/);
   assert.doesNotMatch(raw, /\/Users\/|\/home\/|api[_-]?key|authorization/i);
 });
