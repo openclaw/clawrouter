@@ -174,6 +174,8 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
     "worker/provider-auth.ts",
     "worker/grant-compatibility.ts",
     "worker/model-discovery-formats.ts",
+    "worker/model-discovery-request.ts",
+    "worker/model-discovery.ts",
     "worker/authority.ts",
     "worker/grant-owner-facts.ts",
     "worker/authority-admission.ts",
