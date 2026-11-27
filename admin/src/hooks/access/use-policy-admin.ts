@@ -94,8 +94,8 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
           includedQuotaReservePercent: optionalNumber(policyForm.grantIncludedQuotaReservePercent) ?? 0,
           staleState: policyForm.grantStaleState,
           staleAfterSeconds: optionalNumber(policyForm.grantStaleAfterSeconds) ?? 300,
-          switchAtUsedPercent: optionalNumber(policyForm.grantSwitchAtUsedPercent) ?? 90,
-          hysteresisPercent: optionalNumber(policyForm.grantHysteresisPercent) ?? 10,
+          switchAtUsedPercent: routingPercent(policyForm.grantSwitchAtUsedPercent, 90, "Switch at used"),
+          hysteresisPercent: routingPercent(policyForm.grantHysteresisPercent, 10, "Switch margin"),
           eligibleGrants: parseEligibleGrants(policyForm.eligibleGrants),
         },
       };
@@ -239,6 +239,13 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
     captureHydration,
     hydrate,
   };
+}
+
+function routingPercent(input: string, fallback: number, label: string): number {
+  if (!input.trim()) return fallback;
+  const value = Number(input);
+  if (!Number.isFinite(value) || value < 0 || value > 100) throw new Error(`${label}: enter a percentage from 0 to 100.`);
+  return value;
 }
 
 function newPolicyForm(session: SessionResponse): PolicyForm {

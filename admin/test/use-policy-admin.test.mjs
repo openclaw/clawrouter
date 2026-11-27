@@ -39,6 +39,39 @@ test("policy budgets reject values that would round, overflow or turn a malforme
   }
 });
 
+test("routing percentages reject invalid values and retain the inclusive bounds and blank defaults", async () => {
+  const fixture = ready();
+  for (const [field, value, label] of [
+    ["grantSwitchAtUsedPercent", "-0.1", "Switch at used"], ["grantSwitchAtUsedPercent", "NaN", "Switch at used"],
+    ["grantHysteresisPercent", "100.01", "Switch margin"], ["grantHysteresisPercent", "Infinity", "Switch margin"],
+  ]) {
+    change(fixture, { grantSwitchAtUsedPercent: "87.5", grantHysteresisPercent: "2.25", [field]: value });
+    await fixture.render().policies.save(event);
+    assert.equal(fixture.requests.length, 0);
+    assert.equal(fixture.render().policies.error, label + ": enter a percentage from 0 to 100.");
+    assert.equal(fixture.render().policies.form[field], value);
+  }
+  for (const [start, margin, expectedStart, expectedMargin] of [["0", "100", 0, 100], ["", "", 90, 10]]) {
+    change(fixture, { grantSwitchAtUsedPercent: start, grantHysteresisPercent: margin });
+    const save = fixture.render().policies.save(event);
+    const request = fixture.requests.at(-1), submitted = JSON.parse(request.init.body);
+    assert.equal(submitted.grantRouting.switchAtUsedPercent, expectedStart);
+    assert.equal(submitted.grantRouting.hysteresisPercent, expectedMargin);
+    request.resolve(submitted);
+    await save;
+  }
+});
+
+test("only the switch threshold and margin accept fractions in grant routing", async () => {
+  for (const [field, value] of [["grantStaleAfterSeconds", "300.5"], ["grantIncludedQuotaReservePercent", "1.5"]]) {
+    const fixture = ready();
+    change(fixture, { grantSwitchAtUsedPercent: "87.5", grantHysteresisPercent: "2.25", [field]: value });
+    await fixture.render().policies.save(event);
+    assert.equal(fixture.requests.length, 0);
+    assert.match(fixture.render().policies.error, /non-negative safe integer/);
+  }
+});
+
 test("an unrelated edit preserves stored budgets through the last safe microdollar", async () => {
   const fixture = mount();
   const budgets = { dailyBudgetMicros: Number.MAX_SAFE_INTEGER - 2, weeklyBudgetMicros: Number.MAX_SAFE_INTEGER - 8, monthlyBudgetMicros: Number.MAX_SAFE_INTEGER };

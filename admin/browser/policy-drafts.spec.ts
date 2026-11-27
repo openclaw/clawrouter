@@ -47,6 +47,37 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
+test("a policy with fractional routing percentages saves from the keyboard without rounding", async ({ page }) => {
+  const state = await fixture(page);
+  Object.assign(state.policies[0].grantRouting, { switchAtUsedPercent: 87.5, hysteresisPercent: 2.25 });
+  await open(page);
+  const threshold = page.getByRole("spinbutton", { name: "switch at used (%)" });
+  const margin = page.getByRole("spinbutton", { name: "switch margin (%)" });
+  // A non-threshold strategy still round-trips these settings on unrelated saves.
+  await expect(threshold).toBeDisabled();
+  await expect(threshold).toHaveValue("87.5");
+  await tenant(page).fill("research");
+  await tenant(page).press("Enter");
+  await expect.poll(() => state.writes.length).toBe(1);
+  expect(state.writes[0].request().postDataJSON()).toMatchObject({ tenantId: "research", grantRouting: { switchAtUsedPercent: 87.5, hysteresisPercent: 2.25 } });
+  await state.commit(0);
+  await expect(row(page, "policy_a").locator('[data-label="tenant"]')).toHaveText("research");
+
+  await page.getByRole("combobox", { name: "selection", exact: true }).selectOption("threshold");
+  await threshold.fill("99.75");
+  await margin.fill("100.1");
+  await save(page).press("Enter");
+  await expect(margin).toBeFocused();
+  expect(await margin.evaluate(input => (input as HTMLInputElement).validity.rangeOverflow)).toBe(true);
+  expect(state.writes).toHaveLength(1);
+  await margin.fill("0.125");
+  await margin.press("Enter");
+  await expect.poll(() => state.writes.length).toBe(2);
+  expect(state.writes[1].request().postDataJSON().grantRouting).toMatchObject({ strategy: "threshold", switchAtUsedPercent: 99.75, hysteresisPercent: 0.125 });
+  await state.commit(1);
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+});
+
 test("request prices display dollars and save existing and edited values as microdollars", async ({ page }) => {
   const state = await fixture(page);
   Object.assign(state.policies[0], { requestCostMicros: 1000, requestCostsMicros: { "search.web": 1000, "llm.responses": 0 } });
