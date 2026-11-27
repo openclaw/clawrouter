@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { estimateCascadeBreakEven } from '../scripts/fusion-cascade-feasibility.mjs';
 const stage = (costMicros, latencyMs) => ({ costMicros, latencyMs });
 const input = () => ({ cheap: stage(100, 4), fallback: stage(1000, 10), strong: stage(1000, 10) });
@@ -43,12 +48,33 @@ test('returned boundary satisfies both inequalities across different fallback co
   }
 });
 
-test('rejects missing, nonfinite, negative and impossible control inputs', () => {
+test('names invalid measurements and their accepted ranges', () => {
   for (const bad of [NaN, Infinity, -1, '1', null]) {
-    assert.throws(() => estimateCascadeBreakEven({ ...input(), cheap: stage(bad, 1) }));
+    assert.throws(() => estimateCascadeBreakEven({ ...input(), cheap: stage(bad, 1) }), /cheap\.costMicros.*finite nonnegative/);
   }
-  assert.throws(() => estimateCascadeBreakEven({ ...input(), strong: stage(0, 1) }));
-  assert.throws(() => estimateCascadeBreakEven({ ...input(), latencyRatio: Infinity }));
-  assert.throws(() => estimateCascadeBreakEven({ ...input(), costSavingFraction: 1 }));
-  assert.throws(() => estimateCascadeBreakEven({ ...input(), strong: stage(1, Number.MAX_VALUE), latencyRatio: 2 }));
+  for (const [value, expected] of [
+    [null, /JSON object/],
+    [{ ...input(), fallback: null }, /fallback must be an object with costMicros and latencyMs/],
+    [{ ...input(), fallback: stage(1, -1) }, /fallback\.latencyMs.*finite nonnegative/],
+    [{ ...input(), strong: stage(0, 1) }, /strong\.costMicros.*greater than zero/],
+    [{ ...input(), strong: stage(1, 0) }, /strong\.latencyMs.*greater than zero/],
+    [{ ...input(), latencyRatio: Infinity }, /latencyRatio.*greater than zero/],
+    [{ ...input(), costSavingFraction: 1 }, /costSavingFraction.*0 .*1 /],
+    [{ ...input(), strong: stage(1, Number.MAX_VALUE), latencyRatio: 2 }, /Reduce latencyRatio or strong\.latencyMs/],
+  ]) {
+    assert.throws(() => estimateCascadeBreakEven(value), expected);
+  }
+});
+
+test('prints one actionable CLI diagnostic and exits unsuccessfully', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'fusion-feasibility-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'input.json');
+  writeFileSync(path, JSON.stringify({ ...input(), cheap: stage(-1, 4) }));
+  const cli = fileURLToPath(new URL('../scripts/fusion-cascade-feasibility.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [cli, path], { encoding: 'utf8' });
+  assert.ifError(result.error);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr.trim(), 'cheap.costMicros must be a finite nonnegative number.');
 });
