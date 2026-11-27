@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Report native Node Fusion repair costs with independent cheap-model controls and explicit limits on routing and collaboration claims.
+- Record Fusion preparation and conditional repair pilots, including failed quality parity and cheap-first results without fallback rescues.
 
 - Record a one-task serializer Fusion pilot with two fallback rescues and lower model cost, while retaining its failed workflow-time target and independent cheap-only comparison; report a separate direct-TAP verifier improvement.
 
