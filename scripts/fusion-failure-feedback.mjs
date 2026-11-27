@@ -1,4 +1,25 @@
 // Repair context only. This text parser must never determine test acceptance.
+export function compactRepairFeedback({ previousEdits = null, publicFeedback }) {
+  if (previousEdits !== null && !Array.isArray(previousEdits)
+    || publicFeedback === null || !['string', 'object'].includes(typeof publicFeedback)) {
+    throw new TypeError('invalid repair feedback');
+  }
+  const feedbackJson = JSON.stringify(publicFeedback);
+  if (feedbackJson === undefined) throw new TypeError('invalid repair feedback');
+  const payload = {
+    instruction: 'Repair the previous edits against the public diagnostics. Return edits against the original numbered source, not the previous attempt.',
+    previousEdits,
+    publicFeedback: JSON.parse(feedbackJson),
+  };
+  let text = JSON.stringify(payload);
+  if (Buffer.byteLength(text) <= 12000) return text;
+  delete payload.previousEdits;
+  text = JSON.stringify(payload);
+  if (Buffer.byteLength(text) <= 12000) return text;
+  return JSON.stringify({ instruction: payload.instruction,
+    feedbackExcerpt: feedbackJson.slice(0, 2000), diagnosticsTruncated: true });
+}
+
 export function firstTestFailureFeedback(feedback) {
   if (typeof feedback !== 'string') throw new TypeError('feedback must be a string');
   const lines = feedback.split(/\r?\n/);
