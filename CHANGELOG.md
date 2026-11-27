@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- Explain static provider product and transport incompatibility with typed diagnostic codes. Preserve boolean compatibility decisions and keep credential, policy, quota, and budget admission with the host.
+- Record a three-task Fusion HTTP pilot with one successful fallback and 61.01% lower estimated API cost; report the fragile latency margin and native Mocha test accounting.
+
+- Record a five-task Fusion cost study with four successful fallbacks, 58.49% lower estimated API cost and a failed no-slowdown gate.
 
 - Report native Node Fusion repair costs with independent cheap-model controls and explicit limits on routing and collaboration claims.
 - Record Fusion preparation and conditional repair pilots, including failed quality parity and cheap-first results without fallback rescues.
@@ -28,6 +30,8 @@
 - Document a fresh four-task Fusion URI comparison: all arms passed, and cheaper, faster independent small-model results prevented a fusion-value claim.
 
 - Document a repeated Fusion comparison on three LRU-cache tasks, including per-round gate failures and a zero-call diagnostic that recovers rejected cheap edits through unique exact-source matches.
+
+- Add an offline Fusion cascade feasibility calculator to separate cost and latency acceptance targets before larger benchmark runs. Invalid inputs report the field and its accepted range.
 
 - Document Fusion repair experiments: faster paired fallback API calls, but a full-workflow replay still trails cheap-only and fails the latency gate.
 
@@ -57,6 +61,10 @@
 - Keep admin bootstrap credential counts consistent with its credential snapshot when a key expires during assembly.
 
 - Add an offline cost-matched random-control comparison for paired Fusion evaluations, with explicit limits on retrospective results.
+
+- Record the Devalue Fusion cascade and strong-model handoff pilots, including the failed combined gates and remaining critical-path latency.
+
+- Explain static provider product and transport incompatibility with typed diagnostic codes. Preserve boolean compatibility decisions and keep credential, policy, quota, and budget admission with the host.
 
 ## 0.6.0 - 2026-11-26
 

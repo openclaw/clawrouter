@@ -1,0 +1,348 @@
+{
+  "schema": "fusion-devalue-handoff-v1",
+  "productionQualified": false,
+  "studies": [
+    {
+      "kind": "prepared-cascade",
+      "productionQualified": false,
+      "evidence": {
+        "protocolSha256": "8d7ff1ba2d22fd557024df1f4f8c8c9154a88f8c425de49b733ae957af2ec10f",
+        "resultSha256": "3a4bf9308cf2f2466fcc12651b3afacbc452103a4b9b4a4a458f3457d6f50971",
+        "auditSha256": "a694e30dad19a8a1e99671ee96759632eb0d3178e3bf09b3fc4ce1e64d67baba"
+      },
+      "summary": {
+        "cascade": {
+          "passed": 3,
+          "falseAccepts": 0,
+          "rescues": 3,
+          "costMicros": 27095,
+          "meanWorkflowMs": 10982.10055533333
+        },
+        "strong": {
+          "passed": 3,
+          "falseAccepts": 0,
+          "rescues": 0,
+          "costMicros": 23674,
+          "meanWorkflowMs": 6018.274278000002
+        },
+        "cheap": {
+          "passed": 2,
+          "falseAccepts": 0,
+          "rescues": 0,
+          "costMicros": 3128,
+          "meanWorkflowMs": 7264.490458666667
+        }
+      },
+      "rows": [
+        {
+          "costMicros": 8553,
+          "publicPassed": true,
+          "passed": true,
+          "repeat": 0,
+          "strategy": "cascade",
+          "workflowMs": 8824.162333,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 885,
+              "elapsedMs": 3259.1598750000003,
+              "stageMs": 4383.387917,
+              "publicPassed": false
+            },
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 7668,
+              "elapsedMs": 3329.9199169999993,
+              "stageMs": 4415.762375000001,
+              "publicPassed": true
+            }
+          ],
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 7928,
+          "publicPassed": true,
+          "passed": true,
+          "repeat": 0,
+          "strategy": "strong",
+          "workflowMs": 5841.812042,
+          "steps": [
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 7928,
+              "elapsedMs": 4807.271833999999,
+              "stageMs": 5827.115082999999,
+              "publicPassed": true
+            }
+          ],
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 1131,
+          "publicPassed": true,
+          "passed": true,
+          "repeat": 0,
+          "strategy": "cheap",
+          "workflowMs": 7870.55075,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1131,
+              "elapsedMs": 6734.371166000001,
+              "stageMs": 7855.945458000002,
+              "publicPassed": true
+            }
+          ],
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 7803,
+          "publicPassed": true,
+          "passed": true,
+          "repeat": 1,
+          "strategy": "strong",
+          "workflowMs": 6008.698375,
+          "steps": [
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 7803,
+              "elapsedMs": 4840.918708000001,
+              "stageMs": 5992.609833000002,
+              "publicPassed": true
+            }
+          ],
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 924,
+          "publicPassed": false,
+          "passed": false,
+          "repeat": 1,
+          "strategy": "cheap",
+          "workflowMs": 6224.518416999999,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 924,
+              "elapsedMs": 5046.498625,
+              "stageMs": 6203.185250000002,
+              "publicPassed": false
+            }
+          ],
+          "publicCount": 28
+        },
+        {
+          "costMicros": 9185,
+          "publicPassed": true,
+          "passed": true,
+          "repeat": 1,
+          "strategy": "cascade",
+          "workflowMs": 11329.540708,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 872,
+              "elapsedMs": 3802.442833000001,
+              "stageMs": 4910.769166999999,
+              "publicPassed": false
+            },
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 8313,
+              "elapsedMs": 5358.999833000002,
+              "stageMs": 6390.7148330000055,
+              "publicPassed": true
+            }
+          ],
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 1073,
+          "publicPassed": true,
+          "passed": true,
+          "repeat": 2,
+          "strategy": "cheap",
+          "workflowMs": 7698.402209,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1073,
+              "elapsedMs": 6626.603875000001,
+              "stageMs": 7672.679499999998,
+              "publicPassed": true
+            }
+          ],
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 9357,
+          "publicPassed": true,
+          "passed": true,
+          "repeat": 2,
+          "strategy": "cascade",
+          "workflowMs": 12792.598624999991,
+          "steps": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 954,
+              "elapsedMs": 5354.601875,
+              "stageMs": 6372.412041999996,
+              "publicPassed": false
+            },
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 8403,
+              "elapsedMs": 5193.033082999995,
+              "stageMs": 6390.519374999996,
+              "publicPassed": true
+            }
+          ],
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 7943,
+          "publicPassed": true,
+          "passed": true,
+          "repeat": 2,
+          "strategy": "strong",
+          "workflowMs": 6204.312417000008,
+          "steps": [
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 7943,
+              "elapsedMs": 4967.654374999998,
+              "stageMs": 6188.828374999997,
+              "publicPassed": true
+            }
+          ],
+          "publicCount": 28,
+          "fullCount": 32
+        }
+      ]
+    },
+    {
+      "kind": "conditional-strong-handoff",
+      "productionQualified": false,
+      "evidence": {
+        "protocolSha256": "56621f5c496c47edfefc375f521444cfd9e05bbc337470a61b774917527aad69",
+        "resultSha256": "fcb730337352cb399011bfe9b477f9af6725830e31e0d13f5152780ea3e4a526",
+        "auditSha256": "837a28c1e9e738fe7a2412a8cfdf086a635cbb158e023bda144c13ae1208bb11"
+      },
+      "summary": {
+        "fresh": {
+          "passed": 4,
+          "falseAccepts": 0,
+          "costMicros": 32337,
+          "meanApiMs": 5069.624572750001
+        },
+        "handoff": {
+          "passed": 4,
+          "falseAccepts": 0,
+          "costMicros": 33147,
+          "meanApiMs": 3561.7378335000003
+        },
+        "timeWins": 3,
+        "screeningGain": false
+      },
+      "rows": [
+        {
+          "costMicros": 8233,
+          "publicPassed": true,
+          "passed": true,
+          "index": 0,
+          "arm": "fresh",
+          "apiMs": 4775.122874999999,
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 8565,
+          "publicPassed": true,
+          "passed": true,
+          "index": 0,
+          "arm": "handoff",
+          "apiMs": 3450.986,
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 8318,
+          "publicPassed": true,
+          "passed": true,
+          "index": 1,
+          "arm": "handoff",
+          "apiMs": 4349.878834000001,
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 8028,
+          "publicPassed": true,
+          "passed": true,
+          "index": 1,
+          "arm": "fresh",
+          "apiMs": 4019.145166000002,
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 8043,
+          "publicPassed": true,
+          "passed": true,
+          "index": 2,
+          "arm": "fresh",
+          "apiMs": 6359.501500000002,
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 8215,
+          "publicPassed": true,
+          "passed": true,
+          "index": 2,
+          "arm": "handoff",
+          "apiMs": 3498.225125000001,
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 8049,
+          "publicPassed": true,
+          "passed": true,
+          "index": 3,
+          "arm": "handoff",
+          "apiMs": 2947.8613750000004,
+          "publicCount": 28,
+          "fullCount": 32
+        },
+        {
+          "costMicros": 8033,
+          "publicPassed": true,
+          "passed": true,
+          "index": 3,
+          "arm": "fresh",
+          "apiMs": 5124.728750000002,
+          "publicCount": 28,
+          "fullCount": 32
+        }
+      ]
+    }
+  ],
+  "criticalPathScenario": {
+    "initialStageMeanMs": 5222.189708666665,
+    "fallbackStageMeanMs": 5732.332194333335,
+    "directStrongWorkflowMeanMs": 6018.274278000002,
+    "remainingFallbackMs": 796.0845693333367,
+    "requiredFallbackReductionFraction": 0.8611237900482631,
+    "handoffApiMeanMs": 3561.7378335000003,
+    "initialPlusHandoffApiMs": 8783.927542166664,
+    "measurement": "Cross-study plug-in scenario, not a measured combined workflow; omits setup, verification, cleanup and gaps after the initial stage."
+  }
+}
