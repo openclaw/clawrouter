@@ -175,7 +175,16 @@ export function PersonalUsageSummary({ data, onOpen, comparison }: { data: Perso
           </dd>
         </div> : null}
       </dl>
-      {data.report.value ? <details className="personalAccounting personalNote"><summary>Recorded accounting amount: {data.report.value.chargeReportedCalls ? usageMoney(data.report.value.recordedChargeMicros) : 'Not reported'} · not a price or confirmed settlement</summary><p>{data.report.value.chargeReportedCalls}/{value.metrics.calls} rows with a valid recorded accounting field.</p><p>{usageCaveats.accounting}</p></details> : null}
+      <details className="personalAccounting personalNote">
+        <summary>
+          {value.chargeReportedCalls > 0 && value.chargeReportedCalls < value.metrics.calls
+            ? <>Recorded accounting subtotal: {usageMoney(value.recordedChargeMicros)} · {count(value.chargeReportedCalls)} of {count(value.metrics.calls)} calls reported</>
+            : <>Recorded accounting amount: {value.chargeReportedCalls ? usageMoney(value.recordedChargeMicros) : 'Not reported'}</>}
+          {' · not a price or confirmed settlement'}
+        </summary>
+        <p>{value.chargeReportedCalls}/{value.metrics.calls} rows with a valid recorded accounting field.</p>
+        <p>{usageCaveats.accounting}</p>
+      </details>
       {!value.metrics.calls ? <p className="personalEmpty">No calls in discovered locations for this range for your current access.</p> : null}
     </> : null}
   </section>;
@@ -365,6 +374,8 @@ function UsageRanking({ value, query, setQuery, canRefine, onKey, metric }: { va
   </section>;
 }
 
+const activityColumns = { time: 'Time', model: 'Model / key', outcome: 'Outcome', tokens: 'Input / output', price: 'Reporting cost' } as const;
+
 function UsageActivity({ data, timezone }: { data: PersonalUsageData; timezone: string }) {
   const { events } = data, page = events.value;
   const time = (at: number) => new Date(at).toLocaleString('en-US', { timeZone: timezone, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -374,21 +385,21 @@ function UsageActivity({ data, timezone }: { data: PersonalUsageData; timezone: 
     {events.error ? <div role="alert"><p>{events.error}</p><p>Old displayed report; Refresh required before continuing.</p><button type="button" onClick={data.retryEvents}>Retry recent calls</button></div> : null}
     {page && !events.loading ? <>
       <p className="personalNote">{usageCaveats.personal}</p>
-      {!page.events.length ? <p>No recent model calls for these filters.</p> : <div className="personalTableWrap" tabIndex={0} role="region" aria-label="Recent calls table">
-        <table className="personalTable personalActivityTable">
-          <thead><tr><th scope="col">Time</th><th scope="col">Model / key</th><th scope="col">Outcome</th><th scope="col">Input / output</th><th scope="col">Reporting cost</th></tr></thead>
-          <tbody>
-            {page.events.map((event, index) => <tr id={usageEventAnchor(data.page, index)} key={usageEventAnchor(data.page, index) + ':' + event.id}>
-              <td><time dateTime={iso(event.occurredAt)}>{time(event.occurredAt)}</time></td>
-              <th scope="row">
+      {!page.events.length ? <p>No recent model calls for these filters.</p> : <div className="personalTableWrap personalActivityWrap" tabIndex={0} role="region" aria-label="Recent calls table">
+        <table className="personalTable personalActivityTable" role="table">
+          <thead role="rowgroup"><tr role="row">{Object.values(activityColumns).map(label => <th key={label} scope="col" role="columnheader">{label}</th>)}</tr></thead>
+          <tbody role="rowgroup">
+            {page.events.map((event, index) => <tr role="row" id={usageEventAnchor(data.page, index)} key={usageEventAnchor(data.page, index) + ':' + event.id}>
+              <td role="cell" className="personalCallTime"><time dateTime={iso(event.occurredAt)}>{time(event.occurredAt)}</time></td>
+              <th scope="row" role="rowheader">
                 <strong>{event.model ?? 'Unattributed model'}</strong>
                 <small>{event.keyId === null ? 'Dashboard session' : 'Key: ' + event.keyId}</small>
                 <small>{event.provider} · {event.callKind}</small>
                 <EventDetails event={event} peers={page.events} page={data.page} index={index} />
               </th>
-              <td>{event.status}</td>
-              <td>{count(event.inputTokens)} / {count(event.outputTokens)}</td>
-              <td><strong>{priceText(event.costClass, event.reportingCostMicros)}</strong><small>{laneLabel[event.lane]} · {costClassLabel[event.costClass]}</small></td>
+              <td role="cell" data-label={activityColumns.outcome}>{event.status}</td>
+              <td role="cell" data-label={activityColumns.tokens}>{count(event.inputTokens)} / {count(event.outputTokens)}</td>
+              <td role="cell" data-label={activityColumns.price}><strong>{priceText(event.costClass, event.reportingCostMicros)}</strong><small>{laneLabel[event.lane]} · {costClassLabel[event.costClass]}</small></td>
             </tr>)}
           </tbody>
         </table>

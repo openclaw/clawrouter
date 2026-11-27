@@ -1,59 +1,60 @@
 import { expect, test } from "@playwright/test";
-import type { ProxyCredential } from "../src/ui-types";
 import { fixtureResponses } from "./fixtures/personal-usage";
 
-const expiresAt = "2026-11-27T12:00:00.000Z";
-const policyId = "studio";
-const reason = "This key cannot be renewed because its policy changed. If you hold a policy, create a replacement key under it and update your client to use the new key.";
+const recovery = "This key could not be renewed. If you hold a policy, create a replacement key under it and update your client to use the new key.";
+const keyId = "studio_key", policyId = "studio";
+const inactive = "only an active credential can be rotated";
+const uncertain = `Change to ${keyId} could not be confirmed. Refresh and check this key before trying again; the server may have applied it. No secret can be recovered.`;
 
-for (const offset of [-1, 0, 1]) {
-  test(`member renewal eligibility at expiry ${offset}ms: an explicitly mismatched policy never becomes renewable`, async ({ page }) => {
-    await page.clock.setFixedTime(new Date(Date.parse(expiresAt) + offset));
-    const expired = offset >= 0;
-    const base = { policyId, enabled: true, active: !expired, expiresAt, expired, principalId: "member@example.com" };
-    const keys: ProxyCredential[] = [
-      { ...base, credentialId: "current_key", generationMatches: true },
-      { ...base, credentialId: "mismatched_key", active: false, generationMatches: false },
-      { ...base, credentialId: "unreported_key" },
-      { ...base, credentialId: "revoked_key", enabled: false, active: false, generationMatches: true },
-      { ...base, credentialId: "former_key", policyId: "former_policy", generationMatches: true },
-    ];
+for (const [scenario, action, status, code, expected] of [
+  ["confirmed inactive renewal", "Renew", 409, "credential_inactive", recovery],
+  ["different conflict code", "Renew", 409, "policy_conflict", `Request failed (409): ${inactive}`],
+  ["different rejection status", "Renew", 400, "credential_inactive", `Request failed (400): ${inactive}`],
+  ["revoke instead of renewal", "Revoke", 409, "credential_inactive", `Request failed (409): ${inactive}`],
+  ["server error", "Renew", 503, "credential_inactive", uncertain],
+  ["lost response", "Renew", 0, "", uncertain],
+] as const) {
+  test(`personal key feedback: ${scenario}`, async ({ page }) => {
+    // Match GET /v1/session/credentials: no generation, owner or policy-state fields.
+    const key = { credentialId: keyId, name: "Studio laptop", policyId, enabled: true, active: false,
+      expiresAt: "2026-01-01T00:00:00Z", expired: true, serviceTiers: ["default"] };
     const budget = { configured: false, ledger: "unmetered", limitMicros: null, spentMicros: 0, remainingMicros: null };
     const responses: Record<string, unknown> = { ...fixtureResponses,
       "/v1/session": { ...fixtureResponses["/v1/session"] as object, entitlements: { providers: [], policies: [{ policyId, budget }] } },
+      "/v1/session/credentials": { credentials: [key] },
       "/v1/session/usage": { ...fixtureResponses["/v1/session/usage"] as object, policies: [{ kid: policyId, policyId, enabled: true, providers: [], budget }] },
-      "/v1/session/credentials": { credentials: keys }, "/v1/session/usage/report": { kind: "no_access" },
+      "/v1/session/usage/report": { kind: "no_access" },
     };
-    const forbidden: string[] = [];
+    const mutation = `/v1/session/credentials/${keyId}/${action === "Renew" ? "rotate" : "revoke"}`;
+    const writes: string[] = [], forbidden: string[] = [];
+    let lists = 0;
     await page.route("**/v1/**", async route => {
-      const path = new URL(route.request().url()).pathname;
-      if (route.request().method() !== "GET" || path.startsWith("/v1/admin/")) {
-        forbidden.push(path);
-        return route.abort();
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (request.method() === "POST" && path === mutation) {
+        writes.push(path);
+        return status === 0 ? route.abort("failed") : route.fulfill({ status, json: { error: { code, message: inactive } } });
       }
+      if (request.method() !== "GET" || path.startsWith("/v1/admin/")) { forbidden.push(path); return route.abort(); }
+      if (path === "/v1/session/credentials") lists++;
       return route.fulfill({ status: path in responses ? 200 : 404, json: responses[path] ?? {} });
     });
     await page.goto("/dashboard/home");
-    const card = page.locator(".myKeysPanel");
+    const card = page.locator(".myKeysPanel"), row = card.locator("article").filter({ hasText: keyId });
     await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
-    const row = (id: string) => card.locator("article").filter({ has: page.getByText(id, { exact: true }) });
-    const renew = (id: string) => row(id).getByRole("button", { name: "Renew", exact: true });
-    await expect(renew("current_key")).toBeEnabled();
-    await expect(renew("unreported_key")).toBeEnabled();
-    await expect(row("unreported_key")).not.toContainText(reason);
-    await expect(renew("revoked_key")).toBeDisabled();
-    await expect(renew("former_key")).toBeDisabled();
-    await expect(renew("mismatched_key")).toBeDisabled();
-    await expect(renew("mismatched_key")).toHaveAccessibleDescription(reason);
-    await expect(row("mismatched_key").getByText(reason)).toBeVisible();
-    if (expired) {
-      await expect(row("current_key")).toContainText("expired on 2026-11-27");
-      await expect(renew("current_key")).not.toHaveAttribute("title", /Only active/);
-    }
-    await row("mismatched_key").getByRole("button", { name: "Rename" }).press("Tab");
-    await expect(row("mismatched_key").getByRole("button", { name: "Revoke" })).toBeFocused();
-    await row("current_key").getByRole("button", { name: "Rename" }).press("Tab");
-    await expect(renew("current_key")).toBeFocused();
+    await expect(row.getByRole("button", { name: "Renew", exact: true })).toBeEnabled();
+    await expect(card.getByRole("alert")).toHaveCount(0);
+    expect(writes).toEqual([]);
+    const initialReads = lists;
+    await row.getByRole("button", { name: action, exact: true }).click();
+    await expect(card.getByRole("alert")).toHaveText(expected);
+    await expect.poll(() => lists).toBeGreaterThan(initialReads); // Existing metadata reconciliation.
+    await expect(card.locator(".issuedKey")).toHaveCount(0);
+    const beforeRefresh = lists;
+    await card.getByRole("button", { name: "Refresh keys", exact: true }).press("Enter");
+    await expect.poll(() => lists).toBeGreaterThan(beforeRefresh);
+    await expect(row.getByRole("button", { name: "Renew", exact: true })).toBeEnabled();
+    await expect(card.getByRole("alert")).toHaveText(expected);
+    expect(writes).toEqual([mutation]);
     expect(forbidden).toEqual([]);
   });
 }

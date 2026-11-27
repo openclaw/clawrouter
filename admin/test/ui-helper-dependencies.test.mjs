@@ -100,6 +100,35 @@ test("default configuration loads without browser globals or theme initializatio
   assert.equal(config.viewPaths.home, "/dashboard/home");
 });
 
+test("Catalog finds declared manifest model IDs without making them unified models or changing handoff", async () => {
+  const { serviceItems, matchesServiceQuery, catalogPlaygroundTarget } = await loadHeadlessModule("ui-helpers");
+  const model = (id) => ({ id, capabilities: ["llm.chat"], endpoints: ["/v1/chat/completions"] });
+  const proxy = (provider, endpoint, models) => ({ provider, endpoint, route: "/v1/proxy/" + provider + "/" + endpoint, methods: ["POST"], models });
+  const late = "media/speech-21", chat = model("mixed/chat");
+  const routes = {
+    openaiCompatible: [{ provider: "mixed", endpoints: ["/v1/chat/completions"], models: [chat] }],
+    manifestProxy: [proxy("speech", "list"), proxy("speech", "voice", [model(late)]), proxy("speech", "stream", [model(late)]),
+      { ...proxy("mixed", "speak", [model("mixed/voice")]), sampleModel: "invented/example" }],
+  };
+  const access = new Map([["speech", { provider: "speech", allowed: false, policies: ["policy-only-reference"] }],
+    ["entitlement-only", { provider: "entitlement-only", allowed: true, policies: [] }]]);
+  const services = serviceItems([], routes, {}, access);
+  const matching = (query) => services.filter(service => matchesServiceQuery(service, query)).map(service => service.provider);
+  assert.deepEqual(matching("  MEDIA/SPEECH-21  "), ["speech"]);
+  assert.deepEqual(matching("mixed/voice"), ["mixed"]);
+  assert.deepEqual(matching("mixed/chat"), ["mixed"]);
+  for (const absent of ["speech/default", "invented/example", "entitlement-only", "policy-only-reference"]) assert.deepEqual(matching(absent), []);
+  const speech = services.find(service => service.provider === "speech");
+  assert.equal(speech.access.allowed, false);
+  assert.equal(speech.models, 0);
+  assert.deepEqual(speech.modelIds, []);
+  const mixed = services.find(service => service.provider === "mixed");
+  assert.deepEqual(mixed.modelIds, [chat.id]);
+  // Search can identify a mixed provider's proxy model; the conversation picker still defaults to its chat model.
+  assert.deepEqual(catalogPlaygroundTarget(mixed, "mixed/voice", [{ ...chat, provider: "mixed" }], routes.manifestProxy),
+    { matchedModel: undefined, preset: { mode: "model", model: "mixed/chat" } });
+});
+
 test("service search matches published routes but not the route-less display fallback", async () => {
   const { serviceItems, matchesServiceQuery } = await loadHeadlessModule("ui-helpers");
   const providers = ["first", "second", "unrouted"].map((id) => ({ id, display_name: id, capabilities: [] }));

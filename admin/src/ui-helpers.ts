@@ -371,7 +371,10 @@ export function adminOverviewFromPolicies(keys: AccessPolicy[], credentials: Pro
   };
 }
 
-export function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessByProvider: Record<string, ProviderReadiness> = {}, accessByProvider: Map<string, ProviderAccess> = new Map()): ServiceItem[] {
+// Manifest declarations are searchable inventory, not additional Playground targets.
+type CatalogSearchItem = ServiceItem & { manifestSearchModelIds?: string[] };
+
+export function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessByProvider: Record<string, ProviderReadiness> = {}, accessByProvider: Map<string, ProviderAccess> = new Map()): CatalogSearchItem[] {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const modelRoutesByProvider = routes.openaiCompatible.reduce((groups, route) => {
     groups.set(route.provider, [...(groups.get(route.provider) ?? []), route]);
@@ -407,6 +410,7 @@ export function serviceItems(providers: ProviderRow[], routes: RouteCatalog, rea
       routeCount: routePaths.length,
       models: models.length,
       modelIds: models.map((model) => model.id),
+      manifestSearchModelIds: unique(providerRoutes.flatMap((route) => (route.models ?? []).map((model) => model.id))),
       access: accessByProvider.get(providerId),
       readiness: readinessByProvider[providerId],
       brandIcon: providerBrandIcon(providerId),
@@ -442,11 +446,12 @@ export function catalogPlaygroundTarget(service: ServiceItem, query: string, mod
   return { matchedModel, preset: null };
 }
 
-export function matchesServiceQuery(item: ServiceItem, query: string) {
+export function matchesServiceQuery(item: CatalogSearchItem, query: string) {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
   // A service with no published routes uses a display-only /v1/proxy fallback.
   if (item.routeCount > 0 && item.route.toLowerCase().includes(needle)) return true;
+  if (item.manifestSearchModelIds?.some((id) => id.toLowerCase().includes(needle))) return true;
   return [item.id, item.name, item.provider, item.kind, item.category, item.capabilities.join(" "), item.modelIds.join(" ")]
     .join(" ")
     .toLowerCase()
