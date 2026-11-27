@@ -82,3 +82,12 @@ test('compact context captures public feedback once and rejects invalid input', 
   }
   assert.throws(() => compactRepairFeedback({ previousEdits: {}, publicFeedback: 'error' }), TypeError);
 });
+
+test('diagnostic excerpts end at a complete Unicode code point', () => {
+  for (const prefix of ['', 'a']) {
+    const publicFeedback = prefix + '🦊'.repeat(5000);
+    const { feedbackExcerpt } = JSON.parse(compactRepairFeedback({ publicFeedback }));
+    assert.ok(feedbackExcerpt.isWellFormed());
+    assert.equal(feedbackExcerpt, '"' + prefix + '🦊'.repeat(999));
+  }
+});

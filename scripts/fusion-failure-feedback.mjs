@@ -16,8 +16,9 @@ export function compactRepairFeedback({ previousEdits = null, publicFeedback }) 
   delete payload.previousEdits;
   text = JSON.stringify(payload);
   if (Buffer.byteLength(text) <= 12000) return text;
-  return JSON.stringify({ instruction: payload.instruction,
-    feedbackExcerpt: feedbackJson.slice(0, 2000), diagnosticsTruncated: true });
+  // JSON.stringify escapes lone surrogates, but slicing can split a valid pair.
+  const feedbackExcerpt = feedbackJson.slice(0, 2000).replace(/[\uD800-\uDBFF]$/u, '');
+  return JSON.stringify({ instruction: payload.instruction, feedbackExcerpt, diagnosticsTruncated: true });
 }
 
 export function firstTestFailureFeedback(feedback) {
