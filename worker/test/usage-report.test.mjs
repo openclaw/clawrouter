@@ -105,6 +105,23 @@ test("migration projection and progress rollback together on failure", () => {
   assert.equal(f.report().metrics.calls, 3); assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM usage_report_events").get().n, 0); assert.equal(f.db.prepare("SELECT last_rowid FROM usage_report_migration").get().last_rowid, 0);
 });
 
+
+test("a malformed later migration row fails before deleting or inserting any report row", () => {
+  const f = usageReportFixture(); for (let i = 1; i < 4; i++) f.insert(f.event(i, { policy_id: "policy" })); f.open();
+  f.db.prepare("UPDATE usage_events SET event_json = 'null' WHERE id = 'event-2'").run();
+  const before = f.db.prepare("SELECT * FROM usage_events ORDER BY rowid").all();
+  const original = f.state.storage.sql.exec; let rowWrites = 0;
+  const sql = { exec(q, ...bindings) {
+    if (q.startsWith("DELETE FROM usage_report_events") || q.startsWith("INSERT OR IGNORE INTO usage_report_events")) rowWrites++;
+    return original(q, ...bindings);
+  } };
+  assert.throws(() => migrateUsageReport(sql, f.state.storage.transactionSync, { apply: true }));
+  assert.equal(rowWrites, 0);
+  assert.deepEqual(f.db.prepare("SELECT * FROM usage_events ORDER BY rowid").all(), before);
+  assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM usage_report_events").get().n, 0);
+  assert.equal(f.db.prepare("SELECT last_rowid FROM usage_report_migration").get().last_rowid, 0);
+});
+
 test("at most 100 lexical groups with honest truncation and complete totals/buckets", () => {
   const f = usageReportFixture(); for (let i = 1; i <= 130; i++) f.insert(f.event(i, { policy_id: "policy", model: "model-" + String(i).padStart(3, "0") })); f.open(); f.migrate({ apply: true });
   const report = f.report(); assert.equal(report.groups.length, 100); assert.equal(report.groupsTruncated, true);
