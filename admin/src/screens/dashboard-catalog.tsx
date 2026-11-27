@@ -448,7 +448,7 @@ export function CatalogScreen({ services, allServices, selected, models, service
               }) : <p>No active policy includes this service yet.</p>}
             </div>
             <div className="inspectorActions">
-              <button type="button" disabled={playBlocker !== null} onClick={() => { if (target.preset) onPlay(target.preset); }} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
+              <button type="button" data-catalog-play-service={selected.id} disabled={playBlocker !== null} onClick={() => { if (target.preset) onPlay(target.preset); }} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
               {canAdminister ? <button type="button" disabled={connectionPending} aria-busy={connectionPending} className={connectionEnabled === false ? "buttonSecondary" : "buttonDanger"} onClick={() => onSetConnection(selected.provider, connectionEnabled === false)}><ServerCog className="buttonIcon" aria-hidden="true" /><span>{connectionEnabled === false ? "Enable connection" : "Disable connection"}</span></button> : null}
               {canAdminister ? <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to selected policy</span></button> : null}
             </div>
