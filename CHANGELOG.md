@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Allow native-test Fusion callers to opt into one verified repair of a failed strong fallback, with a three-call ceiling and bounded feedback from the latest failure.
 - Allow the native-test Fusion cascade to opt into a two-call repair with an isolated failed draft and bounded public feedback.
+- Allow native-test Fusion callers to opt into one verified repair of a failed strong fallback, with a three-call ceiling and bounded feedback from the latest failure.
 - Add opt-in supplied-contract source handoff from a failed cheap candidate to a fresh strong fallback, preserving independent verification and shared budgets.
 
 - Add an opt-in native-test cascade adapter that rejects incomplete verification before fallback and preserves parser receipt types.
