@@ -519,6 +519,20 @@ function subscribeToChartLayout(notify: () => void) {
 }
 const chartsAreStacked = () => window.matchMedia(stackedCharts).matches;
 
+// Reveal as much of the comparison as fits, but never scroll its focused trigger under the shell.
+function revealComparison(trigger: HTMLButtonElement, result?: HTMLElement) {
+  const bounds = trigger.getBoundingClientRect();
+  if (result && (bounds.bottom <= 0 || bounds.top >= window.innerHeight)) return;
+  const bar = trigger.closest('.workspace')?.querySelector<HTMLElement>(':scope > .topbar');
+  const headerHeight = bar && getComputedStyle(bar).position === 'sticky' ? bar.getBoundingClientRect().height : 0;
+  const style = getComputedStyle(trigger);
+  const ring = Math.max(0, parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset));
+  const availableAbove = Math.floor(bounds.top - headerHeight - ring);
+  const neededBelow = Math.ceil((result?.getBoundingClientRect().bottom ?? bounds.bottom) - window.innerHeight + ring);
+  const delta = Math.min(availableAbove, Math.max(0, neededBelow));
+  if (delta) window.scrollBy({top: delta, behavior: 'instant'});
+}
+
 export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: PersonalUsageData; keys?: readonly CurrentKey[] }) {
   const { report, controls: query, setControls: setQuery, showEvents } = data, value = report.value;
   const [panel, setPanel] = useState<Panel>('overview');
@@ -541,20 +555,14 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
   const comparisonFirst = narrow && panel === 'overview' && value?.query.groupBy === 'key';
   const compareButton = useRef<HTMLButtonElement>(null);
   const comparison = useRef<HTMLDivElement>(null);
-  const revealOnCompare = useRef(false);
+  const revealFromScrollY = useRef<number | null>(null);
   useLayoutEffect(() => {
-    if (!revealOnCompare.current) return;
+    if (revealFromScrollY.current === null) return;
     const trigger = compareButton.current;
-    const ownsFocus = trigger && document.activeElement === trigger;
-    if (ownsFocus && narrow && panel === 'overview' && report.loading) return;
-    revealOnCompare.current = false;
-    if (!ownsFocus || !comparisonFirst || report.error || !comparison.current) return;
-    const bounds = trigger.getBoundingClientRect();
-    if (bounds.bottom <= 0 || bounds.top >= window.innerHeight) return;
-    // Reveal the result of this activation, not future refreshes. Keep its focused
-    // trigger on screen as well, including on short or zoomed viewports.
-    comparison.current.scrollIntoView({ block: 'nearest' });
-    trigger.scrollIntoView({ block: 'nearest' });
+    const ownsReveal = trigger && document.activeElement === trigger && window.scrollY === revealFromScrollY.current;
+    if (ownsReveal && narrow && panel === 'overview' && report.loading) return;
+    revealFromScrollY.current = null;
+    if (ownsReveal && comparisonFirst && !report.error && comparison.current) revealComparison(trigger, comparison.current);
   }, [comparisonFirst, narrow, panel, report.loading, report.error]);
   function selectKey(key: CompleteUsageQuery['filters']['key']) {
     if (!q) return;
@@ -571,7 +579,10 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
       const ranking = <UsageRanking value={value} query={query} setQuery={setQuery} canRefine={!report.error} onKey={selectKey} metric={metric} />;
       const trend = <UsageTrend value={value} metric={metric} />;
       if (comparisonFirst) return <div className="personalKeyOverview">
-        <PersonalUsageSummary data={data} comparison={<div ref={comparison}>{metrics}{ranking}</div>} />
+        <PersonalUsageSummary data={data} comparison={<div className="personalKeyComparison" ref={comparison} onFocus={event => {
+          const key = event.target;
+          if (key instanceof HTMLButtonElement && key.matches('.personalGroupButton:focus-visible')) revealComparison(key);
+        }}>{metrics}{ranking}</div>} />
         {trend}
       </div>;
       return <>{metrics}<div className="personalChartsGrid">{trend}{ranking}</div></>;
@@ -580,13 +591,15 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
   }
   return <div className="personalUsageCanvas">
     <UsageControls query={query} appliedRange={value?.query} onChange={setQuery} onRefresh={data.reload} onPreset={data.choosePreset} onClear={data.clearFilters} onBack={q && !report.error ? data.back : undefined} loading={report.loading}>
-      <button ref={compareButton} type="button" className="buttonSecondary" aria-disabled={!q || Boolean(report.error) || comparingKeys} onClick={event => {
+      <button ref={compareButton} type="button" className="buttonSecondary" aria-disabled={!q || Boolean(report.error) || comparingKeys} onFocus={event => {
+        if (event.currentTarget.matches(':focus-visible')) revealComparison(event.currentTarget);
+      }} onClick={event => {
         if (!q || report.error || comparingKeys) return;
         if (selectedKey) selectKey(undefined);
         else {
           if (narrow) {
             event.currentTarget.focus({ preventScroll: true });
-            revealOnCompare.current = true;
+            revealFromScrollY.current = window.scrollY;
           }
           setPanel('overview');
           if (q.groupBy !== 'key') data.refine({ ...q, groupBy: 'key', rankOffset: 0 });
