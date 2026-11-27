@@ -96,6 +96,35 @@ test('plain blocks retain nested test groups and lexical setup in every view', (
   assert.ok(qualifyRegressionHoldout(split, { reference: run(value => value), baseline: run(() => 0) }));
 });
 
+test('synchronous immediately invoked functions retain nested groups and setup', () => {
+  const scoped = body => `;(function () { const scope = 1; ${wrap(body)} }())`;
+  const input = { ...file, before: scoped(preservation), content: scoped(statements.join('\n')) };
+  const parseScope = (source, options = {}) => ({ program: { body: [{
+    type: 'ExpressionStatement', expression: { type: 'CallExpression', arguments: [], callee: {
+      type: 'FunctionExpression', async: false, generator: false, ...options,
+      body: { type: 'BlockStatement', body: parse(source).program.body },
+    } },
+  }] } });
+  const split = splitRegressionSuiteTest('iife', input, parseScope);
+  assert.equal(split.expectedFull, 3);
+  assert.equal(split.expectedPublic, 2);
+  assert.equal(split.expectedHidden, 1);
+  assert.ok(split.content.includes('const scope = 1'));
+  assert.ok(split.hiddenContent.includes('const scope = 1'));
+  const run = fix => Object.fromEntries([
+    ['full', input.content, split.originalSha256],
+    ['public', split.content, split.publicSha256],
+    ['hidden', split.hiddenContent, split.hiddenSha256],
+  ].map(([name, content, digest]) => [name, execute(content, digest, fix)]));
+  assert.ok(qualifyRegressionHoldout(split, { reference: run(value => value), baseline: run(() => 0) }));
+  for (const options of [{ async: true }, { generator: true }]) {
+    assert.throws(() => splitRegressionSuiteTest('iife', input, source => parseScope(source, options)), /two_changed/);
+  }
+  assert.throws(() => splitRegressionSuiteTest('uncalled', input, source => ({ program: {
+    body: [{ type: 'FunctionDeclaration', body: { type: 'BlockStatement', body: parse(source).program.body } }],
+  } })), /two_changed/);
+});
+
 test('preservation-only and single-regression tasks are rejected before inference', () => {
   assert.throws(() => splitRegressionSuiteTest('numbers', { ...file, before: file.content }, parse), /two_changed/);
   assert.throws(() => splitRegressionSuiteTest('numbers', { ...file, content: wrap(preservation + positive) }, parse), /two_changed/);

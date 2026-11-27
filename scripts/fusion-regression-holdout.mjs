@@ -12,6 +12,13 @@ function inventory(content, path, parse, suiteWrappers) {
         continue;
       }
       const call = node.expression;
+      const scope = call?.callee;
+      if (call?.type === 'CallExpression' && call.arguments.length === 0
+        && ['FunctionExpression', 'ArrowFunctionExpression'].includes(scope?.type)
+        && !scope.async && !scope.generator && scope.body?.type === 'BlockStatement') {
+        visit(scope.body.body, parents);
+        continue;
+      }
       const callee = call?.callee?.name;
       if (call?.type !== 'CallExpression' || !['describe', 'it', 'test'].includes(callee) && !suiteWrappers.has(callee)) continue;
       const wrapper = suiteWrappers.has(callee);
