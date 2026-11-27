@@ -32,6 +32,63 @@ async function expectAccountingBoundary(page:Page,amount:string,calls:number,sco
   expect.soft(box.x+box.width,scope+': accounting text must not clip horizontally').toBeLessThanOrEqual(metricBox.x+metricBox.width);
  }
 }
+test('member Details exports its activity page without offering an inline events toggle', async ({page, isMobile}) => {
+ const f = await serve(page, 'user'), release = Promise.withResolvers<void>();
+ try {
+  await page.emulateMedia({colorScheme: isMobile ? 'dark' : 'light'});
+  await page.route('**/v1/session/usage/events?**', async route => { await release.promise; await route.fallback(); });
+  await page.goto('/dashboard/my-usage');
+  const details = page.getByRole('tab', {name: 'Details', exact: true});
+  await page.getByRole('tab', {name: 'Overview'}).focus();
+  await page.keyboard.press('End');
+  await expect(details).toBeFocused();
+  await page.keyboard.press('Enter');
+  const pane = page.getByRole('tabpanel', {name: 'Details'});
+  await expect(pane.getByRole('region', {name: 'Retained usage ranking'})).toBeVisible();
+  await expect(pane.getByRole('button', {name: /^(Hide|Show) events$/})).toHaveCount(0);
+  const csv = pane.getByRole('button', {name: 'Export activity page 1 CSV'});
+  await expect(csv).toBeDisabled();
+  release.resolve();
+  await expect(csv).toBeEnabled();
+  const download = page.waitForEvent('download');
+  await csv.press('Space');
+  const file = await download;
+  expect(file.suggestedFilename()).toBe('usage-current-page-1.csv');
+  const stream = await file.createReadStream();
+  if (!stream) throw Error('No activity CSV stream');
+  const bytes: Buffer[] = [];
+  for await (const chunk of stream) bytes.push(chunk);
+  const rows = Buffer.concat(bytes).toString().trimEnd().split('\r\n').slice(2);
+  expect(rows).toHaveLength(6);
+  expect(rows.every(row => row.includes('"member@example.com"'))).toBe(true);
+  await details.focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', {name: 'Recent calls table'}).locator('tbody tr')).toHaveCount(6);
+ } finally { release.resolve(); await page.unrouteAll({behavior: 'wait'}); f.close(); }
+});
+
+test('admin ranking toggles its inline events table from the keyboard', async ({page, isMobile}) => {
+ const f = await serve(page, 'admin');
+ try {
+  await page.emulateMedia({colorScheme: isMobile ? 'dark' : 'light'});
+  await page.goto('/dashboard/usage');
+  const show = page.getByRole('button', {name: 'Show events', exact: true});
+  const events = page.getByRole('region', {name: 'Retained events', exact: true});
+  await expect(show).toHaveAttribute('aria-expanded', 'false');
+  await expect(events).toHaveCount(0);
+  await show.press('Enter');
+  const hide = page.getByRole('button', {name: 'Hide events', exact: true});
+  await expect(hide).toBeFocused();
+  await expect(hide).toHaveAttribute('aria-expanded', 'true');
+  await expect(events.locator('tbody tr')).toHaveCount(100);
+  await hide.press('Space');
+  await expect(show).toBeFocused();
+  await expect(show).toHaveAttribute('aria-expanded', 'false');
+  await expect(events).toHaveCount(0);
+ } finally { f.close(); }
+});
+
 test('members see only current own calls, never shared policy totals in analytics',async({page})=>{
  const f=await serve(page,'user');try{
   await page.goto('/dashboard/home');const region=page.getByRole('region',{name:'Your personal usage',exact:true});await expect(region.locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('6');await expect(region).toContainText('For your current access');await expect(region).not.toContainText('999,999');await expect(page.locator('.dashboardAnalyticsGrid')).toHaveCount(0);
