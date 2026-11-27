@@ -285,13 +285,15 @@ function DraftRequestDrawer({ form, mode, route, turns, onInspect }: {
   return (
     <details className="requestDrawer" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary onClick={onInspect}><span><ServerCog className="buttonIcon" aria-hidden="true" /> Preview request</span></summary>
-      {open ? <pre role="region" aria-label="Draft request payload" tabIndex={0} onKeyDown={event => {
+      {/* Native details reveals the tab stop immediately. Focus can arrive before
+          toggle, so a keyboard user also gets the payload on their next keystroke. */}
+      <pre role="region" aria-label="Draft request payload" tabIndex={0} onFocus={() => setOpen(true)} onKeyDown={event => {
         if (event.key.toLowerCase() !== "a" || event.ctrlKey === event.metaKey || event.altKey || event.shiftKey || event.nativeEvent.isComposing) return;
         const selection = event.currentTarget.ownerDocument.getSelection();
         if (!selection) return;
         event.preventDefault();
         selection.selectAllChildren(event.currentTarget);
-      }}>{preview()}</pre> : null}
+      }}>{open ? preview() : null}</pre>
     </details>
   );
 }
