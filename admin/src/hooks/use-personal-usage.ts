@@ -50,7 +50,8 @@ export function useUsageReport({request,scope,active,full}:UsageHookOptions,audi
     }).catch(error=>{if(publish())setReport(old=>({key:queryKey,value:old.key===queryKey&&old.value?old.value:lastReport.current,loading:false,error:error instanceof Error?error.message:String(error)}));});},150);
     return ()=>{current=false;clearTimeout(timer);controller.abort();};
   },[active,queryKey,rangeError]);
-  const eventKey=queryKey+':'+(visible.value?.cut??'')+':'+(page.cursor??'');
+  const firstEventKey=queryKey+':'+(visible.value?.cut??'')+':';
+  const eventKey=firstEventKey+(page.cursor??'');
   useEffect(()=>{
     if(!active||!full||!eventsShown||visible.error||!visible.value?.cut)return;
     const cached=pages.current.get(eventKey);if(cached){setEvents({key:eventKey,value:cached,loading:false,error:''});return;}
@@ -119,6 +120,12 @@ export function useUsageReport({request,scope,active,full}:UsageHookOptions,audi
     }
   }
   return {audience,report:visible,events:shownEvents,query:visible.value?.query,requestedQuery:selection.query,queryTemplate:selection.presetQuery,rangeInput:selection.rangeInput,selectedQuery,customRange,refine,reload,showEvents,eventsShown,page:page.number,
+    // Only the cursor trail is exhausted. Page one needs the same cut and query, not a new report.
+    firstEventPage: audience === 'admin' && page.number > 1 && !page.previous.length && shownEvents.value && !visible.error
+      ? () => {
+        pages.current.delete(firstEventKey);
+        setPage({cursor: null, previous: [], number: 1});
+      } : undefined,
     retryEvents:()=>{pages.current.delete(eventKey);setEventsRevision(r=>r+1);},
     rollingDays:selection.query?undefined:selection.days,
     preset:(days:7|30,template?:UsageQueryTemplate)=>{setRangeError('');cache.current.clear();const q=template??visible.value?.query;setSelection({days,presetQuery:q?{...q,grain:'day',rankOffset:0}:undefined});setRevision(r=>r+1);},

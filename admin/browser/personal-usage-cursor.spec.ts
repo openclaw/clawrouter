@@ -179,6 +179,105 @@ test('same-root retries preserve exact cursor; navigation retires roots and reen
   await expect(page.getByRole('button',{name:'Previous page',exact:true})).toBeDisabled();expect(f.invalid).toEqual([]);
  }finally{f.close();}
 });
+test('invalid custom dates leave the last applied period, events and export intact', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  const day = 86_400_000, start = Math.floor(f.now / day) * day - 3 * day;
+  const date = (offset: number) => new Date(start + offset * day).toISOString().slice(0, 10);
+  for (const [id, at] of [['before', start - 1], ['first', start], ['last', start + day - 1], ['after', start + day]] as const) {
+   await f.ingest(id, { model: 'period-test', occurred_at_ms: at });
+  }
+  await f.ingest('other-model', { model: 'excluded', occurred_at_ms: start });
+  await page.goto('/dashboard/my-usage');
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const calls = summary.getByText('Model calls', { exact: true }).locator('+ dd');
+  await expect(calls).toHaveText('147');
+  await form.getByText('Custom dates & exact filters').click();
+  const model = form.getByLabel('Model (exact)', { exact: true });
+  const from = form.getByLabel('Start', { exact: true });
+  const to = form.getByLabel('End (exclusive)', { exact: true });
+  const apply = form.getByRole('button', { name: 'Apply filters' });
+  await model.fill('period-test');
+  await custom(page, date(0), date(1));
+  await activity(page);
+  await expect(calls).toHaveText('2');
+  await expect(rows(page)).toHaveCount(2);
+  const priorReads = f.queries.filter(url => url.pathname.startsWith('/v1/session/usage/')).length;
+  await model.fill('unapplied');
+  await from.fill(date(1));
+  await to.fill(date(0));
+  await apply.focus();
+  await page.keyboard.press('Enter');
+  const error = form.getByRole('alert');
+  await expect(error).toContainText('not applied');
+  await expect(error).toContainText('end is exclusive');
+  await expect(from).toHaveValue(date(1));
+  await expect(to).toHaveValue(date(0));
+  await expect(form.getByRole('button', { name: 'Last 7 days' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(calls).toHaveText('2');
+  await expect(rows(page)).toContainText(['period-test', 'period-test']);
+  await expect(summary).toContainText('model = period-test');
+  await expect(page.getByRole('button', { name: 'Retry report' })).toHaveCount(0);
+  await from.fill('2026-02-30');
+  await form.getByRole('combobox', { name: 'Group by' }).selectOption('provider');
+  await expect(error).toContainText('Invalid calendar date');
+  await expect(form.getByRole('combobox', { name: 'Group by' })).toHaveValue('model');
+  expect(f.queries.filter(url => url.pathname.startsWith('/v1/session/usage/'))).toHaveLength(priorReads);
+
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export refreshed snapshot JSON' }).click();
+  const stream = await (await download).createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream!) chunks.push(chunk);
+  const file = JSON.parse(Buffer.concat(chunks).toString());
+  expect(file.metadata.range).toMatchObject({ from: start, to: start + day, timezone: 'UTC' });
+  expect(file.metadata.filters.model).toBe('period-test');
+  expect(file.events.map((event: { id: string }) => event.id)).toEqual(['last', 'first']);
+  await expect(from).toHaveValue('2026-02-30');
+  await expect(model).toHaveValue('unapplied');
+
+  await model.fill('period-test');
+  await custom(page, date(1), date(2));
+  await expect(error).toHaveCount(0);
+  await expect(calls).toHaveText('1');
+  await expect(rows(page)).toHaveCount(1);
+  await custom(page, date(2), date(3));
+  await expect(calls).toHaveText('0');
+  await expect(page.getByText('No recent model calls for these filters.')).toBeVisible();
+  await custom(page, date(2), date(1));
+  await expect(error).toBeVisible();
+  await form.getByRole('button', { name: 'Last 7 days' }).click();
+  await expect(error).toHaveCount(0);
+  await expect(calls).toHaveText('4');
+  await expect(rows(page)).toHaveCount(4);
+  expect(f.invalid).toEqual([]);
+ } finally { f.close(); }
+});
+
+test('a replacement member does not inherit the invalid draft or the previous report', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  await page.goto('/dashboard/my-usage');
+  await expect(page.getByRole('heading', { name: 'Top models', exact: true })).toBeVisible();
+  await custom(page, 'not-a-date', f.end());
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  await expect(form.getByRole('alert')).toContainText('not applied');
+  await page.route('**/v1/session', route => route.fulfill({ json: {
+   ...(fixtureResponses['/v1/session'] as object), email: 'second@example.test', tenantId: 'second-tenant',
+  } }));
+  // The replacement identity has no access to the former member's usage fixture.
+  await page.route('**/v1/session/usage/report?**', route => route.fulfill({ json: { kind: 'no_access' } }));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('.tenantSwitch strong')).toHaveText('second@example.test');
+  await expect(page.getByRole('alert')).toHaveText(/No current access/);
+  await expect(form.getByRole('alert')).toHaveCount(0);
+  await form.getByText('Custom dates & exact filters').click();
+  await expect(form.getByLabel('Start', { exact: true })).toHaveValue('');
+  await expect(page.getByRole('heading', { name: 'Top models', exact: true })).toHaveCount(0);
+ } finally { f.close(); }
+});
+
 test('failed report retry creates a fresh root; custom range stays pinned on refresh and page stack resets',async({page})=>{
  const f=await cursorUsage(page);try{
   await page.goto('/dashboard/my-usage');await pageTwo(page);const from=new Date(f.now-3600000).toISOString(),to=f.end();

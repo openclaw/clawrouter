@@ -305,7 +305,7 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
               if (saved) setEditing((current) => current === draft ? null : current);
             });
           }}>
-            <label><span>Key name</span><input autoFocus value={editing.name} maxLength={80} disabled={busy} placeholder="Leave blank to use key ID" onChange={(event) => { onDraftChange(); setEditing({ credentialId: credential.credentialId, name: event.target.value }); }} /></label>
+            <label><span>Key name</span><input autoFocus value={editing.name} maxLength={80} readOnly={busy} placeholder="Leave blank to use key ID" onChange={(event) => { onDraftChange(); setEditing({ credentialId: credential.credentialId, name: event.target.value }); }} /></label>
             <button type="submit" disabled={busy || keys !== "ready"}>Save name</button>
             <button type="button" className="buttonSecondary" disabled={busy} onClick={() => { onDraftChange(); setEditing(null); }}>Cancel</button>
           </form> : <span className="myKeyActions"><button type="button" className="buttonSecondary" disabled={busy || keys !== "ready"} onClick={() => { onDraftChange(); setEditing({ credentialId: credential.credentialId, name: credential.name ?? "" }); }}>Rename</button><button type="button" className="buttonSecondary" disabled={busy || !inventoryReady || (!credential.active && !(credential.enabled && credential.expired)) || !policyIds.includes(credential.policyId)} title={held === "ready" && !policyIds.includes(credential.policyId) ? "Policy no longer held; rotation unavailable. Existing active keys remain usable and can be revoked." : !credential.active ? "Only active keys can be rotated" : undefined} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Renew</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>}
@@ -349,6 +349,8 @@ export function CatalogScreen({ services, allServices, selected, models, service
   onAdd: (service: ServiceItem) => void;
 }) {
   const activePolicies = policies.filter((policy) => policy.enabled);
+  const searchInput = React.useRef<HTMLInputElement>(null);
+  const allKindsButton = React.useRef<HTMLButtonElement>(null);
   const queryMatchedServices = allServices.filter((service) => matchesServiceQuery(service, query));
   const selectedPolicies = selected ? activePolicies.filter((policy) => policyCoversProvider(policy, selected.provider)) : [];
   const connectionByProvider = new Map(connections.map((connection) => [connection.providerId, connection]));
@@ -366,9 +368,9 @@ export function CatalogScreen({ services, allServices, selected, models, service
       <section className="mainPane catalogPane">
         <div className="catalogControls">
           <div className="catalogMeta"><strong>{services.length} {services.length === 1 ? "service" : "services"}</strong><span>{usableCount} usable · {grantedCount} granted · {blockedCount} blocked</span></div>
-          <label><span>search catalog</span><div className="inputWithIcon"><Search aria-hidden="true" /><input name="catalog-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="service, provider, model, route" /></div></label>
+          <label><span>search catalog</span><div className="inputWithIcon"><Search aria-hidden="true" /><input ref={searchInput} name="catalog-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="service, provider, model, route" /></div></label>
           <div className="kindTabs" role="group" aria-label="service kind">
-            {kinds.map((item) => <button key={item} type="button" aria-pressed={kind === item} className={kind === item ? "active" : ""} onClick={() => setKind(item)}>{kindLabel(item)}<span>{kindCounts.get(item) ?? 0}</span></button>)}
+            {kinds.map((item) => <button key={item} ref={item === "all" ? allKindsButton : undefined} type="button" aria-pressed={kind === item} className={kind === item ? "active" : ""} onClick={() => setKind(item)}>{kindLabel(item)}<span>{kindCounts.get(item) ?? 0}</span></button>)}
           </div>
         </div>
         <EntityTable
@@ -390,7 +392,21 @@ export function CatalogScreen({ services, allServices, selected, models, service
             };
           })}
         />
-        {noMatches ? <div className="emptyTable">No matching services. Change the search or service kind.</div> : null}
+        {noMatches ? <div className="emptyTable" style={{ display: "grid", gap: 8, justifyItems: "start" }}>
+          {queryMatchedServices.length ? <>
+            <p>No matching services in this kind.</p>
+            <button type="button" className="buttonSecondary" onClick={() => {
+              setKind("all");
+              allKindsButton.current?.focus();
+            }}>Show {queryMatchedServices.length} {queryMatchedServices.length === 1 ? "match" : "matches"} across all kinds</button>
+          </> : <>
+            <p>No matching services in any kind.</p>
+            <button type="button" className="buttonSecondary" onClick={() => {
+              setQuery("");
+              searchInput.current?.focus();
+            }}>Clear search</button>
+          </>}
+        </div> : null}
       </section>
       {selected || !noMatches ? <aside className="inspector">
         {selected ? (

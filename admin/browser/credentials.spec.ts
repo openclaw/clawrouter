@@ -700,7 +700,11 @@ async function fixture(page: Page) {
     if (request.method() === "POST" || request.method() === "PUT") {
       const body = request.postData() ? request.postDataJSON() : {};
       state.writes.push({ path, method: request.method(), body });
-      if (state.reject) { await route.fulfill({ status: state.rejectStatus, json: { error: { code: state.reject, message: state.reject } } }); return; }
+      if (state.reject) {
+        if (state.holdMutation) await state.holdMutation;
+        await route.fulfill({ status: state.rejectStatus, json: { error: { code: state.reject, message: state.reject } } });
+        return;
+      }
       const create = path.endsWith("/credentials");
       const credentialId = create ? body.credentialId : decodeURIComponent(path.split("/").at(request.method() === "PUT" ? -1 : -2)!);
       const prior = state.credentials.find((item) => item.credentialId === credentialId);
@@ -864,6 +868,54 @@ for (const availability of ["active", "revoked", "expired", "lost-policy"] as co
     await card.getByRole("button", { name: "Save name", exact: true }).click();
     await expect(card.locator(".myKeysList strong")).toHaveText("owned_key");
     expect(state.writes[1].body).toEqual({ name: null });
+  });
+}
+
+for (const moveFocus of [false, true]) {
+  test(`rejected member rename ${moveFocus ? "respects a later focus choice" : "accepts a keyboard correction in place"}`, async ({ page }) => {
+    const state = await fixture(page);
+    state.role = "user";
+    state.credentials.push({ ...state.credentials[0], credentialId: "studio_key", name: "Studio" });
+    const rejection = deferred();
+    state.reject = "credential_rename_rejected";
+    state.holdMutation = rejection.promise;
+    await page.goto("/");
+    await connected(page);
+    const card = page.locator(".myKeysPanel");
+    const row = card.locator(".myKeysList article").filter({ hasText: "studio_key" });
+    await row.getByRole("button", { name: "Rename", exact: true }).press("Enter");
+    const name = row.getByRole("textbox", { name: "Key name", exact: true });
+    await expect(name).toBeFocused();
+    await name.fill("Nightly");
+    await page.keyboard.press("Enter");
+    const write = { path: "/v1/session/credentials/studio_key/rename", method: "POST", body: { name: "Nightly" } };
+    await expect.poll(() => state.writes).toEqual([write]);
+    await expect(row.getByRole("button", { name: "Save name", exact: true })).toBeDisabled();
+    await page.keyboard.press("Enter");
+    await page.keyboard.type(" ignored");
+    await page.keyboard.press("Enter");
+    await expect(name).toHaveValue("Nightly");
+    expect(state.writes).toEqual([write]);
+    const other = card.getByRole("textbox", { name: "Name (optional)", exact: true });
+    if (moveFocus) await other.click();
+    rejection.release();
+    await expect(card).toContainText("credential_rename_rejected");
+    await expect(name).toBeEditable();
+    await expect(moveFocus ? other : name).toBeFocused();
+    if (moveFocus) {
+      await page.keyboard.type("New laptop");
+      await expect(name).toHaveValue("Nightly");
+      await expect(other).toHaveValue("New laptop");
+      expect(state.writes).toEqual([write]);
+      return;
+    }
+    await page.keyboard.type(" runner");
+    await expect(name).toHaveValue("Nightly runner");
+    expect(state.writes).toEqual([write]);
+    state.reject = "";
+    await page.keyboard.press("Enter");
+    await expect(row.locator("strong")).toHaveText("Nightly runner");
+    expect(state.writes).toEqual([write, { ...write, body: { name: "Nightly runner" } }]);
   });
 }
 

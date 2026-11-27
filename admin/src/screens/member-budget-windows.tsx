@@ -21,7 +21,7 @@ export function MemberBudgetWindows({ row, serviceCount }: { row: AdminUsageRow;
   const budget = row.budget;
   const scope = row.budgetScope ?? "policy";
   return <article aria-label={id}>
-    <header className="panelIntro quotaIdentity"><strong>{id}</strong><small>{scope === "principal" ? "Per principal" : "Shared policy pool"} · {serviceCount} {serviceCount === "1" ? "service" : "services"}</small></header>
+    <header className="panelIntro quotaIdentity"><strong className="memberBudgetPolicyId">{id}</strong><small>{scope === "principal" ? "Per principal" : "Shared policy pool"} · {serviceCount} {serviceCount === "1" ? "service" : "services"}</small></header>
     {([["Daily", budget.daily], ["Weekly", budget.weekly], ["Monthly", budget]] as const).map(([period, window]) => {
       if (!reported(window)) return null;
       const limit = window.limitMicros === undefined && period === "Monthly" ? row.monthlyBudgetMicros : window.limitMicros;

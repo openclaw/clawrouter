@@ -1,5 +1,11 @@
 # Low-cost Fusion research and screening
 
+The [live Undici transfer pilot](fusion-undici-live-transfer.md) matched
+strong-only at 3/3 tasks with 58.85% lower model cost and 17.68% less measured
+workflow time, including public verification. One cheap draft required a
+successful strong fallback. This small, single-draw study on an exposed
+repository passes its development screen; production routing stays unchanged.
+
 Research baseline reviewed on 2026-11-05; routing follow-up on 2026-11-24.
 Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.

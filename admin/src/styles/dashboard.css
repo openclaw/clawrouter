@@ -250,6 +250,7 @@
 
 .quotaIdentity strong,
 .quotaNumbers strong { overflow: hidden; color: var(--ink); font-size: 10.5px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.quotaIdentity > .memberBudgetPolicyId { white-space: normal; overflow-wrap: anywhere; }
 .quotaIdentity small,
 .quotaNumbers small { color: var(--muted); font-size: 9.5px; }
 .quotaNumbers { justify-items: end; text-align: right; }
