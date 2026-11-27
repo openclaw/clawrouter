@@ -5,7 +5,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
-const { prepareModelDiscovery, validateDiscoveryQuery, discoveryAllows } = await import("../model-discovery.ts");
+const { prepareModelDiscovery, validateDiscoveryQuery, discoveryAllows } = await import("../model-discovery-request.ts");
 const { cerebrasPublicCatalogRequest, readCerebrasPublicCatalog } = await import("../cerebras-model-catalog.ts");
 const { nvidiaPublicCatalogRequests, readNvidiaPublicCatalog } = await import("../nvidia-model-catalog.ts");
 const sources = Object.fromEntries(["cerebras", "nvidia"].map(id => [id,

@@ -37,7 +37,7 @@ import { selectRequestTariff } from "./request-tariff.ts";
 import { prepareRadiusRequest } from "./provider-radius.ts";
 import { prepareOllamaChatRequest } from "./provider-ollama.ts";
 import { isStandaloneSearch, validateStandaloneSearch } from "./standalone-search.ts";
-import { discoveryQuery, prepareModelDiscovery } from "./model-discovery.ts";
+import { discoveryQuery, prepareModelDiscovery } from "./model-discovery-request.ts";
 import { isModelDiscovery } from "./model-discovery-formats.ts";
 import { validateResponsesInputTokens } from "./responses-input-tokens.ts";
 import { validateImageEdit } from "./image-edits.ts";

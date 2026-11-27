@@ -49,7 +49,8 @@ import { fusionAdviserModels, fusionStrategy } from "../shared/fusion-strategy.t
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
-import { discoveryQuery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
+import { modelDiscoveryResponse } from "./model-discovery.ts";
+import { discoveryQuery, validateDiscoveryQuery } from "./model-discovery-request.ts";
 import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
