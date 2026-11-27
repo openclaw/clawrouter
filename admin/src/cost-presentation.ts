@@ -1,4 +1,5 @@
 import type { AdminUsageRow, BudgetStatus, ProviderConnection, UsageSummary } from "./ui-types";
+import type { ProviderChartRow } from "./usage-analytics";
 
 export function parseBudgetUsd(value: string): number {
   const match = value.trim().match(/^(\d+)(?:\.(\d{0,6}))?$/);
@@ -53,6 +54,14 @@ export function presentAccountedSpend(summary: Pick<UsageSummary, "requestCount"
   // Aggregates have no basis breakdown. The bounded event sample cannot supply one.
   const note = ["May include estimates", unpricedRequestCount == null ? "price coverage unavailable" : unpricedRequestCount ? `${unpricedRequestCount} unpriced calls excluded` : "", complete ? "" : "partial call history"].filter(Boolean).join(" · ");
   return { label: "accounted spend", value, note };
+}
+
+export function presentProviderChartSpend(row: ProviderChartRow) {
+  const cost = presentAccountedSpend(row);
+  // Explicit zero is authoritative here. The UI can only qualify omissions still present on the wire.
+  if (row.unpricedRequestCount != null) return cost;
+  const coverage = (row.minimumUnpricedCount ?? 0) > 0 ? `at least ${row.minimumUnpricedCount} unpriced` : "coverage unknown";
+  return { ...cost, value: `${cost.value} accounted; ${coverage}` };
 }
 
 type BudgetScope = "policy" | "principal" | "provider";

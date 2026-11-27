@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ServerCog } from "lucide-react";
 import { BrandMark, InlineNote } from "./components";
 import { formatCount, formatTimestamp } from "./ui-helpers";
-import { presentAccountedSpend } from "./cost-presentation";
+import { presentAccountedSpend, presentProviderChartSpend } from "./cost-presentation";
 import { niceChartMaximum, providerChartRows, usageTimeline } from "./usage-analytics";
 import type { ProviderUsageSummary, ServiceItem, UsageDailySummary, UsageSnapshot } from "./ui-types";
 
@@ -93,7 +93,7 @@ export function ProviderUsageChart({ providers, services, limit = 6 }: { provide
           const name = provider.provider === "other-providers" ? "Other providers" : service?.name ?? provider.provider;
           const errors = `${provider.errorCount.toLocaleString("en-US")} ${provider.errorCount === 1 ? "error" : "errors"}`;
           const successRate = provider.requestCount ? Math.round((provider.successCount / provider.requestCount) * 100) : 0;
-          const cost = presentAccountedSpend(provider);
+          const cost = presentProviderChartSpend(provider);
           return <tr key={provider.provider}>
             <th scope="row">
               <span className="providerChartIdentity">
