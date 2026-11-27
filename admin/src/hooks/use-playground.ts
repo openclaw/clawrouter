@@ -11,7 +11,8 @@ import {
 } from "../domain";
 import { initialPlaygroundTarget } from "../playground-initial-target";
 import { playgroundDraftPayload } from "../playground-draft";
-import { createPlaygroundTurn, playgroundRequest } from "../ui-helpers";
+import { createPlaygroundTurn } from "../ui-helpers";
+import { playgroundRequest } from "../dashboard-fetch";
 import type { CatalogModel } from "../domain";
 import type { PlaygroundForm, PlaygroundTurn, ProviderAccess, ProviderReadiness, RouteCatalog } from "../ui-types";
 

@@ -1,7 +1,7 @@
 import React from "react";
 import { LogIn, Route } from "lucide-react";
 import { InlineError } from "../components";
-import { localLogin } from "../ui-helpers";
+import { localLogin } from "../dashboard-fetch";
 
 export function LoginScreen({ gatewayOrigin, local, checking, message, onSuccess, onRetry }: { gatewayOrigin: string; local: boolean; checking: boolean; message: string; onSuccess: () => Promise<void>; onRetry: () => Promise<void> }) {
   const [token, setToken] = React.useState("");
