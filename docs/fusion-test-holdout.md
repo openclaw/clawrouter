@@ -19,9 +19,17 @@ test. Use `qualifyRegressionHoldout` with the returned counts and exact digests.
 Supported loops bind one `const` identifier over a nonempty literal array of
 primitive values. Bodies can contain direct `test` or `it` registrations,
 blocks, and nested finite loops. Test names can be literals or templates that
-reference loop bindings. A group can register at most 256 tests and nest fewer
+reference loop bindings. Literal tuple tables can bind a flat list of `const`
+identifiers. Rows must have matching lengths and contain only primitive,
+regular-expression, function, or nested-array literals. Creating those values
+must not call functions, access properties, or use spreads or default bindings.
+Tuple rows and bindings are limited to 16 items; literal nesting is bounded.
+Test names can also concatenate strings and bound identifiers with `+`.
+A loop may have one direct registration statement instead of a block.
+A group can register at most 256 tests and nest fewer
 than nine loops. Awaited iteration, computed iterables, conditionals, arbitrary
 registration-time code, member calls, and dynamic names are rejected.
+Loop bindings may not shadow the `test` or `it` API used by a registration.
 
 This option does not execute source during partitioning or certify that all
 possible registrations were discovered. Complete native runs must still match
