@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Record a five-task Fusion cost study with four successful fallbacks, 58.49% lower estimated API cost and a failed no-slowdown gate.
+
 - Report native Node Fusion repair costs with independent cheap-model controls and explicit limits on routing and collaboration claims.
 - Record Fusion preparation and conditional repair pilots, including failed quality parity and cheap-first results without fallback rescues.
 
