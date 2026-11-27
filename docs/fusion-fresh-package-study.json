@@ -1,0 +1,1219 @@
+{
+  "schema": "fusion-fresh-package-study-v1",
+  "date": "2026-11-27",
+  "scope": "Six qualifying tasks from ten fixed runtime candidates across two repositories newly used in this campaign. One independent draw per arm. Historical public code, not training-data decontamination or production qualification.",
+  "policy": {
+    "models": [
+      "openai/gpt-6-luna",
+      "openai/gpt-6.1-terra"
+    ],
+    "reasoningEffort": "medium",
+    "maxOutputTokens": 8192,
+    "requestTimeoutMs": 180000,
+    "artifactFormat": "anchored-edits",
+    "fallback": "one fresh strong call after public rejection",
+    "cheapControl": "one independent call with exactly the cascade draft settings",
+    "orderSeed": "flat-fresh-three-arm-v1",
+    "maximumCalls": 24,
+    "maximumPlannedCostMicros": 1600304,
+    "stageBudgetMicros": 4000000,
+    "armCapMicros": 500000,
+    "maxElapsedRatio": 1,
+    "fullLabelsUsedForRouting": false
+  },
+  "exposure": {
+    "files": 21505,
+    "bytes": 2326636697,
+    "completeSerializedSourcesAndIdentitiesAbsent": true,
+    "limits": "Local saved protocol, manifest and call-journal scan only; not a model training-corpus audit."
+  },
+  "staticExclusions": [
+    "5e175e3f258e386839fd5017b484bc512c7eb0ac",
+    "4e6f20f1b70fdc743171fdb2f1a9f87592a15488",
+    "e9c67a5413fc9a5ae62f0f0d8b7fc6ad92b1b667",
+    "2e6ad2b864bac319289a2815139919239bd143c5"
+  ],
+  "staticExclusionReason": "Package entrypoint requires wrapper.cjs outside the existing JS-only fixture policy; excluded before runtime outcomes.",
+  "candidates": [
+    {
+      "id": "safe-stable-stringify-b8aad14ec197",
+      "repository": "safe-stable-stringify",
+      "base": "8a02137ac933eff57dd6e49beb9ee766fe8dd372",
+      "oracle": "b8aad14ec197fd26166856e4df051cdf17b12ef7",
+      "instruction": "fix: do not throw on a negative number `space` (#65)",
+      "qualified": false,
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 74939,
+          "passedAssertions": 74939,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 74937,
+          "passedAssertions": 74936,
+          "failedAssertions": 1,
+          "problems": []
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 74938,
+          "passedAssertions": 74938,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 74936,
+          "passedAssertions": 74935,
+          "failedAssertions": 1,
+          "problems": []
+        }
+      },
+      "expectedTests": {
+        "public": 74938,
+        "full": 74939
+      }
+    },
+    {
+      "id": "safe-stable-stringify-202765873c9c",
+      "repository": "safe-stable-stringify",
+      "base": "132e76cad22529011f7b517070f5d857dbca7fc1",
+      "oracle": "202765873c9c0842ae62f23e9c4a64b7f2633a90",
+      "instruction": "Add bigint string serialization option",
+      "qualified": false,
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 74936,
+          "passedAssertions": 74936,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 74932,
+          "passedAssertions": 74931,
+          "failedAssertions": 1,
+          "problems": []
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 74935,
+          "passedAssertions": 74935,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 74931,
+          "passedAssertions": 74930,
+          "failedAssertions": 1,
+          "problems": []
+        }
+      },
+      "expectedTests": {
+        "public": 74935,
+        "full": 74936
+      }
+    },
+    {
+      "id": "safe-stable-stringify-132e76cad225",
+      "repository": "safe-stable-stringify",
+      "base": "0a29dd268cf4a0d56b8bd27cada6e14f30af6e3f",
+      "oracle": "132e76cad22529011f7b517070f5d857dbca7fc1",
+      "instruction": "fix: implement safe option for toJSON and make other accesses safe",
+      "qualified": true,
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 74926,
+          "passedAssertions": 74926,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 74926,
+          "passedAssertions": 74918,
+          "failedAssertions": 8,
+          "problems": []
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 74921,
+          "passedAssertions": 74921,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 74921,
+          "passedAssertions": 74913,
+          "failedAssertions": 8,
+          "problems": []
+        }
+      },
+      "expectedTests": {
+        "public": 74921,
+        "full": 74926
+      }
+    },
+    {
+      "id": "safe-stable-stringify-66517e725672",
+      "repository": "safe-stable-stringify",
+      "base": "545081c812b5a7385a5932ec544f2b9eb4bed1da",
+      "oracle": "66517e725672aa843f2b859012a78f03a7bf3004",
+      "instruction": "fix: correct overflow info for arrays with maximumBreadth (#61)",
+      "qualified": true,
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 74921,
+          "passedAssertions": 74921,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 74921,
+          "passedAssertions": 74916,
+          "failedAssertions": 5,
+          "problems": []
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 74920,
+          "passedAssertions": 74920,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 74920,
+          "passedAssertions": 74915,
+          "failedAssertions": 5,
+          "problems": []
+        }
+      },
+      "expectedTests": {
+        "public": 74920,
+        "full": 74921
+      }
+    },
+    {
+      "id": "safe-stable-stringify-25b3110f88ed",
+      "repository": "safe-stable-stringify",
+      "base": "318cf4fcb48bce494005187e0b06b8304e051a40",
+      "oracle": "25b3110f88edac7fee70e2e604848c365d9b2286",
+      "instruction": "fix(typed-array): serialize non-finite floating-point values (#73)",
+      "qualified": true,
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 75168,
+          "passedAssertions": 75168,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 75168,
+          "passedAssertions": 75090,
+          "failedAssertions": 78,
+          "problems": []
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 75167,
+          "passedAssertions": 75167,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 75167,
+          "passedAssertions": 75089,
+          "failedAssertions": 78,
+          "problems": []
+        }
+      },
+      "expectedTests": {
+        "public": 75167,
+        "full": 75168
+      }
+    },
+    {
+      "id": "safe-stable-stringify-a8df6a14cb25",
+      "repository": "safe-stable-stringify",
+      "base": "0c2253ce6cbec6a0d4c14e470225e71ed9af9f8d",
+      "oracle": "a8df6a14cb25522dd851087e265c57cb6ff3cad2",
+      "instruction": "fix: enforce maximumDepth for nested objects with array replacers (#64)",
+      "qualified": true,
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 74940,
+          "passedAssertions": 74940,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 74940,
+          "passedAssertions": 74938,
+          "failedAssertions": 2,
+          "problems": []
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 74932,
+          "passedAssertions": 74932,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 74932,
+          "passedAssertions": 74930,
+          "failedAssertions": 2,
+          "problems": []
+        }
+      },
+      "expectedTests": {
+        "public": 74932,
+        "full": 74940
+      }
+    },
+    {
+      "id": "fastify-deepmerge-bc2075c0993b",
+      "repository": "fastify-deepmerge",
+      "base": "be5193b86e99f72572675b2d41f5129a07bfcc4b",
+      "oracle": "bc2075c0993bb15e98c87a21ff7d44bbda59ae59",
+      "instruction": "Also handle cloneProtoObject in mergeObject (#45)",
+      "qualified": true,
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 135,
+          "passedAssertions": 135,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 135,
+          "passedAssertions": 132,
+          "failedAssertions": 3,
+          "problems": []
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 126,
+          "passedAssertions": 126,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 126,
+          "passedAssertions": 123,
+          "failedAssertions": 3,
+          "problems": []
+        }
+      },
+      "expectedTests": {
+        "public": 126,
+        "full": 135
+      }
+    },
+    {
+      "id": "fastify-deepmerge-a55ac2e17639",
+      "repository": "fastify-deepmerge",
+      "base": "df6f4e1dce00e8d32a350c53e90671f0dbda26f6",
+      "oracle": "a55ac2e1763968953bf067111d4812f68d43dec1",
+      "instruction": "feat: make isMergeableObject configurable (#68)",
+      "qualified": false,
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 138,
+          "passedAssertions": 138,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 137,
+          "passedAssertions": 135,
+          "failedAssertions": 2,
+          "problems": []
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 130,
+          "passedAssertions": 130,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 129,
+          "passedAssertions": 128,
+          "failedAssertions": 1,
+          "problems": []
+        }
+      },
+      "expectedTests": {
+        "public": 130,
+        "full": 138
+      }
+    },
+    {
+      "id": "fastify-deepmerge-aa0137863598",
+      "repository": "fastify-deepmerge",
+      "base": "31689418aea9bc3a14a632e9305c1dce9f14b77a",
+      "oracle": "aa0137863598ccb351fba5f6c1ac75b65d27dccb",
+      "instruction": "feat: add `onlyDefinedProperties` option (#77)",
+      "qualified": true,
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 147,
+          "passedAssertions": 147,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselineFull": {
+          "valid": true,
+          "passed": false,
+          "assertions": 147,
+          "passedAssertions": 141,
+          "failedAssertions": 6,
+          "problems": []
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 131,
+          "passedAssertions": 131,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselinePublic": {
+          "valid": true,
+          "passed": false,
+          "assertions": 131,
+          "passedAssertions": 125,
+          "failedAssertions": 6,
+          "problems": []
+        }
+      },
+      "expectedTests": {
+        "public": 131,
+        "full": 147
+      }
+    },
+    {
+      "id": "fastify-deepmerge-9ae6a3919d79",
+      "repository": "fastify-deepmerge",
+      "base": "d688e09d14a8c64b7d8211ab7b6ad7ba5332db39",
+      "oracle": "9ae6a3919d794fc2d4fa5024c55c13ebca1e3f90",
+      "instruction": "add arrayMerge option (#5)",
+      "qualified": false,
+      "qualification": {
+        "referenceFull": {
+          "valid": true,
+          "passed": true,
+          "assertions": 112,
+          "passedAssertions": 112,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselineFull": {
+          "valid": false,
+          "passed": false,
+          "assertions": 100,
+          "passedAssertions": 95,
+          "failedAssertions": 5,
+          "problems": [
+            "invalid_plan",
+            "protocol_error"
+          ]
+        },
+        "referencePublic": {
+          "valid": true,
+          "passed": true,
+          "assertions": 107,
+          "passedAssertions": 107,
+          "failedAssertions": 0,
+          "problems": []
+        },
+        "baselinePublic": {
+          "valid": false,
+          "passed": false,
+          "assertions": 96,
+          "passedAssertions": 92,
+          "failedAssertions": 4,
+          "problems": [
+            "invalid_plan",
+            "protocol_error"
+          ]
+        }
+      },
+      "expectedTests": {
+        "public": 107,
+        "full": 112
+      }
+    }
+  ],
+  "records": [
+    {
+      "caseId": "safe-stable-stringify-132e76cad225",
+      "strategy": "cheap",
+      "publicPassed": false,
+      "escalated": false,
+      "normalizedMicros": 4380,
+      "costMicros": 4898,
+      "elapsedMs": 37421.496625,
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 74926,
+        "expectedTests": 74926
+      },
+      "passed": false
+    },
+    {
+      "caseId": "safe-stable-stringify-132e76cad225",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 30576,
+      "costMicros": 35758,
+      "elapsedMs": 29497.859208,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 74926,
+        "expectedTests": 74926
+      },
+      "passed": true
+    },
+    {
+      "caseId": "safe-stable-stringify-132e76cad225",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": true,
+      "normalizedMicros": 37361,
+      "costMicros": 15804,
+      "elapsedMs": 67660.56541699999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 74926,
+        "expectedTests": 74926
+      },
+      "passed": true
+    },
+    {
+      "caseId": "safe-stable-stringify-66517e725672",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 21897,
+      "costMicros": 26918,
+      "elapsedMs": 11473.412458000006,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 74921,
+        "expectedTests": 74921
+      },
+      "passed": true
+    },
+    {
+      "caseId": "safe-stable-stringify-66517e725672",
+      "strategy": "cheap",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 2249,
+      "costMicros": 2751,
+      "elapsedMs": 8650.3695,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 74921,
+        "expectedTests": 74921
+      },
+      "passed": true
+    },
+    {
+      "caseId": "safe-stable-stringify-66517e725672",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 2282,
+      "costMicros": 475,
+      "elapsedMs": 10524.01879100001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 74921,
+        "expectedTests": 74921
+      },
+      "passed": true
+    },
+    {
+      "caseId": "safe-stable-stringify-25b3110f88ed",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": true,
+      "normalizedMicros": 33685,
+      "costMicros": 40525,
+      "elapsedMs": 36250.07829099998,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 75168,
+        "expectedTests": 75168
+      },
+      "passed": true
+    },
+    {
+      "caseId": "safe-stable-stringify-25b3110f88ed",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 30904,
+      "costMicros": 7277,
+      "elapsedMs": 20970.092875000002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 75168,
+        "expectedTests": 75168
+      },
+      "passed": true
+    },
+    {
+      "caseId": "safe-stable-stringify-25b3110f88ed",
+      "strategy": "cheap",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 2942,
+      "costMicros": 704,
+      "elapsedMs": 13457.779959000007,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 75168,
+        "expectedTests": 75168
+      },
+      "passed": true
+    },
+    {
+      "caseId": "safe-stable-stringify-a8df6a14cb25",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 28877,
+      "costMicros": 34318,
+      "elapsedMs": 26144.00662499998,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 74940,
+        "expectedTests": 74940
+      },
+      "passed": true
+    },
+    {
+      "caseId": "safe-stable-stringify-a8df6a14cb25",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 2528,
+      "costMicros": 3072,
+      "elapsedMs": 15234.464500000002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 74940,
+        "expectedTests": 74940
+      },
+      "passed": true
+    },
+    {
+      "caseId": "safe-stable-stringify-a8df6a14cb25",
+      "strategy": "cheap",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 2296,
+      "costMicros": 337,
+      "elapsedMs": 9119.364374999946,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 74940,
+        "expectedTests": 74940
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fastify-deepmerge-bc2075c0993b",
+      "strategy": "cheap",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 1574,
+      "costMicros": 1832,
+      "elapsedMs": 11121.015167000005,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 135,
+        "expectedTests": 135
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fastify-deepmerge-bc2075c0993b",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 1668,
+      "costMicros": 737,
+      "elapsedMs": 11628.67154099996,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 135,
+        "expectedTests": 135
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fastify-deepmerge-bc2075c0993b",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 13917,
+      "costMicros": 16503,
+      "elapsedMs": 13218.501417000021,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 135,
+        "expectedTests": 135
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fastify-deepmerge-aa0137863598",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 1715,
+      "costMicros": 2004,
+      "elapsedMs": 11399.361749999982,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 147,
+        "expectedTests": 147
+      },
+      "passed": true
+    },
+    {
+      "caseId": "fastify-deepmerge-aa0137863598",
+      "strategy": "cheap",
+      "publicPassed": false,
+      "escalated": false,
+      "normalizedMicros": 2359,
+      "costMicros": 1322,
+      "elapsedMs": 17826.101874999993,
+      "full": {
+        "valid": false,
+        "passed": false
+      },
+      "passed": false
+    },
+    {
+      "caseId": "fastify-deepmerge-aa0137863598",
+      "strategy": "strong",
+      "publicPassed": true,
+      "escalated": false,
+      "normalizedMicros": 18280,
+      "costMicros": 21161,
+      "elapsedMs": 21171.642249999975,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 147,
+        "expectedTests": 147
+      },
+      "passed": true
+    }
+  ],
+  "calls": [
+    {
+      "caseId": "safe-stable-stringify-132e76cad225",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 4898,
+      "normalizedMicros": 4380,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 20728,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 4612
+      },
+      "elapsedMs": 32183.794083,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-132e76cad225",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 35758,
+      "normalizedMicros": 30576,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 20728,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1969
+      },
+      "elapsedMs": 23678.471250000002,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-132e76cad225",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2444,
+      "normalizedMicros": 4310,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 20728,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 4472
+      },
+      "elapsedMs": 30838.794041999994,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-132e76cad225",
+      "strategy": "cascade",
+      "role": "fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 13360,
+      "normalizedMicros": 33051,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 20728,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2464
+      },
+      "elapsedMs": 28616.055458000003,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-66517e725672",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 26918,
+      "normalizedMicros": 21897,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 20084,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 362
+      },
+      "elapsedMs": 5650.224582999974,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-66517e725672",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2751,
+      "normalizedMicros": 2249,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 20084,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 479
+      },
+      "elapsedMs": 3486.672125000012,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-66517e725672",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 475,
+      "normalizedMicros": 2282,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 20084,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 546
+      },
+      "elapsedMs": 3986.524208000017,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-25b3110f88ed",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 3583,
+      "normalizedMicros": 2961,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 24871,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 946
+      },
+      "elapsedMs": 7451.526124999975,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-25b3110f88ed",
+      "strategy": "cascade",
+      "role": "fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 36942,
+      "normalizedMicros": 30724,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 24871,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1170
+      },
+      "elapsedMs": 15170.074499999988,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-25b3110f88ed",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 7277,
+      "normalizedMicros": 30904,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 24871,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1206
+      },
+      "elapsedMs": 14809.161624999979,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-25b3110f88ed",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 704,
+      "normalizedMicros": 2942,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 24871,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 909
+      },
+      "elapsedMs": 7099.0183330000145,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-a8df6a14cb25",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 34318,
+      "normalizedMicros": 28877,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 21764,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1422
+      },
+      "elapsedMs": 19605.622625000018,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-a8df6a14cb25",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 3072,
+      "normalizedMicros": 2528,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 21764,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 701
+      },
+      "elapsedMs": 7026.902624999988,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "safe-stable-stringify-a8df6a14cb25",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 337,
+      "normalizedMicros": 2296,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 21764,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 237
+      },
+      "elapsedMs": 2679.298833000008,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "fastify-deepmerge-bc2075c0993b",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1832,
+      "normalizedMicros": 1574,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 10344,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1077
+      },
+      "elapsedMs": 8576.730917000037,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "fastify-deepmerge-bc2075c0993b",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 737,
+      "normalizedMicros": 1668,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 10344,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1266
+      },
+      "elapsedMs": 9314.415084000037,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "fastify-deepmerge-bc2075c0993b",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 16503,
+      "normalizedMicros": 13917,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 10344,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 714
+      },
+      "elapsedMs": 11045.194625000004,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "fastify-deepmerge-aa0137863598",
+      "strategy": "cascade",
+      "role": "draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2004,
+      "normalizedMicros": 1715,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 11522,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1125
+      },
+      "elapsedMs": 9043.210791999998,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "fastify-deepmerge-aa0137863598",
+      "strategy": "cheap",
+      "role": "cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1322,
+      "normalizedMicros": 2359,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 11522,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2412
+      },
+      "elapsedMs": 17120.314625,
+      "disposition": "complete"
+    },
+    {
+      "caseId": "fastify-deepmerge-aa0137863598",
+      "strategy": "strong",
+      "role": "control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 21161,
+      "normalizedMicros": 18280,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 11522,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1351
+      },
+      "elapsedMs": 18749.622291999985,
+      "disposition": "complete"
+    }
+  ],
+  "summary": {
+    "strong": {
+      "passed": 6,
+      "costMicros": 141935,
+      "elapsedMs": 122475.514833
+    },
+    "cascade": {
+      "passed": 6,
+      "costMicros": 62617,
+      "elapsedMs": 152697.1602899999
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 2,
+    "escalations": 2,
+    "costRatio": 0.44116673125022016,
+    "elapsedRatio": 1.2467566313006178,
+    "costComparison": {
+      "costBasis": "invoice-and-cache-neutral-v1",
+      "strong": {
+        "costMicros": 141935,
+        "normalizedMicros": 144451
+      },
+      "cascade": {
+        "costMicros": 62617,
+        "normalizedMicros": 79239
+      },
+      "costRatio": 0.44116673125022016,
+      "normalizedCostRatio": 0.5485527964500073,
+      "invoiceCostScreen": true,
+      "normalizedCostScreen": true,
+      "costScreen": true
+    },
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false,
+    "cheap": {
+      "passed": 4,
+      "costMicros": 11844,
+      "elapsedMs": 97596.12750099995
+    },
+    "summaryPolicy": "routing-three-arm-v1",
+    "routingLead": false
+  },
+  "timingComponents": [
+    {
+      "strategy": "cheap",
+      "workflowMs": 97596.12750099995,
+      "recordedCallMs": 71145.82891600007,
+      "outsideRecordedCallsMs": 26450.29858499988
+    },
+    {
+      "strategy": "strong",
+      "workflowMs": 122475.514833,
+      "recordedCallMs": 93538.29699999996,
+      "outsideRecordedCallsMs": 28937.21783300003
+    },
+    {
+      "strategy": "cascade",
+      "workflowMs": 152697.1602899999,
+      "recordedCallMs": 111447.502834,
+      "outsideRecordedCallsMs": 41249.65745599991
+    }
+  ],
+  "actualExperimentCostMicros": 216396,
+  "provenance": {
+    "screenSha256": "3d77bd570be3d11ce3be347949388614d23d006c2ce58787031dc05116fac060",
+    "qualificationSha256": "5fc88be8dc69afbfe614f688a120848f1c6ea9004f90f4a0d690671b8ef73de8",
+    "liveProtocolSha256": "a43efe1603e331aada5b5a2c6548480f948fa079e2ca7fc4b8a1dc55ed340bbb",
+    "resultSha256": "f9cfcc3d49b4615666ab4afd450ef4b823db94d92a9ddbd52bc8aa38b24bff42",
+    "auditStatus": "reproduced",
+    "terminalAuditSha256": "4f44d5011e1e6fae263a5c753fab696a316fc7f456db58d5febe1bc344750013"
+  },
+  "runtime": {
+    "image": "sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c",
+    "node": "24.22.1",
+    "platform": "linux/arm64",
+    "tap": "16.3.10",
+    "tape": "5.7.5",
+    "toolsArchiveSha256": "fa650e48599db11d20567be2a709a4e6bc0c256f19d94fdfc3627113cb42cecc",
+    "toolsLockSha256": "23648a3dd1ae641f5d45ee0f2e83a0409a5560aabb0dbdce739a955c45a7a6f5",
+    "network": "none",
+    "testProtection": true
+  }
+}

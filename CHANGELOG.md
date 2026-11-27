@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Document a six-task Fusion transfer check: matched strong-only quality and 55.88% lower estimated model cost, but 24.68% more workflow time and a failed latency gate.
+
 - Preflight only the models used by a Fusion benchmark, including selected strategy advisers and fallbacks; unrelated model availability or credentials no longer block a run.
 
 - Stage Fusion public test files in one sandbox command while preserving file and symlink checks.
