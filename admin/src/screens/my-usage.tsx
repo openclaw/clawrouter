@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Info } from 'lucide-react';
 import type { PersonalUsageEvent, UsageCostSummary, UsageMetrics } from '../../../shared/usage-report';
 import { UsageCoverage, CompleteExport, ExactRanking } from './complete-usage';
@@ -101,7 +101,7 @@ function MoneyValue({ label, micros }: { label: string; micros: number | null })
   return <dd title={usageMoney(micros)} aria-label={micros === null ? label + ' unavailable' : label + ' ' + usageMoney(micros)}>{personalGlanceMoney(micros)}</dd>;
 }
 
-export function PersonalUsageSummary({ data, onOpen }: { data: PersonalUsageData; onOpen?: () => void; keys?: readonly UsageKeyName[] }) {
+export function PersonalUsageSummary({ data, onOpen, comparison }: { data: PersonalUsageData; onOpen?: () => void; keys?: readonly UsageKeyName[]; comparison?: ReactNode }) {
   const { report, reload } = data, value = report.value;
   const complete = value ? personalHistoryComplete(value) : false;
   const tokens = value ? tokenTotal(value.metrics, complete) : null;
@@ -118,7 +118,7 @@ export function PersonalUsageSummary({ data, onOpen }: { data: PersonalUsageData
       </div>
       {onOpen ? <button type="button" className="buttonSecondary" onClick={onOpen}>Open My usage</button> : null}
     </header>
-    <p className="personalNote">{usageCaveats.personal}</p>
+    {!comparison && <p className="personalNote">{usageCaveats.personal}</p>}
     {report.loading ? <p role="status">Loading your usage report…</p> : null}
     {report.error ? <div role="alert"><p>{report.error}</p>{value ? <p>Old displayed report; Refresh required before continuing.</p> : null}<button type="button" onClick={reload}>Retry report</button></div> : null}
     {value && tokens && api && subscription ? <>
@@ -127,6 +127,7 @@ export function PersonalUsageSummary({ data, onOpen }: { data: PersonalUsageData
         {' · '}<UsagePeriod query={value.query} /> ({value.query.timezone}, end exclusive)
       </p> : null}
       {filters.length ? <p className="personalActiveFilters">Exact filters: {filters.map(([key, filter]) => key + ' = ' + filter).join(' · ')}</p> : null}
+      {comparison && <>{comparison}<p className="personalNote">{usageCaveats.personal}</p></>}
       <dl className={'personalGlance' + (subscription.present ? ' withSubscription' : '')}>
         <div>
           <dt>Total tokens</dt>
@@ -280,12 +281,33 @@ const chartHelp: Record<PersonalUsageMetric, string> = {
 };
 const legendLabel: Record<PersonalUsageMetric, string> = { tokens: 'Input + output tokens', apiCost: 'Known API cost', calls: 'Model calls' };
 
-function UsageOverview({ value, query, setQuery, canRefine, onKey, metric, onMetricChange }: { value: CompleteUsageReport; canRefine: boolean; query: PersonalUsageQuery; setQuery: (query: PersonalUsageQuery) => void; onKey: (key: CompleteUsageQuery['filters']['key']) => void; metric: PersonalUsageMetric; onMetricChange: (metric: PersonalUsageMetric) => void }) {
+function UsageTrend({ value, metric }: { value: CompleteUsageReport; metric: PersonalUsageMetric }) {
   const points = useMemo(() => personalTrendRows(value, metric), [value, metric]);
-  const ranking = useMemo(() => personalRankedGroups(value, metric), [value, metric]);
   const peak = personalPeak(points);
-  const maximum = Math.max(1, ...ranking.rows.map(row => row.value ?? 0));
   const format = (amount: number | null) => amount === null ? 'Not reported' : metric === 'apiCost' ? usageMoney(amount) : count(amount) + (metric === 'tokens' ? ' tokens' : ' calls');
+  return <section className="dashboardPanel personalTrendPanel" aria-label="Usage trend">
+    <header className="personalChartHeader">
+      <div>
+        <h2>{personalMetricLabels[metric]} over time</h2>
+        <p>{peak ? <>Peak reported {peak.label} · <strong>{format(peak.value)}</strong></> : 'Exact time buckets from this report'}</p>
+      </div>
+      <UsageHelp label="Chart info" icon ariaLabel="Chart metrics and coverage">
+        <p>{chartHelp[metric]}</p>
+        <p>Gaps mean no reported value, never free or zero usage. Bucket labels use {value.query.timezone}; inspect a point for exact clipped bounds. Only this period is available, so no previous-period comparison is inferred.</p>
+      </UsageHelp>
+    </header>
+    <PersonalUsageTimeSeries points={points} label={personalMetricLabels[metric] + ' by bucket in ' + value.query.timezone} formatValue={format} formatAxis={amount => metric === 'apiCost' ? costAxis(amount) : formatCount(amount)} />
+    <div className="personalChartLegend">
+      <span><i />{legendLabel[metric]}</span>
+      {points.some(point => point.partial && point.value !== null) ? <span><i className="partial" />Partial coverage</span> : null}
+      {points.some(point => point.value === null) ? <span>Gaps: not reported</span> : null}
+    </div>
+  </section>;
+}
+
+function UsageRanking({ value, query, setQuery, canRefine, onKey, metric }: { value: CompleteUsageReport; query: PersonalUsageQuery; setQuery: (query: PersonalUsageQuery) => void; canRefine: boolean; onKey: (key: CompleteUsageQuery['filters']['key']) => void; metric: PersonalUsageMetric }) {
+  const ranking = useMemo(() => personalRankedGroups(value, metric), [value, metric]);
+  const maximum = Math.max(1, ...ranking.rows.map(row => row.value ?? 0));
   const groupBy = value.query.groupBy as PersonalUsageQuery['groupBy'];
   const selectedKey = groupBy === 'key' && value.query.filters.key;
   const hasDrilldown = canRefine && !selectedKey && ranking.rows.some(({ group }) => groupBy === 'key' || group.identity.value !== null);
@@ -293,54 +315,31 @@ function UsageOverview({ value, query, setQuery, canRefine, onKey, metric, onMet
     if (groupBy === 'key') onKey(id === null ? { kind: 'session' } : { kind: 'credential', id });
     else if (id !== null) setQuery({ ...query, filters: { ...query.filters, [groupBy]: id } });
   }
-  return <>
-    <div className="personalOverviewToolbar"><MetricSwitch metric={metric} onChange={onMetricChange} /></div>
-    <div className="personalChartsGrid">
-      <section className="dashboardPanel personalTrendPanel" aria-label="Usage trend">
-        <header className="personalChartHeader">
-          <div>
-            <h2>{personalMetricLabels[metric]} over time</h2>
-            <p>{peak ? <>Peak reported {peak.label} · <strong>{format(peak.value)}</strong></> : 'Exact time buckets from this report'}</p>
-          </div>
-          <UsageHelp label="Chart info" icon ariaLabel="Chart metrics and coverage">
-            <p>{chartHelp[metric]}</p>
-            <p>Gaps mean no reported value, never free or zero usage. Bucket labels use {value.query.timezone}; inspect a point for exact clipped bounds. Only this period is available, so no previous-period comparison is inferred.</p>
-          </UsageHelp>
-        </header>
-        <PersonalUsageTimeSeries points={points} label={personalMetricLabels[metric] + ' by bucket in ' + value.query.timezone} formatValue={format} formatAxis={amount => metric === 'apiCost' ? costAxis(amount) : formatCount(amount)} />
-        <div className="personalChartLegend">
-          <span><i />{legendLabel[metric]}</span>
-          {points.some(point => point.partial && point.value !== null) ? <span><i className="partial" />Partial coverage</span> : null}
-          {points.some(point => point.value === null) ? <span>Gaps: not reported</span> : null}
+  return <section className="dashboardPanel personalRanksPanel" aria-label="Usage breakdown">
+    <header className="personalChartHeader">
+      <div>
+        <h2>{selectedKey ? 'Selected key usage' : ranking.truncated ? 'Top returned groups' : 'Top ' + groupBy + 's'}</h2>
+        <p>{selectedKey ? 'Showing ' : 'Ranked by '}{metric === 'apiCost' ? 'known API cost' : personalMetricLabels[metric].toLowerCase()}</p>
+      </div>
+      <UsageHelp label="Ranking info" icon ariaLabel="Group ranking scope and coverage">
+        <p>Uses only this report’s returned groups. {ranking.truncated ? 'Only the current rank page is shown here; these are not necessarily the global leaders for this chart metric. ' : null}
+          {hasDrilldown ? ranking.truncated ? 'Use the exact ranking and page controls in Details.' : 'Select a named group to apply an exact filter.' : null}</p>
+        <p>{ranking.missing ? count(ranking.missing) + ' returned groups have no reported value for this metric; they are not treated as zero.' : 'All returned groups have a reported value for this metric.'} Partial values include only reported tokens or known API prices. Full lane and price-quality breakdowns are in Details.</p>
+      </UsageHelp>
+    </header>
+    {!ranking.rows.length ? <p className="personalRankEmpty">No groups in this period.</p> : <ol className="personalRankList">
+      {ranking.rows.map(({ group, value: amount, partial, index }) => <li key={index}>
+        <div className="personalRankLabel">
+          {!hasDrilldown || (group.identity.value === null && groupBy !== 'key')
+            ? <strong>{usageGroupLabel(groupBy, group.identity.value)}</strong>
+            : <button type="button" className="personalGroupButton" onClick={() => filterGroup(group.identity.value)}>{usageGroupLabel(groupBy, group.identity.value)}</button>}
+          <span>{amount === null ? 'Not reported' : metric === 'apiCost' ? usageMoney(amount) : formatCount(amount)}{partial && amount !== null ? <small>partial</small> : null}</span>
         </div>
-      </section>
-      <section className="dashboardPanel personalRanksPanel" aria-label="Usage breakdown">
-        <header className="personalChartHeader">
-          <div>
-            <h2>{selectedKey ? 'Selected key usage' : ranking.truncated ? 'Top returned groups' : 'Top ' + groupBy + 's'}</h2>
-            <p>{selectedKey ? 'Showing ' : 'Ranked by '}{metric === 'apiCost' ? 'known API cost' : personalMetricLabels[metric].toLowerCase()}</p>
-          </div>
-          <UsageHelp label="Ranking info" icon ariaLabel="Group ranking scope and coverage">
-            <p>Uses only this report’s returned groups. {ranking.truncated ? 'Only the current rank page is shown here; these are not necessarily the global leaders for this chart metric. ' : null}
-              {hasDrilldown ? ranking.truncated ? 'Use the exact ranking and page controls in Details.' : 'Select a named group to apply an exact filter.' : null}</p>
-            <p>{ranking.missing ? count(ranking.missing) + ' returned groups have no reported value for this metric; they are not treated as zero.' : 'All returned groups have a reported value for this metric.'} Partial values include only reported tokens or known API prices. Full lane and price-quality breakdowns are in Details.</p>
-          </UsageHelp>
-        </header>
-        {!ranking.rows.length ? <p className="personalRankEmpty">No groups in this period.</p> : <ol className="personalRankList">
-          {ranking.rows.map(({ group, value: amount, partial, index }) => <li key={index}>
-            <div className="personalRankLabel">
-              {!hasDrilldown || (group.identity.value === null && groupBy !== 'key')
-                ? <strong>{usageGroupLabel(groupBy, group.identity.value)}</strong>
-                : <button type="button" className="personalGroupButton" onClick={() => filterGroup(group.identity.value)}>{usageGroupLabel(groupBy, group.identity.value)}</button>}
-              <span>{amount === null ? 'Not reported' : metric === 'apiCost' ? usageMoney(amount) : formatCount(amount)}{partial && amount !== null ? <small>partial</small> : null}</span>
-            </div>
-            <div className={'personalRankTrack' + (amount === null ? ' missing' : '')} aria-hidden="true">{amount !== null ? <span style={{ width: (amount / maximum * 100) + '%' }} /> : null}</div>
-          </li>)}
-        </ol>}
-        <p className="personalRankFooter">{ranking.rows.length} of {ranking.total} returned groups{hasDrilldown ? ' · select a name to filter' : ''}</p>
-      </section>
-    </div>
-  </>;
+        <div className={'personalRankTrack' + (amount === null ? ' missing' : '')} aria-hidden="true">{amount !== null ? <span style={{ width: (amount / maximum * 100) + '%' }} /> : null}</div>
+      </li>)}
+    </ol>}
+    <p className="personalRankFooter">{ranking.rows.length} of {ranking.total} returned groups{hasDrilldown ? ' · select a name to filter' : ''}</p>
+  </section>;
 }
 
 function UsageActivity({ data, timezone }: { data: PersonalUsageData; timezone: string }) {
@@ -421,6 +420,15 @@ type Panel = typeof panels[number];
 
 type CurrentKey = UsageKeyName & { enabled?: boolean };
 
+// Use the same breakpoint at which the overview charts stack in personal-usage.css.
+const stackedCharts = '(max-width: 800px)';
+function subscribeToChartLayout(notify: () => void) {
+  const media = window.matchMedia(stackedCharts);
+  media.addEventListener('change', notify);
+  return () => media.removeEventListener('change', notify);
+}
+const chartsAreStacked = () => window.matchMedia(stackedCharts).matches;
+
 export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: PersonalUsageData; keys?: readonly CurrentKey[] }) {
   const { report, controls: query, setControls: setQuery, showEvents } = data, value = report.value;
   const [panel, setPanel] = useState<Panel>('overview');
@@ -439,6 +447,25 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
   }
   const q = data.query, selectedKey = q?.filters.key;
   const comparingKeys = !selectedKey && q?.groupBy === 'key' && panel === 'overview';
+  const narrow = useSyncExternalStore(subscribeToChartLayout, chartsAreStacked, () => false);
+  const comparisonFirst = narrow && panel === 'overview' && value?.query.groupBy === 'key';
+  const compareButton = useRef<HTMLButtonElement>(null);
+  const comparison = useRef<HTMLDivElement>(null);
+  const revealOnCompare = useRef(false);
+  useLayoutEffect(() => {
+    if (!revealOnCompare.current) return;
+    const trigger = compareButton.current;
+    const ownsFocus = trigger && document.activeElement === trigger;
+    if (ownsFocus && narrow && panel === 'overview' && report.loading) return;
+    revealOnCompare.current = false;
+    if (!ownsFocus || !comparisonFirst || report.error || !comparison.current) return;
+    const bounds = trigger.getBoundingClientRect();
+    if (bounds.bottom <= 0 || bounds.top >= window.innerHeight) return;
+    // Reveal the result of this activation, not future refreshes. Keep its focused
+    // trigger on screen as well, including on short or zoomed viewports.
+    comparison.current.scrollIntoView({ block: 'nearest' });
+    trigger.scrollIntoView({ block: 'nearest' });
+  }, [comparisonFirst, narrow, panel, report.loading, report.error]);
   function selectKey(key: CompleteUsageQuery['filters']['key']) {
     if (!q) return;
     const filters = { ...q.filters };
@@ -449,15 +476,28 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
   function panelContent(name: Panel) {
     if (name === 'activity' && value) return <UsageActivity data={data} timezone={value.query.timezone} />;
     if (!value) return <p className="personalNote">{report.loading ? 'Loading report…' : 'A usage report is needed for this view. Use Retry report above if the read failed.'}</p>;
-    if (name === 'overview') return <UsageOverview value={value} query={query} setQuery={setQuery} canRefine={!report.error} onKey={selectKey} metric={metric} onMetricChange={setMetric} />;
+    if (name === 'overview') {
+      const metrics = <div className="personalOverviewToolbar"><MetricSwitch metric={metric} onChange={setMetric} /></div>;
+      const ranking = <UsageRanking value={value} query={query} setQuery={setQuery} canRefine={!report.error} onKey={selectKey} metric={metric} />;
+      const trend = <UsageTrend value={value} metric={metric} />;
+      if (comparisonFirst) return <div className="personalKeyOverview">
+        <PersonalUsageSummary data={data} comparison={<div ref={comparison}>{metrics}{ranking}</div>} />
+        {trend}
+      </div>;
+      return <>{metrics}<div className="personalChartsGrid">{trend}{ranking}</div></>;
+    }
     return <UsageDetails value={value} data={data} />;
   }
   return <div className="personalUsageCanvas">
     <UsageControls query={query} onChange={setQuery} onRefresh={data.reload} onPreset={data.choosePreset} onClear={data.clearFilters} onBack={q && !report.error ? data.back : undefined} loading={report.loading}>
-      <button type="button" className="buttonSecondary" aria-disabled={!q || Boolean(report.error) || comparingKeys} onClick={() => {
+      <button ref={compareButton} type="button" className="buttonSecondary" aria-disabled={!q || Boolean(report.error) || comparingKeys} onClick={event => {
         if (!q || report.error || comparingKeys) return;
         if (selectedKey) selectKey(undefined);
         else {
+          if (narrow) {
+            event.currentTarget.focus({ preventScroll: true });
+            revealOnCompare.current = true;
+          }
           setPanel('overview');
           if (q.groupBy !== 'key') data.refine({ ...q, groupBy: 'key', rankOffset: 0 });
         }
@@ -476,7 +516,7 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
         </select></label>
       </> : null}
     </UsageControls>
-    <PersonalUsageSummary data={data} />
+    {!comparisonFirst && <PersonalUsageSummary data={data} />}
     <div className="personalTabList" role="tablist" aria-label="Personal usage views" onKeyDown={moveFocus}>
       {panels.map((name, index) => <button type="button" role="tab" key={name} id={id + '-tab-' + name} aria-controls={id + '-panel-' + name} aria-selected={panel === name} tabIndex={panel === name ? 0 : -1} ref={element => { tabs.current[index] = element; }} onClick={() => setPanel(name)}>
         {name[0].toUpperCase() + name.slice(1)}{name === 'activity' && data.events.error ? ' · unavailable' : ''}

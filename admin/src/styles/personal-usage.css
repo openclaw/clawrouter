@@ -5,7 +5,10 @@
   --chart-primary: var(--accent);
   min-width: 0;
 }
-.personalUsageCanvas { display: grid; gap: 14px; }
+.personalUsageCanvas, .personalKeyOverview { display: grid; gap: 14px; }
+.personalKeyOverview .personalRanksPanel { border: 0; background: none; box-shadow: none; }
+.personalKeyOverview .personalRanksPanel :is(.personalChartHeader, .personalRankList, .personalRankFooter, .personalRankEmpty) { padding-inline: 0; }
+.personalKeyOverview .personalOverviewToolbar { justify-content: flex-start; padding: 0; }
 .personalUsageCanvas > [role="tabpanel"] { min-width: 0; }
 .personalUsageCanvas > [role="tabpanel"][hidden] { display: none; }
 .personalUsageSummary, .personalControls, .personalSection { padding: 18px 20px; min-width: 0; }
