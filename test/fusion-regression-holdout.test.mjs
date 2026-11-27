@@ -280,6 +280,13 @@ test('Tape assertions preserve completion and qualify a separate hidden regressi
   ].map(([view, content, digest]) => [view, executeTape(content, digest, fix)]));
   const reference = run(value => value);
   assert.equal(qualifyRegressionHoldout(split, { reference, baseline: run(() => 0) }), true);
+  const inflated = { ...split, expectedPublic: 1, expectedHidden: 2 };
+  const inflatedReceipts = Object.fromEntries(Object.entries({ reference, baseline: run(() => 0) }).map(([role, views]) =>
+    [role, Object.fromEntries(Object.entries(views).map(([view, receipt]) => [view, { ...receipt,
+      assertions: view === 'public' ? 1 : view === 'hidden' ? 2 : 3,
+      failedAssertions: role === 'reference' ? 0 : 1,
+    }]))]));
+  assert.equal(qualifyRegressionHoldout(inflated, inflatedReceipts), false);
   const hiddenPositive = split.files[0].hiddenContent.includes(tapeAssertions[1]);
   const baseline = run(value => (hiddenPositive ? value >= 0 : value <= 0) ? value : 0);
   assert.equal(baseline.public.passed, false);
