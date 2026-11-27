@@ -56,7 +56,7 @@ test('new day reports on fully projected shards can use cells; existing cuts kee
   assert.equal(f.calls.filter(c=>c.body.action==='events').at(-1).body.cut.source,'projection');assert.equal(page.events.length,100);assert.ok(page.nextCursor);assert.ok(page.events.every(e=>e.model==='m1'&&e.user==='alice@example.com'));
   complete(await f.continuation({kind:'release',cut:report.cut,query:report.query}));
  }
- const exported=complete(await f.export({...query,filters:{model:'rare'}}));
+ const exported=await f.export({...query,filters:{model:'rare'}});
  assert.equal(exported.events.length,1);assert.equal(exported.events[0].id,'paired-749');
  assert.equal(f.calls.filter(c=>c.body.action==='events').at(-1).body.cut.source,'projection');
  // A second owner's unfolded tail cannot make a small owner report choose cells.

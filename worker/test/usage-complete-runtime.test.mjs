@@ -12,7 +12,9 @@ test('workerd actual private DO path: complete ranks, equal-ID pages, retained e
   export {BudgetLedgerObject} from './worker/ledgers.ts';
   export {PolicyBindingIndexObject} from './worker/authority.ts';
   export class GrantCredentialObject {fetch(){return new Response('unused')}}
-  import {readCompleteUsage,exportCompleteUsage} from './worker/usage-report.ts';
+  import {readCompleteUsage} from './worker/usage-report.ts';
+  import {parseCompleteUsageRequest} from './worker/usage-report-session.ts';
+  import {exportRefreshedUsage} from './admin/src/complete-usage.ts';
   import { usageStub } from './worker/usage-ledger-client.ts';
   import {authorityCall} from './worker/authority.ts';
   export class UsageLedgerObject extends Current {
@@ -39,17 +41,24 @@ test('workerd actual private DO path: complete ranks, equal-ID pages, retained e
    if(opened.kind!=='complete')return Response.json({summary,opened});
    const report=opened.value,one=await readCompleteUsage(env,verify,{kind:'events',cut:report.cut,query:report.query,pageSize:1});
    const two=one.kind==='complete'?await readCompleteUsage(env,verify,{kind:'events',cut:report.cut,query:report.query,pageSize:1,cursor:one.value.nextCursor}):one;
-   const exported=await exportCompleteUsage(env,verify,report.query);
+   const exportRequests=[];
+   const request=async(origin,path,init={})=>{
+    const http=new Request(new URL(path,origin),init),kind=http.method==='DELETE'?'release':new URL(http.url).pathname.split('/').at(-1);
+    const outcome=await readCompleteUsage(env,verify,parseCompleteUsageRequest(http,kind,'admin'),init.signal);
+    exportRequests.push({kind,outcome:outcome.kind});return outcome;
+   };
+   const file=await exportRefreshedUsage({request,origin:'https://router.example',audience:'admin',query:report.query,signal:new AbortController().signal,isCurrent:()=>true},'json');
+   const exported=JSON.parse(file.content);
    await usageStub(env,'tenant','p1').fetch('https://private/mutate');
    const invalid=await readCompleteUsage(env,verify,{kind:'validate',cut:report.cut,query:report.query});
    const plan=await (await usageStub(env,'tenant','p1').fetch('https://private/plan')).json();
    await readCompleteUsage(env,verify,{kind:'release',cut:report.cut,query:report.query});
-   return Response.json({summary,report,one,two,exportKind:exported.kind,exportRows:exported.kind==='complete'?exported.value.events.length:null,invalid,plan});
+   return Response.json({summary,report,one,two,exportRequests,exportRows:exported.events.length,invalid,plan});
   }}`,'export default {fetch(){throw Error("unexpected outbound")}}');
   const at=performance.now(),response=await worker.dispatchFetch('https://fixture/');assert.equal(response.status,200,await response.clone().text());const proof=await response.json();
   assert.equal(proof.summary.kind,'complete',JSON.stringify(proof));assert.equal(proof.summary.value.cut,null);assert.equal(proof.report.metrics.calls,520);assert.equal(proof.report.rank.distinctGroups,260);assert.equal(proof.report.remainder.metrics.calls,320);
   assert.equal(proof.one.kind,'complete');assert.equal(proof.two.kind,'complete');assert.equal(proof.one.value.events[0].id,'e259');assert.equal(proof.two.value.events[0].id,'e259');assert.notEqual(proof.one.value.nextCursor,proof.two.value.nextCursor);
-  assert.equal(proof.exportKind,'complete');assert.equal(proof.exportRows,520);assert.equal(proof.invalid.kind,'restart');assert.equal(proof.invalid.reason,'mutation');
+  assert.equal(proof.exportRows,520);assert.ok(proof.exportRequests.every(request=>request.outcome==='complete'));assert.deepEqual(proof.exportRequests.map(request=>request.kind),['report',...Array(6).fill('events'),'validate','release']);assert.equal(proof.invalid.kind,'restart');assert.equal(proof.invalid.reason,'mutation');
   assert.ok(proof.plan.some(p=>/usage_events_report_scope/.test(p.detail)));assert.ok(proof.plan.some(p=>/SEARCH a USING.*INDEX/.test(p.detail)));
   t.diagnostic(JSON.stringify({qualification:'local workerd SQLite, not deployed capacity/auth',rows:520,shards:2,elapsedMs:Math.round(performance.now()-at),plan:proof.plan}));
  }finally{await worker?.dispose();await rm(temporary,{recursive:true,force:true});}

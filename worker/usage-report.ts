@@ -1,4 +1,4 @@
-import { emptyUsageMetrics, usageMetricKeys, usageTokenFields } from "../shared/usage-report.ts";
+import { emptyUsageMetrics, usageMetricKeys } from "../shared/usage-report.ts";
 import type { PersonalUsageEvents, PersonalUsageReport, PersonalUsageEvent, UsageCostSummary, UsageGroupBy, UsageMetrics, UsageReportGroup } from "../shared/usage-report.ts";
 import { usageStub } from "./usage-ledger-client.ts";
 import type { Env } from "./types.ts";
@@ -395,52 +395,4 @@ export async function readCompleteUsage(env:Env,verify:UsageVerifier,input:Compl
       const cleanup=new CompleteOperation();try{await cleanup.call(authorityStub(env),'/usage-cuts/release',{binding,operation});}catch{}finally{cleanup.close();}
     }
   }
-}
-
-function eventAdditives(event: CompleteUsageEvent): UsageAdditives {
-  const result=emptyAdditives(),m=result.metrics;m.calls=1;
-  if(!['generation','utility'].includes(event.callKind)||typeof event.status!=='string'||!lanes.has(event.lane)||!classes.has(event.costClass))failComplete('unavailable','source');
-  m.generationCalls=Number(event.callKind==='generation');m.utilityCalls=Number(event.callKind==='utility');
-  m.successfulCalls=Number(event.status==='success');m.deniedCalls=Number(event.status==='denied');m.errorCalls=Number(event.status!=='success'&&event.status!=='denied');
-  for(const [field,present] of usageTokenFields){
-    const v=event[field];if(v!==null){nonnegative(v);m[field]=v;m[present]=1;}
-  }
-  if(event.recordedChargeMicros!==null){nonnegative(event.recordedChargeMicros);result.recordedChargeMicros=event.recordedChargeMicros;result.chargeReportedCalls=1;}
-  if(event.reportingCostMicros!==null)nonnegative(event.reportingCostMicros);
-  if(event.costClass==='unknown'&&event.reportingCostMicros!==null||event.costClass!=='unknown'&&event.reportingCostMicros===null)failComplete('unavailable','source');
-  result.costs=[{lane:event.lane,costClass:event.costClass,calls:1,amountMicros:event.reportingCostMicros??0}];return result;
-}
-/** Private mechanics only; CSV/JSON download adapters and UI remain Unit4. A new
- * export always captures independently using the selected ABSOLUTE refinement.
- * No file/result escapes until every additive and final vector check passes. */
-export async function exportCompleteUsage(env:Env,verify:UsageVerifier,query:CompleteUsageQuery,signal?:AbortSignal):Promise<CompleteUsageOutcome<{report:CompleteUsageReport;events:CompleteUsageEvent[]}>>{
-  let report:CompleteUsageReport|undefined;
-  try{
-    const opened=await readCompleteUsage(env,verify,{kind:'report',intent:'export',query},signal);
-    if(opened.kind!=='complete')return opened;
-    report=opened.value as CompleteUsageReport;if(!report.cut||report.metrics.calls>50000)failComplete('unavailable','capacity');
-    const events:CompleteUsageEvent[]=[],seen=new Set<string>(),total=emptyAdditives();let cursor:string|undefined,bytes=usageJsonBytes(report)+32,last:CompleteUsageEvent|undefined;
-    do{
-      if(signal?.aborted)failComplete('unavailable','cancelled');
-      const read=await readCompleteUsage(env,verify,{kind:'events',cut:report.cut,query:report.query,pageSize:100,cursor},signal);
-      if(read.kind!=='complete')return read;
-      const page=read.value as CompleteUsageEvents;
-      if(page.nextCursor&&(seen.has(page.nextCursor)||!page.events.length))failComplete('unavailable','source');
-      for(const event of page.events){
-        if(last&&(event.occurredAt>last.occurredAt||event.occurredAt===last.occurredAt&&compareUsageIds(event.id,last.id)>0))failComplete('unavailable','source');
-        // Equal ID/time on different shards is deliberately NOT deduplicated.
-        addAdditives(total,eventAdditives(event));bytes+=usageJsonBytes(event)+1;
-        if(events.length>=50000||bytes>16*1024*1024)failComplete('unavailable','capacity');
-        events.push(event);last=event;
-      }
-      cursor=page.nextCursor??undefined;if(cursor)seen.add(cursor);
-    }while(cursor);
-    const expected:UsageAdditives={metrics:report.metrics,recordedChargeMicros:report.recordedChargeMicros,chargeReportedCalls:report.chargeReportedCalls,costs:report.costs};
-    if(!equalAdditives(total,expected))failComplete('unavailable','source');
-    const final=await readCompleteUsage(env,verify,{kind:'validate',cut:report.cut,query:report.query},signal);
-    if(final.kind!=='complete')return final;
-    if(signal?.aborted)failComplete('unavailable','cancelled');
-    return {kind:'complete',value:{report,events}};
-  }catch(error){if(error instanceof CompleteFailure)return error.outcome;if(error instanceof HttpError&&error.status===422)return {kind:'unavailable',reason:'capacity'};if(signal?.aborted)return {kind:'unavailable',reason:'cancelled'};return {kind:'unavailable',reason:'source'};}
-  finally{if(report?.cut)await readCompleteUsage(env,verify,{kind:'release',cut:report.cut,query:report.query}).catch(()=>undefined);}
 }

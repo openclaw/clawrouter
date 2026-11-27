@@ -98,7 +98,7 @@ test('representative 5000-row export and three-index rebuild cost use real paire
  const {ensureUsageReportSchema}=await import('../usage-report-store.ts');s.transactionSync(()=>ensureUsageReportSchema(s.sql));
  const indexBuildMs=performance.now()-at,indexBytes=(pages()-before)*s.sql.exec('PRAGMA page_size')[0].page_size;
  assert.equal(s.sql.exec('SELECT COUNT(*) AS n FROM usage_events')[0].n,5000);assert.equal(s.sql.exec('SELECT COUNT(*) AS n FROM usage_report_events')[0].n,5000);assert.ok(indexBytes>0);
- const opened=performance.now(),result=complete(await f.export()),exportMs=performance.now()-opened;
+ const opened=performance.now(),result=await f.export(),exportMs=performance.now()-opened;
  assert.equal(result.events.length,5000);assert.equal(result.report.metrics.calls,5000);assert.equal(result.report.recordedChargeMicros,35000);assert.equal(result.report.metrics.inputTokens,5000);assert.equal(f.owner.usageCuts.roots.size,0);
  t.diagnostic(JSON.stringify({qualification:'Node SQLite single-run, not DO capacity or speedup',rows:5000,groups:100,ingestMs:Math.round(ingestMs),indexBuildMs:Math.round(indexBuildMs),indexLivePageBytes:indexBytes,exportMs:Math.round(exportMs),exportBytes:Buffer.byteLength(JSON.stringify(result)),heapUsed:process.memoryUsage().heapUsed,privateCalls:f.calls.length}));
 });
