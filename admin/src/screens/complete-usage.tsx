@@ -18,11 +18,11 @@ function filterDescription({key, ...filters}: CompleteUsageQuery['filters']) {
   return parts.join(' · ');
 }
 
-function ReportScope({report, label = 'Displayed report scope', onClearKey}: {report: CompleteUsageReport; label?: string; onClearKey?: (button: HTMLButtonElement) => void}) {
+function ReportScope({report, label = 'Displayed report scope', stale = false, onClearKey}: {report: CompleteUsageReport; label?: string; stale?: boolean; onClearKey?: (button: HTMLButtonElement) => void}) {
   const {query, coverage} = report;
   const clipped = coverage.clippedFrom !== null && query.from === coverage.effectiveFrom;
   return <div className="personalActions personalActiveFilters" role="group" aria-label={label}>
-    <strong>{filterDescription(query.filters)}</strong>
+    <strong>{stale && 'Last successful report: '}{filterDescription(query.filters)}</strong>
     <span>{clipped ? 'Retained interval: ' : ''}<UsagePeriod query={query} compact /> · {query.timezone} (end exclusive)</span>
     {query.filters.key && onClearKey ? <button type="button" className="buttonSecondary" onClick={event => onClearKey(event.currentTarget)}>Clear key filter</button> : null}
   </div>;
@@ -54,10 +54,20 @@ export function PersonalUsageSummary({data,onOpen}:{data:PersonalUsageData;onOpe
 }
 function Controls({data,keys}:{data:PersonalUsageData;keys:readonly UsageKeyName[]}) {
   const q=data.query??data.requestedQuery,selectedFrom=data.rangeInput?.from??(q?iso(data.selectedQuery?.from??q.from):''),selectedTo=data.rangeInput?.to??(q?iso(data.selectedQuery?.to??q.to):'');
-  const [draft,setDraft]=useState(()=>q??data.queryTemplate??usageQueryTemplate(data.audience)),[from,setFrom]=useState(selectedFrom),[to,setTo]=useState(selectedTo);
-  useEffect(()=>{setDraft(q??data.queryTemplate??usageQueryTemplate(data.audience));setFrom(selectedFrom);setTo(selectedTo);},[q,data.queryTemplate,data.audience,selectedFrom,selectedTo]);
+  // After a failed read, data.query can belong to the last successful report. Keep
+  // the editor on the submitted filters, just as rangeInput keeps the submitted dates.
+  const selection = data.report.error ? data.requestedQuery ?? data.queryTemplate ?? q : q ?? data.queryTemplate;
+  const [draft,setDraft]=useState(()=>selection??usageQueryTemplate(data.audience)),[from,setFrom]=useState(selectedFrom),[to,setTo]=useState(selectedTo);
+  useEffect(()=>{setDraft(selection??usageQueryTemplate(data.audience));setFrom(selectedFrom);setTo(selectedTo);},[selection,data.audience,selectedFrom,selectedTo]);
   function refine(next:typeof draft){setDraft(next);if(data.query&&!data.report.error)data.refine({...data.query,...next});}
-  function apply(event:FormEvent,openNew=false){event.preventDefault();if(draft)data.customRange(draft,{from,to,timezone:draft.timezone},openNew);}
+  function apply(event: FormEvent, openNew = false) {
+    event.preventDefault();
+    if (!openNew && data.report.error && data.report.value && draft === selection && from === selectedFrom && to === selectedTo) {
+      data.reload();
+    } else {
+      data.customRange(draft, {from, to, timezone: draft.timezone}, openNew);
+    }
+  }
   const groups = data.audience === 'admin' ? ['user','key','model','provider'] as const : ['key','model','provider'] as const;
   const report = data.query;
   function clearKey(button: HTMLButtonElement) {
@@ -80,7 +90,7 @@ function Controls({data,keys}:{data:PersonalUsageData;keys:readonly UsageKeyName
         <button type="button" className="buttonSecondary" onClick={()=>data.preset(7,draft)}>Last 7 days</button><button type="button" className="buttonSecondary" onClick={()=>data.preset(30,draft)}>Last 30 days</button><button type="button" className="buttonSecondary" onClick={data.reload}>Refresh report</button><button type="button" className="buttonSecondary" disabled={!report || !!data.report.error} onClick={data.back}>Back to base</button>
       </div>
     </div>
-    {data.report.value ? <ReportScope report={data.report.value} onClearKey={data.report.error ? undefined : clearKey}/> : null}
+    {data.report.value ? <ReportScope report={data.report.value} stale={Boolean(data.report.error)} onClearKey={data.report.error ? undefined : clearKey}/> : null}
     {draft?<details className="personalAdvanced"><summary>Custom interval and exact filters</summary><p>Calendar dates in the chosen IANA timezone or RFC3339 instants; end exclusive. Widening opens a new base. Maximum 30 days; minute grain requires at most 24 hours.</p><div className="personalFilterGrid">
     <label>Group by<select value={draft.groupBy} onChange={e=>refine({...draft,groupBy:e.target.value as CompleteUsageQuery['groupBy'],rankOffset:0})}>{groups.map(k=><option key={k}>{k}</option>)}</select></label>
     <label>Rank by<select value={draft.rankBy} onChange={e=>refine({...draft,rankBy:e.target.value as CompleteUsageQuery['rankBy'],rankOffset:0})}><option value="calls">Calls</option><option value="tokens">Reported input + output tokens</option><option value="recordedAmount">Recorded accounting amount</option></select></label>
@@ -123,7 +133,10 @@ export function CompleteUsageScreen({data,keys=[]}:{data:PersonalUsageData;keys?
   return <div className="personalUsageCanvas"><Controls data={data} keys={keys}/><PersonalUsageSummary data={data}/>
     {value&&q?<><ExactRanking data={data} inlineEvents/><section className="dashboardPanel personalSection"><h2>Exact usage over time</h2><PersonalUsageTimeSeries label={'Calls by '+q.grain} formatValue={n=>count(n)} points={value.buckets.map(b=>({start:b.start,end:b.end,label:b.label,value:b.metrics.calls,partial:false}))}/><details><summary>Time bucket data</summary>{value.buckets.map(b=><p key={b.start}>{b.label}: {count(b.metrics.calls)} calls ({iso(b.start)} → {iso(b.end)})</p>)}</details></section>
     <section className="dashboardPanel personalSection"><h2>Fields and cost quality</h2><DetailTotals value={value}/></section>
-    {data.eventsShown?<section className="dashboardPanel personalSection"><h2 tabIndex={-1}>Retained events</h2>{data.events.loading?<p role="status">Loading events…</p>:null}{data.events.error?<div role="alert"><p>{data.events.error}</p><p>Old displayed report; Refresh required. It is not a current usable snapshot.</p><button type="button" onClick={data.retryEvents}>Retry event page</button><button type="button" onClick={data.reload}>Refresh report</button></div>:null}
+    {data.eventsShown?<section className="dashboardPanel personalSection"><h2 tabIndex={-1}>Retained events</h2>
+      {data.report.error ? <p className="personalNote">Refresh the report above to load retained events.</p> : <>
+      {data.events.loading?<p role="status">Loading events…</p>:null}
+      {data.events.error?<div role="alert"><p>{data.events.error}</p><p>Old displayed report; Refresh required. It is not a current usable snapshot.</p><button type="button" onClick={data.retryEvents}>Retry event page</button><button type="button" onClick={data.reload}>Refresh report</button></div>:null}
       {events?<><p>Page {data.page} · at most 100 events · metadata only</p><div className="personalTableWrap" tabIndex={0} role="region" aria-label="Retained events"><table className="personalTable"><thead><tr><th>Time</th><th>Model / key</th><th>Outcome</th><th>Input / output</th><th>Recorded accounting amount</th></tr></thead><tbody>{events.events.map((e,i)=><tr key={i+':'+e.id}><td>{iso(e.occurredAt)}</td><td>{e.model??'Unavailable model'} · {e.keyId??'Dashboard session'}<details><summary>Call details</summary><dl className="personalEventDetails">{eventFields.map(k=><div key={k}><dt>{k==='recordedChargeMicros'?'Recorded accounting amount (micros)':k}</dt><dd>{e[k]??'Not reported'}</dd></div>)}</dl></details></td><td>{e.status}</td><td>{count(e.inputTokens)} / {count(e.outputTokens)}</td><td>{usageMoney(e.recordedChargeMicros)}</td></tr>)}</tbody></table></div><div className="personalActions">
         {firstPage ? <button type="button" onClick={event => {
           // Keep keyboard focus in this section while its pagination controls are replaced.
@@ -131,6 +144,7 @@ export function CompleteUsageScreen({data,keys=[]}:{data:PersonalUsageData;keys?
           firstPage();
         }}>First page</button> : <button type="button" disabled={!data.canPrevious} onClick={data.previousPage}>Previous page</button>}
         <button type="button" disabled={!events.nextCursor} onClick={data.nextPage}>Next page</button><button type="button" onClick={()=>downloadUsageFile(prepareUsageFile(value,events.events,data.audience,'csv','current page '+data.page))}>Export current page CSV</button></div></>:null}
+      </>}
     </section>:null}
     <CompleteExport data={data}/></>:null}
   </div>;
