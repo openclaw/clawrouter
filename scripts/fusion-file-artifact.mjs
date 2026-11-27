@@ -5,13 +5,14 @@ export function replacementPaths(task) {
   const limit = task?.maxReplacementBytes === undefined ? 65536 : task.maxReplacementBytes;
   assert.ok(Number.isSafeInteger(limit) && limit > 0 && limit <= 262144, 'invalid_replacement_byte_limit');
   const policy = task?.sourcePathPolicy ?? 'worker-v1';
-  assert.ok(['worker-v1', 'node-library-v1'].includes(policy), 'invalid_source_path_policy');
+  assert.ok(['worker-v1', 'node-library-v1', 'node-package-root-v1'].includes(policy), 'invalid_source_path_policy');
   const paths = task?.editPaths;
   assert.ok(Array.isArray(paths) && paths.length > 0 && paths.length <= 4
     && new Set(paths).size === paths.length, 'invalid_replacement_paths');
   for (const path of paths) assert.ok(typeof path === 'string'
     && (/^(worker|shared|scripts)\/[A-Za-z0-9_./-]+\.(ts|mjs)$/.test(path)
-      || policy === 'node-library-v1' && /^lib\/[A-Za-z0-9_./-]+\.(js|cjs|mjs)$/.test(path))
+      || policy === 'node-library-v1' && /^lib\/[A-Za-z0-9_./-]+\.(js|cjs|mjs)$/.test(path)
+      || policy === 'node-package-root-v1' && /^(?:index|default)\.js$/.test(path))
     && !path.split('/').some(p => !p || p === '.' || p === '..' || /^(?:tests?|__tests__)$/i.test(p))
     && !/\.(?:test|spec)\./i.test(path), 'invalid_replacement_path');
   return [...paths];
