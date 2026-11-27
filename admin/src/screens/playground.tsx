@@ -92,6 +92,16 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
       return;
     }
     const routes = serviceRoutes.filter((item) => item.provider === provider);
+    // Model mode keeps the service fields in the same session-owned form. Resume
+    // edits only for their exact live route; an untouched seed isn't a user choice.
+    const savedRoute = routes.find((route) => routeKey(route) === form.serviceRoute);
+    if (form.mode === "model" && savedRoute) {
+      const seed = playgroundServicePreset(savedRoute);
+      if (form.servicePayload !== seed.servicePayload || form.serviceMethod !== seed.serviceMethod || form.servicePath !== seed.servicePath) {
+        setForm({ ...form, mode: "service" });
+        return;
+      }
+    }
     const target = serviceModelOptions(routes)[0];
     setForm({ ...form, mode: "service", ...playgroundServicePreset(target?.route ?? routes[0], target?.model) });
   }
