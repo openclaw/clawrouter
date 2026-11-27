@@ -97,3 +97,15 @@ test('large excerpts preserve context for a report without marking omitted lines
       return action('report', { summary: 'Claim omitted line.', citations: [{ path: 'src/large.js', startLine: 90, endLine: 90 }] });
     } }), /unobserved_read_worker_citation/);
 });
+
+
+test('provider schema constrains source selectors and citations to the admitted inventory', async () => {
+  await runReadWorker({ brief: 'Inspect.', files: files(), invoke: async ({ schema }) => {
+    const allowed = new RegExp(schema.properties.paths.items.pattern);
+    assert.ok(allowed.test('src/example.js'));
+    assert.ok(allowed.test('src/example.js:1-2'));
+    for (const path of ['src', 'src/other.js', 'src/exampleXjs', 'src/../example.js']) assert.equal(allowed.test(path), false);
+    assert.deepEqual(schema.properties.citations.items.properties.path.enum, ['src/example.js']);
+    return action('report', { insufficient: true });
+  } });
+});

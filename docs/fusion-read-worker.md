@@ -7,6 +7,7 @@ The callback receives chat messages, a JSON response schema, an abort signal,
 and the one-based call number. It returns the parsed action object.
 
 The helper permits literal search, line-range reads, and an evidence report.
+The provider schema restricts selectors and citations to admitted file paths.
 Only caller-admitted source is visible. It cannot load files, edit code, run
 tests, or call a provider by itself. The caller owns source admission, provider
 credentials, pricing, spend reservation, timeouts, and refusal handling.
