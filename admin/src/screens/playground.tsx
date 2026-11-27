@@ -80,6 +80,10 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
     ? `model:${form.model}`
     : serviceModelTargets.find((target) => routeKey(target.route) === form.serviceRoute && target.model === selectedServiceModel)?.value
       ?? `service:${form.serviceRoute}`;
+  // A raw service preset can be active even when the picker lists models.
+  // Give the native select its actual value instead of showing the first model.
+  const activeRawRoute = !routeTargets.length && selectedServiceRoute && targetValue === `service:${routeKey(selectedServiceRoute)}`
+    ? selectedServiceRoute : undefined;
 
   function selectProvider(provider: string) {
     const model = models.find((item) => item.provider === provider);
@@ -172,6 +176,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
                 {providerIds.map((provider) => <option key={provider} value={provider}>{providerName(provider, readinessByProvider)}</option>)}
               </select>
               <select className="modelPicker" aria-label="Model or route" value={targetValue} onChange={(event) => selectTarget(event.target.value)}>
+                {activeRawRoute ? <option value={targetValue}>{activeRawRoute.endpoint.replaceAll("_", " ")} (route)</option> : null}
                 {providerModels.map((model) => <option key={model.id} value={`model:${model.id}`}>{shortModelName(model.id, activeProvider)}</option>)}
                 {serviceModelTargets.map((target) => <option key={target.value} value={target.value}>{shortModelName(target.model, activeProvider)}</option>)}
                 {routeTargets.map((route) => <option key={routeKey(route)} value={`service:${routeKey(route)}`}>{route.endpoint.replaceAll("_", " ")}</option>)}
