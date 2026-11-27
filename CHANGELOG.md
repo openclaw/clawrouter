@@ -31,6 +31,7 @@
 - Document Fusion cost pilots: a one-task WebSocket saving failed to transfer to three redaction repairs; retain higher workflow time and study limitations.
 
 - Stage Fusion public test files in one sandbox command while preserving file and symlink checks.
+- Add an opt-in literal-source presentation for Fusion repair experiments, preserving exact edit guards while avoiding an extra JSON escaping layer around source and tests.
 
 - Document a seven-task Fusion comparison with independent cheap-only and strong-only controls: 7/7 cascade success, three fallback rescues and 51.33% lower model cost than strong-only, with 5.99% higher measured time and explicit study limits.
 
