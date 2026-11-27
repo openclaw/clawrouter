@@ -4,6 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { open, realpath, lstat } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { guardSourceFiles } from "./openclaw-guard-source-files.mjs";
 
 export const vydraGuardPin = "542958f2c02754de72361bfbdc016a724a4572f1";
 export const vydraGuardSources = Object.freeze([
@@ -12,17 +13,8 @@ export const vydraGuardSources = Object.freeze([
 ].map(Object.freeze));
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
 const validHash = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
-const same = (a, b) => ["dev", "ino", "uid", "nlink", "mode"].every(key => a[key] === b[key]);
-
-export async function restoreVydraGuardSource(row, read, write, statPath = lstat) {
-  const now = await read(row.file);
-  assert.ok(same(now.stat, row.stat) && same(await statPath(row.path), row.stat), "Vydra source inode changed");
-  if (row.changed) {
-    if (row.applied) assert.ok(now.bytes.equals(row.output), "Vydra observation changed during execution");
-    await write(row.file, row.bytes);
-  } else assert.ok(now.bytes.equals(row.bytes), "Vydra guard source changed during execution");
-  assert.ok(same(await row.file.stat(), row.stat) && same(await statPath(row.path), row.stat), "Vydra restored pathname changed");
-}
+const { same, read, write, restore: restoreVydraGuardSource } = guardSourceFiles("Vydra");
+export { restoreVydraGuardSource };
 
 // Observe the real call before native SDK compilation. Neither the loader nor
 // the guard/transport is replaced; the exact original promise returns unchanged.
@@ -69,21 +61,6 @@ export async function withVydraGuardObservation(root, fixtureSHA, run) {
   const contract = sha(JSON.stringify({ v: 1, pin: vydraGuardPin, fixtureSHA,
     nonce: randomBytes(32).toString("hex"), sources: vydraGuardSources }));
   const rows = [], failures = []; let result;
-  const read = async file => {
-    const before = await file.stat();
-    assert.ok(before.isFile() && before.uid === process.getuid() && before.nlink === 1 && before.size <= 65536);
-    const buffer = Buffer.alloc(65537); let size = 0;
-    while (size < buffer.length) { const row = await file.read(buffer, size, buffer.length - size, size); if (!row.bytesRead) break; size += row.bytesRead; }
-    const after = await file.stat();
-    assert.ok(same(before, after) && before.size === size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs && size <= 65536);
-    return { bytes: buffer.subarray(0, size), stat: after };
-  };
-  const write = async (file, bytes) => {
-    let offset = 0;
-    while (offset < bytes.length) { const row = await file.write(bytes, offset, bytes.length - offset, offset); assert.ok(row.bytesWritten > 0); offset += row.bytesWritten; }
-    await file.truncate(bytes.length); await file.sync();
-    assert.ok((await read(file)).bytes.equals(bytes), "Vydra overlay readback changed");
-  };
   try {
     for (const source of vydraGuardSources) {
       const path = join(root, source.path); assert.equal(await realpath(path), path);

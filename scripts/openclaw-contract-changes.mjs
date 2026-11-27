@@ -29,6 +29,7 @@ export function affectsOpenClawContract(path) {
       "test/helpers/openclaw-catalog-variant.mjs",
       "test/helpers/openclaw-google-text.mjs",
       "test/helpers/qianfan-memory.mjs",
+      "test/helpers/openclaw-guard-source-files.mjs",
       "test/helpers/openclaw-baseten-guard-observer.mjs",
       "test/helpers/openclaw-pixverse-guard-observer.mjs",
       "test/helpers/openclaw-vydra-guard-observer.mjs",
