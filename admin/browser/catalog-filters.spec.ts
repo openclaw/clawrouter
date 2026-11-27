@@ -99,6 +99,55 @@ for (const role of ["admin", "user"] as const) {
   }
 }
 
+test("member recovers from a kind miss or a text miss without losing the other filter or pinned service", async ({ page, isMobile }) => {
+  if (isMobile) await page.setViewportSize({ width: 320, height: 760 });
+  const writes = await openCatalog(page, "user");
+  const filters = page.getByRole("group", { name: "service kind" });
+  const all = filters.getByRole("button", { name: /^all/ });
+  const searchKind = filters.getByRole("button", { name: /^search/ });
+  const search = page.getByRole("textbox", { name: "search catalog" });
+  const empty = page.locator(".catalogPane .emptyTable");
+  const rows = page.locator(".tableRow .entityTitle");
+  const inspector = page.locator(".inspectorHeader");
+
+  await page.locator(".tableRow").filter({ hasText: "Beta models" }).click();
+  await searchKind.click();
+  await search.fill("models");
+  await expect(empty.getByRole("button", { name: "Show 2 matches across all kinds" })).toBeVisible();
+  await search.fill("Alpha");
+  await expect(empty).toContainText("No matching services in this kind.");
+  const showAll = empty.getByRole("button", { name: "Show 1 match across all kinds", exact: true });
+  await searchKind.focus();
+  await page.keyboard.press("Tab");
+  await expect(showAll).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(all).toBeFocused();
+  await expect(all).toHaveAttribute("aria-pressed", "true");
+  await expect(search).toHaveValue("Alpha");
+  await expect(rows).toHaveText(["Alpha models"]);
+  await expect(page.locator(".catalogMeta span")).toHaveText("0 usable · 0 granted · 1 blocked");
+  await expect(inspector).toContainText("Beta models");
+  await expect(inspector).toContainText("outside current filters");
+
+  await searchKind.click();
+  await search.fill("no such service");
+  await expect(empty).toContainText("No matching services in any kind.");
+  await expect(showAll).toHaveCount(0);
+  const clear = empty.getByRole("button", { name: "Clear search", exact: true });
+  await searchKind.focus();
+  await page.keyboard.press("Tab");
+  await expect(clear).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue("");
+  await expect(searchKind).toHaveAttribute("aria-pressed", "true");
+  await expect(rows).toHaveText(["Gamma search"]);
+  await expect(page.locator(".catalogMeta span")).toHaveText("1 usable · 1 granted · 0 blocked");
+  await expect(inspector).toContainText("Beta models");
+  await expect(inspector).toContainText("outside current filters");
+  expect(writes).toEqual([]);
+});
+
 test("an edited provider budget stays with its service when Catalog filters change", async ({ page }) => {
   const writes = await openCatalog(page, "admin");
   const search = page.getByRole("textbox", { name: "search catalog", exact: true });
@@ -170,7 +219,9 @@ async function openCatalog(page: Page, role: AccessRole) {
       await route.fulfill({ status: 405, json: { error: "Unexpected mutation" } });
       return;
     }
-    const body = responses[new URL(route.request().url()).pathname];
+    const path = new URL(route.request().url()).pathname;
+    if (role === "user") expect(path.startsWith("/v1/admin/")).toBe(false);
+    const body = responses[path];
     await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
   });
   await page.goto("/dashboard/catalog");
