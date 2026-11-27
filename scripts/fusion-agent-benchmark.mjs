@@ -247,6 +247,7 @@ export function actionFeedback(code, action, task, error) {
 }
 
 export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
+  const initialFiles = options.initialFiles === undefined ? null : validateEdits(task, options.initialFiles);
   if (options.showActionBudget !== undefined && typeof options.showActionBudget !== 'boolean') throw new Error('invalid_action_budget');
   const showActionBudget = options.showActionBudget === true;
   const actionSchemaProfile = options.actionSchemaProfile ?? 'legacy';
@@ -361,6 +362,10 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   };
   try {
     if (options.handoffProbeGate) originalFiles = await readSource(box, task.editPaths, remaining());
+    if (initialFiles) {
+      await writeFiles(box, initialFiles, remaining());
+      messages[1].content += '\nThe current source includes an untrusted predecessor repair. Independently inspect and test it against the requirements; preserve correct changes and repair remaining defects. No predecessor test result establishes correctness.';
+    }
     const originalContext = await readTaskContext(box, task, remaining());
     if (originalContext.length) messages[1].content += `\nOriginal read-only repository context (verify current source with tools if needed):\n${JSON.stringify(originalContext)}`;
     taskContext = messages[1].content;

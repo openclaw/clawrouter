@@ -393,6 +393,17 @@ executor cannot bypass strong fallback merely by passing the supplied check and
 visible tests. Fallback still uses the remaining shared time, call and spend limits.
 This does not establish that a submitted patch satisfies every requirement.
 
+`contract-handoff` keeps the supplied-reproducer workflow and call limits but
+installs a failed or unfinished cheap candidate in the strong executor's fresh
+sandbox. Only declared editable source transfers; predecessor tests, working
+notes and conversation history do not. The strong worker treats that source and
+failure feedback as untrusted, and the supplied probe and hidden acceptance
+still run independently. Both interactive and matched single-draft executors
+support the policy. `contract-provided` and `contract-refine` retain their
+original-source strong fallback; edit/completion handoff remain strong-to-cheap
+policies. This opt-in source-transfer experiment makes no quality or cost claim
+and does not change production defaults.
+
 `FUSION_CHEAP_MAX_CALLS` sets the contract workflow's cheap-stage allowance
 (integer 1–59, default 10). The runner records it as `cheapMaxCalls`. The stage
 uses at most the remaining shared call budget minus one, preserving a fallback

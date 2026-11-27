@@ -14,7 +14,7 @@ export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
 const strategies = ['cheap', 'strong', 'architect', 'edit-handoff', 'completion-handoff', 'probe-selection', 'draft-sampling'];
-const providedPolicies = ['contract-provided', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong'];
+const providedPolicies = ['contract-provided', 'contract-handoff', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong'];
 const contractPolicies = ['contract', 'contract-cheap', 'contract-strong', 'contract-private', ...providedPolicies];
 
 // The caller supplies repair scope before inference; never inspect test answers.
@@ -212,7 +212,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
               ? await probeAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), { agent })
               : contractPolicies.includes(strategy)
               ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke(strategy),
-                { agent, ...(['contract-draft', 'contract-refine'].includes(policy) ? { cheapAgent: policy === 'contract-refine' ? runRefinedDraft : runSingleDraft } : {}), cheapMaxCalls, exposeProbe: policy !== 'contract-private', providedProbe: providedPolicies.includes(policy) ? task.reproducer : null })
+                { agent, ...(['contract-draft', 'contract-refine'].includes(policy) ? { cheapAgent: policy === 'contract-refine' ? runRefinedDraft : runSingleDraft } : {}), cheapMaxCalls, exposeProbe: policy !== 'contract-private', providedProbe: providedPolicies.includes(policy) ? task.reproducer : null, handoffCandidate: policy === 'contract-handoff' })
               : await agent(providedPolicies.includes(policy) ? withReproducer(task, task.reproducer) : task,
                 receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined,
                 { preloadSource, ...(actionSchemaProfile === 'legacy' ? {} : { actionSchemaProfile }), ...(sourcePageLines === null ? {} : { sourcePageLines }), ...(probeRegressionGate ? { probeRegressionGate: true } : {}), ...(handoffEvidence && execution.strategy === 'handoff' ? { handoffEvidence: true } : {}), ...(strategy === 'completion-handoff' ? { handoffOnFinish: true }

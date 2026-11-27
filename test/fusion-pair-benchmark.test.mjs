@@ -909,10 +909,11 @@ test('contract policy meters the test author and worker inside the same trial', 
 
 
 test('provided probes are equally visible to fixed controls and skip the test-author role', async () => {
-  for (const policy of ['contract-provided', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong']) {
+  for (const policy of ['contract-provided', 'contract-handoff', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong']) {
+  for (const executor of policy === 'contract-handoff' ? ['interactive', 'single-draft'] : ['interactive']) {
   const { root, options } = await fixture();
   try {
-    await assert.rejects(runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 }, policy }), /missing_reproducer/);
+    await assert.rejects(runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 }, policy, executor }), /missing_reproducer/);
     const manifest = JSON.parse(await readFile(options.taskManifest));
     const task = manifest.tasks[0]; task.reproducer = 'provided probe sentinel';
     await writeFile(options.taskManifest, JSON.stringify(manifest));
@@ -922,13 +923,14 @@ test('provided probes are equally visible to fixed controls and skip the test-au
     await writeFile(options.qualificationPath, JSON.stringify(qualification));
     const instructions = [];
     const state = await runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 },
-      policy, grade, fetcher: success,
+      policy, executor, grade, fetcher: success,
       agent: async (task, _image, _strategy, id, _settings, invoke) => {
         instructions.push(task.instruction);
         await invoke(id, roles.strong, body, signal); return repaired();
       },
       contractAgent: async (_task, _image, id, _settings, invoke, agentOptions) => {
         assert.equal(agentOptions.providedProbe, task.reproducer);
+        assert.equal(agentOptions.handoffCandidate, policy === 'contract-handoff');
         assert.equal(typeof agentOptions.cheapAgent, ['contract-draft', 'contract-refine'].includes(policy) ? 'function' : 'undefined');
         await invoke(id, roles.cheap, body, signal); return repaired();
       } });
@@ -937,6 +939,7 @@ test('provided probes are equally visible to fixed controls and skip the test-au
     assert.match(instructions[0], /provided probe sentinel/);
     assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, policy === 'contract-provided-strong' ? config.strong : config.cheap]);
   } finally { await rm(root, { recursive: true, force: true }); }
+  }
   }
 });
 
