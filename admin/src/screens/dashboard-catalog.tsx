@@ -415,6 +415,12 @@ export function CatalogScreen({ services, allServices, selected, models, service
               const outcome = serviceOutcome(selected);
               const target = catalogPlaygroundTarget(selected, query, models, serviceRoutes);
               const playBlocker = playgroundBlockedForService(selected) ?? (!target.preset ? "No Playground target available" : null);
+              // Only name the fallback when a published proxy model brought this service into the results.
+              const needle = query.trim().toLowerCase();
+              const fallbackModel = playBlocker === null && target.preset?.mode === "model" && !target.matchedModel && needle
+                && !selected.modelIds.some(id => id.toLowerCase() === needle)
+                && serviceRoutes.some(route => route.provider === selected.provider && route.models?.some(model => model.id.toLowerCase() === needle))
+                ? target.preset.model : undefined;
               const connection = connectionByProvider.get(selected.provider);
               const connectionEnabled = connection?.enabled ?? selected.readiness?.connectionEnabled;
               const connectionPending = pendingProviderIds.has(selected.provider);
@@ -451,7 +457,7 @@ export function CatalogScreen({ services, allServices, selected, models, service
               }) : <p>No active policy includes this service yet.</p>}
             </div>
             <div className="inspectorActions">
-              <button type="button" data-catalog-play-service={selected.id} disabled={playBlocker !== null} onClick={() => { if (target.preset) onPlay(target.preset); }} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
+              <button type="button" data-catalog-play-service={selected.id} disabled={playBlocker !== null} onClick={() => { if (target.preset) onPlay(target.preset); }} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span style={fallbackModel ? { overflowWrap: "anywhere" } : undefined}>{fallbackModel ? `Open ${fallbackModel} in Playground` : "Try in playground"}</span></button>
               {canAdminister ? <button type="button" disabled={connectionPending} aria-busy={connectionPending} className={connectionEnabled === false ? "buttonSecondary" : "buttonDanger"} onClick={() => onSetConnection(selected.provider, connectionEnabled === false)}><ServerCog className="buttonIcon" aria-hidden="true" /><span>{connectionEnabled === false ? "Enable connection" : "Disable connection"}</span></button> : null}
               {canAdminister ? <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to selected policy</span></button> : null}
             </div>
