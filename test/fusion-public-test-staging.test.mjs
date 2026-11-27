@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { taskSandbox } from '../scripts/fusion-workloads.mjs';
 
 const image = `sha256:${'a'.repeat(64)}`, id = 'b'.repeat(64);
 async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(), 'fusion-public-stage-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'fusion-public-stage-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'test'));
   const calls = [];
