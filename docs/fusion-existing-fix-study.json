@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "design": "one-historical-task-three-independent-arms",
+  "taskId": "openclaw/clawrouter@2ebd72d94325bc61109b96d9dcd2ac600e4eb741",
+  "taskSelection": {
+    "screened": 6,
+    "partitionExcluded": 4,
+    "nativeCountExcluded": 1,
+    "qualified": 1,
+    "replacementCases": 0
+  },
+  "qualification": {
+    "expectedFull": 10,
+    "expectedPublic": 9,
+    "expectedHidden": 1
+  },
+  "provenance": {
+    "screenProtocolSha256": "0241267a4e43041d0745ea59d5b4aa95a4dd1562e876f7f23a2c837fc5803f96",
+    "screenResultSha256": "ad72694c8175a002f02404adf42d93c5585d12738e0a4c255b6eb7c313fe6e8a",
+    "trialProtocolSha256": "2914f8657e0e623b26261fe1e82ebdd095741732d1032806eaea324b067501b0",
+    "trialResultSha256": "0578e70d3d3001d5b180c05a103e1ca5773975081659f67b1e5a8455a710c840"
+  },
+  "order": [
+    "cheap",
+    "strong",
+    "cascade"
+  ],
+  "rows": [
+    {
+      "strategy": "cheap",
+      "costMicros": 960,
+      "normalizedMicros": 960,
+      "workflowMs": 8774.706875,
+      "publicPassed": true,
+      "fullPassed": true,
+      "fullTests": 10,
+      "fullFailures": 0,
+      "fullSkipped": 0,
+      "calls": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 960,
+          "normalizedMicros": 960,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "strategy": "strong",
+      "costMicros": 9922,
+      "normalizedMicros": 9922,
+      "workflowMs": 8895.904083,
+      "publicPassed": true,
+      "fullPassed": true,
+      "fullTests": 10,
+      "fullFailures": 0,
+      "fullSkipped": 0,
+      "calls": [
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 9922,
+          "normalizedMicros": 9922,
+          "publicPassed": true
+        }
+      ]
+    },
+    {
+      "strategy": "cascade",
+      "costMicros": 10792,
+      "normalizedMicros": 10793,
+      "workflowMs": 15156.395583000001,
+      "publicPassed": true,
+      "fullPassed": true,
+      "fullTests": 10,
+      "fullFailures": 0,
+      "fullSkipped": 0,
+      "calls": [
+        {
+          "model": "openai/gpt-6-luna",
+          "costMicros": 1015,
+          "normalizedMicros": 1015,
+          "publicPassed": false
+        },
+        {
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 9777,
+          "normalizedMicros": 9778,
+          "publicPassed": true
+        }
+      ]
+    }
+  ],
+  "newModelCalls": 4,
+  "newModelCostMicros": 21674,
+  "gates": {
+    "qualityPreserved": true,
+    "incrementalQualityOverCheap": false,
+    "costGate": false,
+    "normalizedCostGate": false,
+    "timeGate": false,
+    "productionQualified": false,
+    "populationQualified": false,
+    "developmentLead": false
+  },
+  "independentControlDraws": true,
+  "reusedModelCalls": 0,
+  "hiddenGradingAfterAllInference": true,
+  "costBasis": "frozen-tariffs-and-recorded-usage-not-invoice-reconciliation",
+  "latencyScope": "model-generation-and-public-verification-including-caller-overhead-excluding-final-hidden-grading",
+  "independentPopulationConfirmation": false
+}
