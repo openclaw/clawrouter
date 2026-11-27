@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add opt-in source-hashed author task briefs for external Fusion benchmarks, with explicit rejection of title-only descriptions.
+
 - Preserve the beginning and end of oversized Fusion adviser messages so long source excerpts do not silently discard their leading task instructions.
 
 - Record a zero-call semantic Fusion routing screen: all twenty source-file holdouts choose strong-only, providing no savings.
