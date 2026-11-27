@@ -175,7 +175,16 @@ export function PersonalUsageSummary({ data, onOpen, comparison }: { data: Perso
           </dd>
         </div> : null}
       </dl>
-      {data.report.value ? <details className="personalAccounting personalNote"><summary>Recorded accounting amount: {data.report.value.chargeReportedCalls ? usageMoney(data.report.value.recordedChargeMicros) : 'Not reported'} · not a price or confirmed settlement</summary><p>{data.report.value.chargeReportedCalls}/{value.metrics.calls} rows with a valid recorded accounting field.</p><p>{usageCaveats.accounting}</p></details> : null}
+      <details className="personalAccounting personalNote">
+        <summary>
+          {value.chargeReportedCalls > 0 && value.chargeReportedCalls < value.metrics.calls
+            ? <>Recorded accounting subtotal: {usageMoney(value.recordedChargeMicros)} · {count(value.chargeReportedCalls)} of {count(value.metrics.calls)} calls reported</>
+            : <>Recorded accounting amount: {value.chargeReportedCalls ? usageMoney(value.recordedChargeMicros) : 'Not reported'}</>}
+          {' · not a price or confirmed settlement'}
+        </summary>
+        <p>{value.chargeReportedCalls}/{value.metrics.calls} rows with a valid recorded accounting field.</p>
+        <p>{usageCaveats.accounting}</p>
+      </details>
       {!value.metrics.calls ? <p className="personalEmpty">No calls in discovered locations for this range for your current access.</p> : null}
     </> : null}
   </section>;
