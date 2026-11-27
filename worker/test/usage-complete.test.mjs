@@ -189,7 +189,8 @@ test('final authority expansion/session refresh and final export mutation cannot
  f.hook=undefined;f.addShard('tenant','new');const base=complete(await f.read({intent:'browse'}));f.caller={...f.caller,sessionBinding:'c'.repeat(64)};
  assert.equal((await f.continuation({kind:'events',cut:base.cut,query:base.query})).kind,'restart');
  let mutate=false;f.hook=(call,response)=>{if(call.body.action==='events'&&!mutate){mutate=true;[...f.shards.values()][0].sql.exec("DELETE FROM usage_events WHERE id='one'");}return response;};
- await assert.rejects(f.export());assert.ok(f.exportRequests.some(({outcome})=>outcome.kind==='restart'));assert.equal(f.owner.usageCuts.roots.size,0);
+ const rootsBeforeExport=[...f.owner.usageCuts.roots.keys()];
+ await assert.rejects(f.export());assert.ok(f.exportRequests.some(({outcome})=>outcome.kind==='restart'));assert.deepEqual([...f.owner.usageCuts.roots.keys()],rootsBeforeExport,'failed export releases only its own cut');
 });
 
 test('summary rejects even empty handles before I/O; omitted rank offset has canonical continuation identity',async t=>{
@@ -205,5 +206,6 @@ test('malformed stored detail fails whole, while unlisted raw fields never escap
  s.sql.exec("UPDATE usage_report_events SET detail_json=json_set(detail_json,'$.raw_prompt','private fixture') WHERE id='one'");
  const r=complete(await f.read({intent:'browse'}));assert.equal(JSON.stringify(complete(await f.continuation({kind:'events',cut:r.cut,query:r.query}))).includes('private fixture'),false);
  s.sql.exec("UPDATE usage_report_events SET detail_json=json_set(detail_json,'$.inputTokens','not numeric') WHERE id='one'");
- assert.equal((await f.continuation({kind:'events',cut:r.cut,query:r.query})).kind,'unavailable');await assert.rejects(f.export());assert.ok(f.exportRequests.some(({outcome})=>outcome.kind==='unavailable'));assert.equal(f.owner.usageCuts.roots.size,0);
+ assert.equal((await f.continuation({kind:'events',cut:r.cut,query:r.query})).kind,'unavailable');const rootsBeforeExport=[...f.owner.usageCuts.roots.keys()];
+ await assert.rejects(f.export());assert.ok(f.exportRequests.some(({outcome})=>outcome.kind==='unavailable'));assert.deepEqual([...f.owner.usageCuts.roots.keys()],rootsBeforeExport,'failed export releases only its own cut');
 });
