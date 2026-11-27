@@ -16,6 +16,8 @@ for (const role of ["1", "user"]) {
     await page.getByRole("button", { name: "Try in playground" }).press("Enter");
     await expect(page.locator(".chatHeader strong")).toHaveText("tavily / search");
     await expect(page.getByRole("combobox", { name: "Provider", exact: true })).toHaveValue("tavily");
+    const picker = page.getByRole("combobox", { name: "Model or route" });
+    await expect(picker.locator("option:checked")).toHaveText("search (route)");
     const body = page.getByRole("textbox", { name: "JSON request body" });
     expect(JSON.parse(await body.inputValue())).toEqual({ query: "OpenClaw", max_results: 1 });
     await expect(page.getByText("/v1/playground/proxy/tavily/search", { exact: true })).toHaveCount(1);
