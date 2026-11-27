@@ -55,6 +55,8 @@
 
 - Add an offline cost-matched random-control comparison for paired Fusion evaluations, with explicit limits on retrospective results.
 
+- Report eligible soft-budget Realtime routes in the catalog while retaining hard-mode capacity and exhausted-budget checks.
+
 ## 0.6.0 - 2026-11-26
 
 **Highlights:** Expand provider and model support, strengthen routing and usage accounting, improve native session continuity, and add bounded caller-side Fusion workflows with explicit qualification evidence.

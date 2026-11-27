@@ -60,6 +60,33 @@ test("native GA default VAD, input ASR and functions retain isolated ledger owne
     const append = c => c.q.send({ type: "input_audio_buffer.append", audio: Buffer.alloc(800, 255).toString("base64") });
     const events = async count => { let u; for (let i = 0; i < 200; i++) { u = await (await mf.dispatchFetch("https://router/v1/usage", { headers })).json(); if (u.usage?.events.length >= count) return u.usage.events; await new Promise(r => setTimeout(r, 20)); } assert.fail(JSON.stringify(u)); };
     let count = 0;
+    await t.test("catalog eligibility and socket admission use the same Realtime budget prerequisite", async () => {
+      try {
+        await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: null }));
+        for (const [budgetMode, monthlyBudgetMicros, eligible, reasonCode, status] of [
+          ["soft", 1, true, undefined, 101],
+          ["soft", null, true, undefined, 101],
+          ["reserve", null, false, "realtime_hard_budget_required", 400],
+          ["reserve", 10_000_000, true, undefined, 101],
+          ["soft", 0, false, "budget_exhausted", 402],
+        ]) {
+          await policy({ budgetMode, monthlyBudgetMicros });
+          const response = await mf.dispatchFetch("https://router/v1/catalog", { headers });
+          assert.equal(response.status, 200);
+          const catalog = await response.json();
+          const offer = catalog.providers.find(row => row.id === "openai").offers.find(row => row.modelId === "openai/gpt-realtime-2.1" && row.transport === "websocket");
+          assert.ok(offer); assert.equal(offer.eligible, eligible); assert.equal(offer.reasonCode, reasonCode);
+          const before = (await stats()).connects;
+          const socket = await mf.dispatchFetch("https://router/v1/realtime?model=gpt-realtime-2.1", { headers: { ...headers, upgrade: "websocket" } });
+          assert.equal(socket.status, status, status === 101 ? "" : await socket.clone().text());
+          if (eligible) { socket.webSocket.accept(); socket.webSocket.close(1000); }
+          else { assert.equal((await socket.json()).error.code, reasonCode); assert.equal((await stats()).connects, before); }
+        }
+      } finally {
+        await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: 100_000_000 }));
+        await policy();
+      }
+    });
     await t.test("actual native default transcribes, auto responds, and meters two different models", async () => {
       const c = await open(); append(c); assert.equal((await c.q.next("conversation.item.input_audio_transcription.completed")).transcript, "synthetic input"); await c.q.next("response.output_audio.delta"); assert.equal((await c.q.next("response.output_audio_transcript.delta")).delta, "synthetic reply"); await c.q.next("response.done");
       const rows = await events(count += 2), asr = rows.find(e => e.capability === "audio.transcription"); assert.equal(asr.model, "openai/gpt-4o-mini-transcribe"); assert.equal(asr.total_tokens, 12); assert.equal(asr.actual_cost_micros, 23); assert.equal(asr.realtime_usage.item_id, "input_1"); assert.equal(rows[0].content_retained, false); assert.equal(rows.find(e => e.capability === "audio.realtime").actual_cost_micros, 2994);
