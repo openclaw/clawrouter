@@ -1,5 +1,7 @@
 # Changelog
 
+- Require one additive changelog description with commit and content hashes when building offline Fusion tasks from local Git history.
+
 ## Unreleased
 
 - Add an opt-in caller-side Fusion agreement cascade with independent drafts, exact native comparison counts and bounded fallback accounting.

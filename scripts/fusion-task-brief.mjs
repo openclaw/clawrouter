@@ -1,8 +1,53 @@
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 
 export const TASK_BRIEF_REVISION = 'external-task-brief-v1';
 const sha256 = text => createHash('sha256').update(text).digest('hex');
 const excludedHeading = /^(?:tests?|testing|verification|validation|status|checklist|benchmarks?|benchmarking|screenshots?)(?:\b|$)/i;
+
+function isWholeChangelogBullet(markdown, firstLine, pastLastLine) {
+  // Only the local-history helper needs the parser. External task briefs stay standalone.
+  const MarkdownIt = createRequire(import.meta.url)('markdown-it');
+  const tokens = new MarkdownIt('commonmark').parse(markdown, {});
+  const item = tokens.findIndex(token => token.type === 'list_item_open' && token.level === 1
+    && token.markup === '-' && token.map[0] === firstLine);
+  if (item < 0) return false;
+  const paragraph = tokens[item + 1];
+  // One paragraph emits paragraph_open, inline, paragraph_close, then the item must end.
+  return paragraph.type === 'paragraph_open' && paragraph.map[0] === firstLine
+    && paragraph.map[1] === pastLastLine && tokens[item + 4]?.type === 'list_item_close';
+}
+
+// Local history has no PR body. Admit one inserted changelog paragraph and
+// record its actual origin instead of presenting it as an external task brief.
+export function localHistoryTaskBrief({ title, commit, before, after }) {
+  if (typeof title !== 'string' || !title.trim() || Buffer.byteLength(title) > 1024
+    || typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit)
+    || typeof before !== 'string' || typeof after !== 'string'
+    || Buffer.byteLength(before) > 1048576 || Buffer.byteLength(after) > 1048576
+    || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(title + before + after)) {
+    throw new Error('invalid_local_history_brief_input');
+  }
+  const oldLines = before.split('\n'), newLines = after.split('\n');
+  let start = 0, end = 0;
+  while (start < oldLines.length && oldLines[start] === newLines[start]) start++;
+  while (end < oldLines.length - start
+    && oldLines[oldLines.length - 1 - end] === newLines[newLines.length - 1 - end]) end++;
+  if (start + end !== oldLines.length) throw new Error('local_history_brief_not_additive');
+  const insertion = newLines.slice(start, newLines.length - end).join('\n');
+  const added = insertion.trim();
+  if (Buffer.byteLength(added) > 8192 || !/^- \S/.test(added)) throw new Error('ambiguous_local_history_narrative');
+  // The diff uses exact input lines. CommonMark counts CRLF, CR and LF as line endings.
+  const insertionOffset = start ? newLines.slice(0, start).join('\n').length + 1 : 0;
+  const firstLine = after.slice(0, insertionOffset + insertion.indexOf(added)).split(/\r\n?|\n/).length - 1;
+  const pastLastLine = firstLine + added.split(/\r\n?|\n/).length;
+  if (!isWholeChangelogBullet(after, firstLine, pastLastLine)) throw new Error('ambiguous_local_history_narrative');
+  const narrative = added.slice(2).trim();
+  const instruction = title.trim() + '\n\n' + narrative;
+  return { instruction, provenance: { revision: 'local-history-task-brief-v1', commit,
+    source: 'CHANGELOG.md', titleSha256: sha256(title), beforeSha256: sha256(before),
+    afterSha256: sha256(after), narrativeSha256: sha256(narrative), instructionSha256: sha256(instruction) } };
+}
 
 // Freeze public author narrative separately from executable acceptance tests.
 // This is Markdown section selection, not semantic proof that a task is complete.
