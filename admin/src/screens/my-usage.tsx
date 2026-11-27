@@ -381,7 +381,8 @@ function UsageActivity({ data, timezone }: { data: PersonalUsageData; timezone: 
   const time = (at: number) => new Date(at).toLocaleString('en-US', { timeZone: timezone, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   return <section className="dashboardPanel personalSection" aria-label="Recent model calls">
     <header className="personalSectionHeader"><div><h2>Recent model calls</h2><p>100 per page · metadata only · {timezone}</p></div></header>
-    {events.loading ? <p role="status">Loading recent model calls…</p> : null}
+    {!page && data.report.error ? <p className="personalNote">Retry the report above to load recent calls.</p>
+      : events.loading ? <p role="status">Loading recent model calls…</p> : null}
     {events.error ? <div role="alert"><p>{events.error}</p><p>Old displayed report; Refresh required before continuing.</p><button type="button" onClick={data.retryEvents}>Retry recent calls</button></div> : null}
     {page && !events.loading ? <>
       <p className="personalNote">{usageCaveats.personal}</p>
