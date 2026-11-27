@@ -1,5 +1,6 @@
 import { GrantPoolIncidents } from "../grant-health";
 import { MemberGrantedService } from "./member-granted-service";
+import { hasShortBudgetWindow, MemberBudgetWindows } from "./member-budget-windows";
 import { credentialExpiryLabel, KeyTierControls, keyTierChoices } from "../member-key-controls";
 import type { SessionPolicyLimits } from "../../../shared/contracts";
 import React, { useEffect, useState } from "react";
@@ -206,9 +207,12 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
         <section className="dashboardPanel quotaPanel">
           <DashboardPanelHeader eyebrow="policy budgets" title={isAdmin ? "Budget posture" : "Your policy budgets"} meta={usageStale && usageLoaded ? "last known ledger" : usageLoaded ? "live ledger" : "policy limits only"} />
           {!isAdmin ? <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} /> : null}
-          <p className="panelIntro">UTC calendar month · Used includes reservations. {isAdmin ? "Balances follow each policy's shared or per-principal scope." : "Shared pools include other users; per-principal balances apply to your identity."} Other policy or provider limits still apply.</p>
+          <p className="panelIntro">{isAdmin ? "UTC calendar month" : "Budget windows reset in UTC"} · Used includes reservations. {isAdmin ? "Balances follow each policy's shared or per-principal scope." : "Shared pools include other users; per-principal balances apply to your identity."} Other policy or provider limits still apply.</p>
           <div className="quotaList">
             {visibleBudgetRows.map((row) => {
+              if (!isAdmin && hasShortBudgetWindow(row.budget)) {
+                return <MemberBudgetWindows key={usagePolicyId(row)} row={row} serviceCount={effectiveProviderCount(row.providers, services)} />;
+              }
               const budget = presentPolicyBudget(row, formatConfiguredLimit);
               return (
                 <article className="quotaRow" key={usagePolicyId(row)} title={budget.note}>
