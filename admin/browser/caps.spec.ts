@@ -38,9 +38,9 @@ test('Members do not see the Caps view', async ({ page }) => {
   await expect(page.getByRole('region', { name: 'Caps', exact: true })).toHaveCount(0);
 });
 
-async function openCaps(page: Page) {
+async function openCaps(page: Page, monthlyBudgetMicros = 1_000_000) {
   const policies = ['alpha', 'beta'].map(policyId => ({
-    policyId, enabled: true, providers: [], budgetScope: 'principal', dailyBudgetMicros: 15_000_000, monthlyBudgetMicros: 1_000_000, retainRequestContent: false,
+    policyId, enabled: true, providers: [], budgetScope: 'principal', dailyBudgetMicros: 15_000_000, monthlyBudgetMicros, retainRequestContent: false,
     grantRouting: { strategy: 'priority', stickiness: 'none', failover: true, staleState: 'allow', staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} },
   }));
   const overrides: Record<string, Record<string, unknown>> = {};
@@ -62,7 +62,7 @@ async function openCaps(page: Page) {
       '/v1/providers': { providers: [] }, '/v1/routes': { openaiCompatible: [], manifestProxy: [] },
       '/v1/session/credentials': { credentials: [] }, '/v1/session/usage': { policies: [] },
       '/v1/admin/bootstrap': { policies, users: [user], credentials: [], bindings: [], grants: [], connections: [], rules: [], providers: [], tenants: [], overview: {} },
-      '/v1/admin/caps': { users: [user], rows: policies.map(policy => ({ policy, members: [{ email: user.email, budget: { configured: true, ledger: 'durable_object', spentMicros: 0, limitMicros: 1_000_000, remainingMicros: 1_000_000 } }] })) },
+      '/v1/admin/caps': { users: [user], rows: policies.map(policy => ({ policy, members: [{ email: user.email, budget: { configured: true, ledger: 'durable_object', spentMicros: 1, limitMicros: policy.monthlyBudgetMicros, remainingMicros: policy.monthlyBudgetMicros - 1 } }] })) },
     };
     await route.fulfill({ json: responses[path] ?? {} });
   });
@@ -70,6 +70,39 @@ async function openCaps(page: Page) {
   await page.getByRole('button', { name: 'Caps', exact: true }).click();
   return { user, writes };
 }
+
+test('Caps shows exact inherited and overridden limits and resaves the same microdollars', async ({ page }) => {
+  const { user, writes } = await openCaps(page, Number.MAX_SAFE_INTEGER);
+  const row = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: user.email }) });
+  const defaultInput = page.getByLabel('Default monthly cap USD');
+  await expect(defaultInput).toHaveValue('9007199254.740991');
+  await expect(row.getByText('<$0.01 / $9007199254.740991 (inherited)', { exact: true })).toBeVisible();
+  const defaultSave = page.getByRole('button', { name: 'Save Default monthly cap', exact: true });
+  await defaultInput.press('Tab');
+  await expect(defaultSave).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => writes.map(write => write.body)).toEqual([{ monthlyBudgetMicros: Number.MAX_SAFE_INTEGER }]);
+  await expect(defaultSave).toBeEnabled();
+
+  const label = user.email + ' daily cap';
+  await row.getByLabel(label + ' mode').selectOption('number');
+  const input = row.getByLabel(label + ' USD');
+  const save = row.getByRole('button', { name: 'Save ' + label, exact: true });
+  await input.fill('0');
+  await save.click();
+  await expect(row.getByText('unknown / $0.00 (override)', { exact: true })).toBeVisible();
+  await input.fill('0.000001');
+  await save.click();
+  await expect(row.getByText('unknown / $0.000001 (override)', { exact: true })).toBeVisible();
+  await input.fill('9007199254.740989');
+  await save.click();
+  await expect(row.getByText('unknown / $9007199254.740989 (override)', { exact: true })).toBeVisible();
+  await expect(input).toHaveValue('9007199254.740989');
+  await save.click(); // Re-saving the stored override must not add a microdollar.
+  await expect.poll(() => writes.slice(1).map(write => write.body)).toEqual([
+    { dailyBudgetMicros: 0 }, { dailyBudgetMicros: 1 }, { dailyBudgetMicros: 9_007_199_254_740_989 }, { dailyBudgetMicros: 9_007_199_254_740_989 },
+  ]);
+});
 
 test('Switching policies resets unsaved member cap edits even when limits match', async ({ page }) => {
   const { user, writes } = await openCaps(page);

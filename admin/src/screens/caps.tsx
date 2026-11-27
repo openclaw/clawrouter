@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useConsole } from "../console-controller-context";
 import { InlineError, InlineNote } from "../components";
-import { parseBudgetUsd } from "../cost-presentation";
+import { formatConfiguredLimit, formatMicros, parseBudgetUsd } from "../cost-presentation";
+import { dollarInputFromMicros } from "../request-price-input";
 import type { AccessPolicy, AccessUser, BudgetStatus } from "../ui-types";
 
 type WindowName = "daily" | "weekly" | "monthly";
@@ -9,7 +10,6 @@ type CapDraft = { mode: "number"; amount: string } | { mode: "unlimited" | "inhe
 const windows: WindowName[] = ["daily", "weekly", "monthly"];
 type Caps = { rows: Array<{ policy: AccessPolicy; members: Array<{ email: string; budget: BudgetStatus }> }>; users: AccessUser[] };
 const field = (window: WindowName) => `${window}BudgetMicros` as const;
-const dollars = (amount: number | null | undefined) => amount == null ? "unlimited" : `$${(amount / 1e6).toFixed(2)}`;
 
 export function CapsView({ onBack }: { onBack: () => void }) {
   const { session, access, request } = useConsole();
@@ -65,7 +65,7 @@ export function CapsView({ onBack }: { onBack: () => void }) {
             const cap = inherited ? row.policy[key] : memberCap;
             const budget = window === "monthly" ? member.budget : member.budget[window];
             // Reset this draft only when its policy or stored override changes, not when a sibling saves.
-            return <td key={window} data-label={`${window} spend / cap`}><p>{budget?.spentMicros == null ? "unknown" : dollars(budget.spentMicros)} / {dollars(cap)}{inherited ? " (inherited)" : " (override)"}</p><CapEditor key={`${row.policy.policyId}:${memberCap}`} label={`${member.email} ${window} cap`} value={memberCap} inherit disabled={busy} onSave={value => save(window, value, member.email)} /></td>;
+            return <td key={window} data-label={`${window} spend / cap`}><p>{budget?.spentMicros == null ? "unknown" : formatMicros(budget.spentMicros)} / {cap == null ? "unlimited" : formatConfiguredLimit(cap)}{inherited ? " (inherited)" : " (override)"}</p><CapEditor key={`${row.policy.policyId}:${memberCap}`} label={`${member.email} ${window} cap`} value={memberCap} inherit disabled={busy} onSave={value => save(window, value, member.email)} /></td>;
           })}<td>{override ? `${override.updatedBy} · ${override.updatedAt}` : "Policy default"}</td></tr>;
         })}</tbody></table></div>
       </>}
@@ -75,6 +75,6 @@ export function CapsView({ onBack }: { onBack: () => void }) {
 
 function CapEditor({ label, value, inherit, disabled, onSave }: { label: string; value?: number | null; inherit?: boolean; disabled: boolean; onSave: (draft: CapDraft) => Promise<void> }) {
   const [mode, setMode] = useState<CapDraft["mode"]>(value === undefined && inherit ? "inherit" : value == null ? "unlimited" : "number");
-  const [amount, setAmount] = useState(value == null ? "" : String(value / 1e6));
+  const [amount, setAmount] = useState(() => dollarInputFromMicros(value));
   return <form className="capEditor" onSubmit={event => { event.preventDefault(); void onSave(mode === "number" ? { mode, amount } : { mode }); }}><label><span className={inherit ? "srOnly" : undefined}>{label}</span><select aria-label={`${label} mode`} value={mode} disabled={disabled} onChange={event => setMode(event.target.value as CapDraft["mode"])}>{inherit && <option value="inherit">Inherit</option>}<option value="unlimited">Unlimited</option><option value="number">Amount (USD)</option></select></label>{mode === "number" && <input aria-label={`${label} USD`} inputMode="decimal" value={amount} disabled={disabled} onChange={event => setAmount(event.target.value)} />}<button disabled={disabled} type="submit" aria-label={`Save ${label}`}>Save</button></form>;
 }
