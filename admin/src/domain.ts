@@ -437,7 +437,8 @@ export function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | un
   const provider = form.mode === "model" ? model?.provider : route?.provider;
   if (!provider) return null;
   const access = accessByProvider.get(provider);
-  if (!access?.allowed) return "Cloudflare Access identity is not granted this provider";
+  if (!access) return "Your access to this provider couldn’t be verified. You can keep editing your draft.";
+  if (!access.allowed) return "Cloudflare Access identity is not granted this provider";
   const readiness = readinessByProvider[provider];
   if (!readiness) return "provider readiness is unknown";
   if (!readiness.executable) return readiness.reasons[0] ?? `provider is ${readinessLabel(readiness)}`;

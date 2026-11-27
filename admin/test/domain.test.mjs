@@ -113,6 +113,9 @@ test("service outcome and playground blocker require both access and readiness",
   assert.equal(serviceOutcome(allowed).label, "usable");
   assert.equal(playgroundBlocker(modelForm(), { id: "openai/default", provider: "openai", capabilities: [] }, undefined, new Map([["openai", allowed.access]]), { openai: allowed.readiness }), null);
 
+  // Missing access is not a denial, even if the provider is known to be ready.
+  assert.match(playgroundBlocker(modelForm(), { id: "openai/default", provider: "openai", capabilities: [] }, undefined, new Map(), { openai: allowed.readiness }), /access to this provider couldn’t be verified/);
+
   const denied = { ...allowed, access: { ...allowed.access, allowed: false, policies: [] } };
   assert.equal(serviceOutcome(denied).label, "denied");
   assert.match(playgroundBlocker(modelForm(), { id: "openai/default", provider: "openai", capabilities: [] }, undefined, new Map([["openai", denied.access]]), { openai: denied.readiness }), /not granted/);
