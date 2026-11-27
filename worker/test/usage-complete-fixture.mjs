@@ -28,7 +28,7 @@ export async function completeFixture(t,count=2){
  async function exportUsage(q=query,signal=new AbortController().signal){
   exportRequests.length=0;let report;
   const request=async(origin,path,init={})=>{
-   const http=new Request(new URL(path,origin),init),kind=new URL(http.url).pathname.split('/').at(-1);
+   const http=new Request(new URL(path,origin),init),kind=http.method==='DELETE'?'release':new URL(http.url).pathname.split('/').at(-1);
    const outcome=await readCompleteUsage(env,verify,parseCompleteUsageRequest(http,kind,caller.audience),init.signal);
    exportRequests.push({kind,outcome});return outcome;
   };

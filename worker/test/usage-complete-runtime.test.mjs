@@ -43,7 +43,7 @@ test('workerd actual private DO path: complete ranks, equal-ID pages, retained e
    const two=one.kind==='complete'?await readCompleteUsage(env,verify,{kind:'events',cut:report.cut,query:report.query,pageSize:1,cursor:one.value.nextCursor}):one;
    const exportRequests=[];
    const request=async(origin,path,init={})=>{
-    const http=new Request(new URL(path,origin),init),kind=new URL(http.url).pathname.split('/').at(-1);
+    const http=new Request(new URL(path,origin),init),kind=http.method==='DELETE'?'release':new URL(http.url).pathname.split('/').at(-1);
     const outcome=await readCompleteUsage(env,verify,parseCompleteUsageRequest(http,kind,'admin'),init.signal);
     exportRequests.push({kind,outcome:outcome.kind});return outcome;
    };
