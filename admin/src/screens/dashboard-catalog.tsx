@@ -296,8 +296,22 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
       {limits ? presentAllowanceWindows(limits.budget, formatConfiguredLimit).map(window => <p className="panelIntro" key={window.label}>{window.text}</p>) : null}
       {limits?.limitHint ? <p className="panelIntro">{limits.limitHint}</p> : null}</> : null}
       <div className="myKeysList">
-        {credentials.map((credential) => <article key={credential.credentialId}>
-          <span><strong title={credential.name || credential.credentialId}>{credential.name || credential.credentialId}</strong>{credential.name ? <small title={credential.credentialId}>{credential.credentialId}</small> : null}<small className={credentialExpiryLabel(credential.expiresAt).warning ? "keyExpiryWarning" : undefined}>{credentialExpiryLabel(credential.expiresAt).label}</small><small>{credential.policyId} · {credential.active ? "active" : credential.enabled ? "inactive" : "revoked"}</small>{credential.active && held === "ready" && !policyIds.includes(credential.policyId) ? <small>Policy no longer held: rotation unavailable. This key remains usable and can be revoked.</small> : null}</span>
+        {credentials.map((credential) => {
+          const mismatch = credential.enabled && credential.generationMatches === false;
+          const reasonId = mismatch ? `renew-policy-mismatch-${credential.credentialId}` : undefined;
+          const renewalReason = !credential.enabled ? "Revoked keys cannot be renewed."
+            : mismatch ? "This key does not match the current policy and cannot be renewed."
+            : held === "ready" && !policyIds.includes(credential.policyId) ? "Policy not held; renewal unavailable."
+            : !credential.active && !credential.expired ? "This key is inactive and cannot be renewed." : undefined;
+          return <article key={credential.credentialId}>
+            <span>
+              <strong title={credential.name || credential.credentialId}>{credential.name || credential.credentialId}</strong>
+              {credential.name ? <small title={credential.credentialId}>{credential.credentialId}</small> : null}
+              <small className={credentialExpiryLabel(credential.expiresAt).warning ? "keyExpiryWarning" : undefined}>{credentialExpiryLabel(credential.expiresAt).label}</small>
+              <small>{credential.policyId} · {credential.active ? "active" : credential.enabled ? "inactive" : "revoked"}</small>
+              {credential.active && held === "ready" && !policyIds.includes(credential.policyId) ? <small>Policy no longer held: rotation unavailable. This key remains usable and can be revoked.</small> : null}
+              {mismatch ? <small id={reasonId} style={{ whiteSpace: "normal" }}>{renewalReason}</small> : null}
+            </span>
           {editing?.credentialId === credential.credentialId ? <form className="myKeyRename" onSubmit={(event) => {
             event.preventDefault();
             const draft = editing;
@@ -308,8 +322,9 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
             <label><span>Key name</span><input autoFocus value={editing.name} maxLength={80} readOnly={busy} placeholder="Leave blank to use key ID" onChange={(event) => { onDraftChange(); setEditing({ credentialId: credential.credentialId, name: event.target.value }); }} /></label>
             <button type="submit" disabled={busy || keys !== "ready"}>Save name</button>
             <button type="button" className="buttonSecondary" disabled={busy} onClick={() => { onDraftChange(); setEditing(null); }}>Cancel</button>
-          </form> : <span className="myKeyActions"><button type="button" className="buttonSecondary" disabled={busy || keys !== "ready"} onClick={() => { onDraftChange(); setEditing({ credentialId: credential.credentialId, name: credential.name ?? "" }); }}>Rename</button><button type="button" className="buttonSecondary" disabled={busy || !inventoryReady || (!credential.active && !(credential.enabled && credential.expired)) || !policyIds.includes(credential.policyId)} title={held === "ready" && !policyIds.includes(credential.policyId) ? "Policy no longer held; rotation unavailable. Existing active keys remain usable and can be revoked." : !credential.active ? "Only active keys can be rotated" : undefined} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Renew</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>}
-        </article>)}
+          </form> : <span className="myKeyActions"><button type="button" className="buttonSecondary" disabled={busy || keys !== "ready"} onClick={() => { onDraftChange(); setEditing({ credentialId: credential.credentialId, name: credential.name ?? "" }); }}>Rename</button><button type="button" className="buttonSecondary" disabled={busy || !inventoryReady || Boolean(renewalReason)} aria-describedby={reasonId} title={renewalReason} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Renew</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>}
+          </article>;
+        })}
         {keys === "ready" && !credentials.length ? <div className="dashboardEmpty"><KeyRound aria-hidden="true" /><strong>No personal keys</strong>{!noPolicy && held === "ready" ? <p>Create one to use your policy from OpenClaw or another API client.</p> : null}</div> : null}
       </div>
     </section>
