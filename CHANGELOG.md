@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in native-test cascade adapter that rejects incomplete verification before fallback and preserves parser receipt types.
+
 - Record a five-task Fusion cost study with four successful fallbacks, 58.49% lower estimated API cost and a failed no-slowdown gate.
 
 - Report native Node Fusion repair costs with independent cheap-model controls and explicit limits on routing and collaboration claims.
