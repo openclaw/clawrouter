@@ -76,16 +76,70 @@ test('410 keeps old report labelled via event failure; refresh creates new root 
  const f=mount();let h=await opened(f);h.showEvents(true);f.render();f.reads().at(-1).reject(Error('Refresh required (410)'));await flush();h=f.render();assert.equal(h.report.value.metrics.calls,0);assert.match(h.events.error,/Refresh required/);h.reload();f.render();f.tick();assert.equal(new URL(f.reads().at(-1).path,'https://console.example').searchParams.has('cut'),false);assert.equal(f.render().page,1);f.retire();
 });
 
-async function exporting(f){const h=f.render(),work=h.startExport('json');const r=f.reads().at(-1);assert.equal(new URL(r.path,'https://console.example').searchParams.get('intent'),'export');const fresh=report({cut:'e'.repeat(43)});r.resolve(outcome(fresh));await flush();assert.equal(f.render().exportState.report,fresh);assert.equal(f.downloads.length,0);const p=f.reads().at(-1);assert.match(p.path,/events/);p.resolve(outcome({events:[],nextCursor:null,coverage:fresh.coverage}));await flush();assert.match(f.reads().at(-1).path,/validate/);assert.equal(f.downloads.length,0);return {work,final:f.reads().at(-1)};}
+async function exporting(f) {
+ const {exportState: {report: previous}, startExport} = f.render();
+ const downloaded = f.downloads.length;
+ const work = startExport('json');
+ const read = f.reads().at(-1);
+ assert.equal(new URL(read.path, 'https://console.example').searchParams.get('intent'), 'export');
+ const fresh = report({cut: 'e'.repeat(43)});
+ read.resolve(outcome(fresh));
+ await flush();
+ assert.equal(f.render().exportState.report, previous);
+ assert.equal(f.downloads.length, downloaded);
+ const page = f.reads().at(-1);
+ assert.match(page.path, /events/);
+ page.resolve(outcome({events: [], nextCursor: null, coverage: fresh.coverage}));
+ await flush();
+ const final = f.reads().at(-1);
+ assert.match(final.path, /validate/);
+ assert.equal(f.downloads.length, downloaded);
+ return {work, final, fresh};
+}
 test('hook downloads only after final validation and keeps fresh export totals separate from displayed snapshot',async()=>{
- const f=mount();await opened(f);const displayed=f.render().report.value,{work,final}=await exporting(f);assert.equal(f.render().report.value,displayed);final.resolve(outcome({valid:true}));await work;assert.equal(f.downloads.length,1);assert.match(f.render().exportState.message,/downloaded/);assert.ok(f.requests.some(r=>r.init.method==='DELETE'&&r.path.includes('e'.repeat(43))));f.retire();
+ const f=mount();await opened(f);const displayed=f.render().report.value,{work,final,fresh}=await exporting(f);assert.equal(f.render().report.value,displayed);final.resolve(outcome({valid:true}));await work;assert.equal(f.downloads.length,1);assert.equal(f.render().exportState.report,fresh);assert.match(f.render().exportState.message,/downloaded/);assert.ok(f.requests.some(r=>r.init.method==='DELETE'&&r.path.includes('e'.repeat(43))));f.retire();
 });
-for(const reason of ['cancel','navigation','auth','validateFailure'])test('hook export '+reason+' creates no file, no stale panel and releases root',async()=>{
- const f=mount();await opened(f);const {work,final}=await exporting(f);
- if(reason==='cancel')f.render().cancelExport();if(reason==='navigation'){f.props.active=false;f.render();f.props.active=true;f.render();}if(reason==='auth'){f.props.scope.epoch++;const retired=f.render();assert.equal(retired.exportState.report,undefined);}
- if(reason==='validateFailure')final.reject(Error('validation failed'));else final.resolve(outcome({valid:true}));await work;assert.equal(f.downloads.length,0);assert.ok(f.requests.some(r=>r.init.method==='DELETE'&&r.path.includes('e'.repeat(43))));
- if(reason==='auth'||reason==='navigation')assert.equal(f.render().exportState.message,'');else assert.match(f.render().exportState.message,/cancelled|validation failed/);f.retire();
+test('an unsuccessful first export never shows a downloaded snapshot', async () => {
+ const f = mount();
+ try {
+  await opened(f);
+  const {work, final} = await exporting(f);
+  final.resolve(outcome({valid: false}));
+  await work;
+  assert.equal(f.downloads.length, 0);
+  assert.equal(f.render().exportState.report, undefined);
+  assert.match(f.render().exportState.message, /No file was downloaded/);
+ } finally { f.retire(); }
 });
+for (const reason of ['cancel', 'validateFailure', 'navigation', 'auth', 'role']) {
+ test('export keeps only the current session’s last download across ' + reason, async () => {
+  const f = mount();
+  try {
+   await opened(f);
+   const first = await exporting(f);
+   first.final.resolve(outcome({valid: true}));
+   await first.work;
+   const second = await exporting(f);
+   assert.notEqual(first.fresh, second.fresh);
+   if (reason === 'cancel') f.render().cancelExport();
+   if (reason === 'navigation') { f.props.active = false; f.render(); f.props.active = true; }
+   if (reason === 'auth') f.props.scope.epoch++;
+   if (reason === 'role') f.props.scope.session = {...f.props.scope.session, role: 'admin'};
+   const sameScope = reason === 'cancel' || reason === 'validateFailure';
+   assert.equal(f.render().exportState.report, sameScope ? first.fresh : undefined);
+   if (reason === 'validateFailure') second.final.reject(Error('validation failed'));
+   else second.final.resolve(outcome({valid: true}));
+   await second.work;
+   const state = f.render().exportState;
+   assert.equal(f.downloads.length, 1);
+   assert.equal(state.busy, false);
+   assert.equal(state.report, sameScope ? first.fresh : undefined);
+   if (sameScope) assert.match(state.message, /No file was downloaded/);
+   else assert.equal(state.message, '');
+   assert.equal(f.requests.filter(r => r.init.method === 'DELETE' && r.path.includes('e'.repeat(43))).length, 2);
+  } finally { f.retire(); }
+ });
+}
 
 test('failed refinement retains a labelled old report and requires refresh instead of continuing old cut',async()=>{
  const f=mount();let h=await opened(f);h.refine({...h.query,filters:{model:'selected'}});f.render();f.tick();f.reads().at(-1).reject(Error('Refresh required (410)'));await flush();h=f.render();assert.match(h.report.error,/Refresh required/);assert.equal(h.report.value.query.filters.model,undefined);const count=f.reads().length;h.refine({...h.query,groupBy:'provider'});f.render();f.tick();assert.equal(f.reads().length,count);h.reload();f.render();f.tick();assert.equal(new URL(f.reads().at(-1).path,'https://console.example').searchParams.has('cut'),false);f.retire();

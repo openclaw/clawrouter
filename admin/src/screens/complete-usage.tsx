@@ -143,7 +143,7 @@ export function CompleteExport({data}: {data: PersonalUsageData}) {
       {busy ? <button type="button" onClick={data.cancelExport}>Cancel export</button> : null}
     </div>
     <p role="status">{message}</p>
-    {exported ? <><h3>Fresh export snapshot</h3><ReportScope report={exported} label="Export snapshot scope"/>
+    {exported ? <><h3>Last downloaded snapshot</h3><ReportScope report={exported} label="Export snapshot scope"/>
       <p>{count(exported.metrics.calls)} calls · <Recorded value={exported}/></p>
       <p>{usageCaveats[data.audience]}</p><UsageCoverage value={exported}/></> : null}
   </section>;

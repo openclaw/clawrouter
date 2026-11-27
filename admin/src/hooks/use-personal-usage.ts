@@ -90,11 +90,33 @@ export function useUsageReport({request,scope,active,full}:UsageHookOptions,audi
   const shownEvents=events.key===eventKey&&scope.isCurrent()?events:{key:eventKey,loading:active&&eventsShown,error:''};
   const shownExport:typeof exportState=active&&scope.isCurrent()&&exportState.key===scopeKey?exportState:{key:scopeKey,busy:false,message:''};
   async function startExport(format:'csv'|'json'){
-    if(!visible.value||!selectedQuery||visible.error||exportController.current)return;const controller=new AbortController(),generation=lifetime.current;const current=()=>generation===lifetime.current&&scope.isCurrent();exportController.current=controller;setExportState({key:scopeKey,busy:true,message:'Capturing refreshed snapshot…'});
-    try{const file=await exportRefreshedUsage({request,origin:scope.origin,audience,query:selectedQuery,rangeInput:selection.rangeInput,signal:controller.signal,isCurrent:current,onReport:value=>{if(current()&&!controller.signal.aborted)setExportState({key:scopeKey,busy:true,message:'Reconciling refreshed snapshot; totals may differ from the displayed report.',report:value});}},format);
-      if(current()&&!controller.signal.aborted){downloadUsageFile(file);setExportState(s=>({...s,busy:false,message:'Refreshed snapshot downloaded.'}));}
-    }catch(error){if(current())setExportState(s=>({...s,busy:false,message:error instanceof Error?error.message:String(error)}));}
-    finally{if(exportController.current===controller)exportController.current=null;}
+    if (!visible.value || !selectedQuery || visible.error || exportController.current) return;
+    const controller = new AbortController(), generation = lifetime.current;
+    const current = () => generation === lifetime.current && scope.isCurrent();
+    const previous = shownExport.report;
+    let captured: CompleteUsageReport | undefined;
+    const publish = (busy: boolean, message: string, report = previous) => {
+      if (current()) setExportState({key: scopeKey, busy, message, report});
+    };
+    exportController.current = controller;
+    publish(true, 'Capturing refreshed snapshot…');
+    try {
+      const file = await exportRefreshedUsage({request, origin: scope.origin, audience, query: selectedQuery,
+        rangeInput: selection.rangeInput, signal: controller.signal, isCurrent: current, onReport: value => {
+          // A capture is not a receipt: reconciliation and final validation still have to succeed.
+          captured = value;
+          if (!controller.signal.aborted) publish(true, 'Checking the captured events before download…');
+        }}, format);
+      if (!current()) return;
+      controller.signal.throwIfAborted();
+      downloadUsageFile(file);
+      publish(false, 'Refreshed snapshot downloaded.', captured);
+    } catch (error) {
+      publish(false, controller.signal.aborted ? 'Export cancelled. No file was downloaded.'
+        : 'No file was downloaded. ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      if (exportController.current === controller) exportController.current = null;
+    }
   }
   return {audience,report:visible,events:shownEvents,query:visible.value?.query,requestedQuery:selection.query,queryTemplate:selection.presetQuery,rangeInput:selection.rangeInput,selectedQuery,customRange,refine,reload,showEvents,eventsShown,page:page.number,
     retryEvents:()=>{pages.current.delete(eventKey);setEventsRevision(r=>r+1);},
