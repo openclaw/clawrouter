@@ -9,9 +9,9 @@ import {
   routeKey,
   errorMessage,
 } from "../domain";
-import { demo, demoServicePreset } from "../ui-config";
+import { initialPlaygroundTarget } from "../playground-initial-target";
 import { playgroundDraftPayload } from "../playground-draft";
-import { catalogModels, createPlaygroundTurn, playgroundRequest } from "../ui-helpers";
+import { createPlaygroundTurn, playgroundRequest } from "../ui-helpers";
 import type { CatalogModel } from "../domain";
 import type { PlaygroundForm, PlaygroundTurn, ProviderAccess, ProviderReadiness, RouteCatalog } from "../ui-types";
 
@@ -54,15 +54,15 @@ function payloadError(form: PlaygroundForm, cause: unknown): PlaygroundDraftErro
 }
 
 export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serviceRoutes, accessByProvider, providerReadiness }: PlaygroundDependencies) {
-  const initializedModelsRef = useRef(false);
   const operationRef = useRef<{ controller: AbortController; followResult: boolean } | null>(null);
   const [running, setRunning] = useState(false);
-  const [{ form, error }, setDraft] = useState<{ form: PlaygroundForm; error: PlaygroundDraftError | null }>(() => ({
+  const [{ form, error, fresh }, setDraft] = useState<{ form: PlaygroundForm; error: PlaygroundDraftError | null; fresh: boolean }>(() => ({
+    fresh: true,
     form: {
       mode: "model",
-      model: catalogModels(demo.routes)[0]?.id ?? "",
+      model: "",
       endpoint: "/v1/chat/completions",
-      ...demoServicePreset,
+      ...playgroundServicePreset(),
       system: "You are concise and useful.",
       prompt: "Say hello from ClawRouter in one short sentence.",
       maxTokens: "128",
@@ -73,7 +73,7 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
   const setForm = useCallback((update: SetStateAction<PlaygroundForm>) => {
     setDraft((current) => {
       const next = typeof update === "function" ? update(current.form) : update;
-      return { form: next, error: keepDraftError(current.error, current.form, next) };
+      return { form: next, error: keepDraftError(current.error, current.form, next), fresh: false };
     });
   }, []);
   function setError(error: PlaygroundDraftError | null) {
@@ -82,8 +82,8 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
   const [turns, setTurns] = useState<PlaygroundTurn[]>([]);
   const [selectedTurnId, setSelectedTurnId] = useState("");
   const [requestMode, setRequestMode] = useState<"json" | "curl">("json");
-  const selectedModel = models.find((model) => model.id === form.model) ?? models[0];
-  const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === form.serviceRoute) ?? serviceRoutes[0];
+  const selectedModel = models.find((model) => model.id === form.model);
+  const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === form.serviceRoute);
 
   useEffect(() => () => {
     const operation = operationRef.current;
@@ -92,20 +92,18 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
   }, []);
 
   useEffect(() => {
-    if (!models.length) return;
-    if (!initializedModelsRef.current || !models.some((model) => model.id === form.model)) {
-      initializedModelsRef.current = true;
-      const usable = models.filter((model) => accessByProvider.get(model.provider)?.allowed && providerReadiness[model.provider]?.executable);
-      const preferred = usable.find((model) => model.provider === "openai") ?? usable[0] ?? models[0];
-      setForm((current) => ({ ...current, model: preferred.id }));
-    }
-  }, [accessByProvider, form.model, models, providerReadiness, setForm]);
-
-  useEffect(() => {
-    if (serviceRoutes.length && !serviceRoutes.some((route) => routeKey(route) === form.serviceRoute)) {
-      setForm((current) => ({ ...current, ...playgroundServicePreset(serviceRoutes[0]) }));
-    }
-  }, [form.serviceRoute, serviceRoutes, setForm]);
+    if (!fresh) return;
+    const target = initialPlaygroundTarget(models, serviceRoutes, accessByProvider, providerReadiness);
+    // While access is unavailable or denied, keep the catalog's blocked model visible.
+    // Only a usable default or a deliberate form change takes ownership of the draft.
+    const fallback = models[0];
+    setDraft(current => {
+      if (!current.fresh) return current;
+      if (target) return { ...current, form: { ...current.form, ...target }, fresh: false };
+      if (!fallback || current.form.model === fallback.id) return current;
+      return { ...current, form: { ...current.form, model: fallback.id } };
+    });
+  }, [fresh, accessByProvider, models, providerReadiness, serviceRoutes]);
 
   async function run(event: FormEvent) {
     event.preventDefault();
