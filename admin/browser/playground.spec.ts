@@ -142,6 +142,58 @@ for (const outcome of ["response", "error"] as const) {
   });
 }
 
+test("model suggestions edit the selected model draft, not a service request", async ({ page }) => {
+  const provider = page.getByRole("combobox", { name: "Provider", exact: true });
+  const target = page.getByRole("combobox", { name: "Model or route" });
+  const suggestion = page.getByRole("button", { name: "Return a concise JSON example." });
+  await target.selectOption("model:test-model/reply-pro");
+  await suggestion.press("Space");
+  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue("Return a concise JSON example.");
+  await expect(target).toHaveValue("model:test-model/reply-pro");
+  await expect(page.locator(".playgroundInspector")).toContainText("/v1/playground/v1/responses");
+  expect(await requestCount(page)).toBe(0);
+
+  await provider.selectOption("test-service");
+  const body = page.getByRole("textbox", { name: "JSON request body" });
+  await body.fill('{"query":"field guide"}');
+  await expect(suggestion).toHaveCount(0);
+  await expect(page.locator(".chatEmpty")).toContainText("JSON");
+  await expect(provider).toHaveValue("test-service");
+  await expect(page.locator(".chatExchange")).toHaveCount(0);
+  expect(await requestCount(page)).toBe(0);
+
+  await body.press("Enter");
+  await expect.poll(() => requestCount(page)).toBe(1);
+  await complete(page, 0, "Service reply");
+  await expect(page.locator(".playgroundInspector")).toContainText("/v1/playground/proxy/test-service/search");
+  expect(JSON.parse(await page.locator(".debugPayload").innerText()).body).toEqual({ query: "field guide" });
+  await expect(body).toHaveValue('{"query":"field guide"}');
+  await page.getByRole("button", { name: "New chat" }).press("Enter");
+  await expect(suggestion).toHaveCount(0);
+  await provider.selectOption("test-model");
+  await expect(suggestion).toBeVisible();
+});
+
+test("a denied service keeps its JSON draft and its access explanation", async ({ page }) => {
+  await page.route("**/v1/session", (route) => route.fulfill({ json: {
+    authenticated: true, auth: "cloudflare_access", role: "user", email: "user@example.com",
+    entitlements: { providers: entitlements.map((entry) => entry.provider === "test-service" ? { ...entry, allowed: false } : entry) },
+  } }));
+  await page.reload();
+  const provider = page.getByRole("combobox", { name: "Provider", exact: true });
+  await provider.selectOption("test-service");
+  const body = page.getByRole("textbox", { name: "JSON request body" });
+  await body.fill('{"query":"keep this draft"}');
+  await expect(page.getByRole("button", { name: "Return a concise JSON example." })).toHaveCount(0);
+  await expect(page.locator(".composerDock")).toContainText("not granted");
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+  await body.press("Enter");
+  await expect(provider).toHaveValue("test-service");
+  await expect(body).toHaveValue('{"query":"keep this draft"}');
+  await expect(page.locator(".chatExchange")).toHaveCount(0);
+  expect(await requestCount(page)).toBe(0);
+});
+
 test("service requests share admission without clearing their editable payload", async ({ page }) => {
   await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption("test-service");
   const payload = page.getByRole("textbox", { name: "JSON request body", exact: true });

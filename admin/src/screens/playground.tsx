@@ -119,14 +119,24 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
         <div className="chatTranscript" ref={transcript} aria-live="polite">
           {!turns.length ? (
             <div className="chatEmpty">
-              <span><Bot aria-hidden="true" /></span>
-              <h2>Test the route as a conversation.</h2>
-              <p>Choose any granted model or service, send a message, then click a response to inspect the exact gateway exchange.</p>
-              <div className="promptSuggestions">
-                {["Explain this service in two sentences.", "Return a concise JSON example.", "What can you help me test?"].map((prompt) => (
-                  <button key={prompt} type="button" onClick={() => setForm({ ...form, mode: "model", prompt })}>{prompt}</button>
-                ))}
-              </div>
+              {form.mode === "service" ? (
+                <>
+                  <span><ServerCog aria-hidden="true" /></span>
+                  <h2>Test the selected service route.</h2>
+                  <p>Edit the JSON request body below. After you send it, select the response to inspect the exchange.</p>
+                </>
+              ) : (
+                <>
+                  <span><Bot aria-hidden="true" /></span>
+                  <h2>Test the route as a conversation.</h2>
+                  <p>Choose any granted model or service, send a message, then click a response to inspect the exact gateway exchange.</p>
+                  <div className="promptSuggestions">
+                    {["Explain this service in two sentences.", "Return a concise JSON example.", "What can you help me test?"].map((prompt) => (
+                      <button key={prompt} type="button" onClick={() => setForm({ ...form, prompt })}>{prompt}</button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           ) : turns.map((turn) => (
             <article key={turn.id} className={`chatExchange ${selectedTurnId === turn.id ? "selected" : ""}`}>
