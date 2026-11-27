@@ -958,6 +958,236 @@
       },
       "artifactFormat": "strict-anchored-edits",
       "contextProfile": "recursive-static-public-test-dependencies"
+    },
+    {
+      "name": "anchored-task-extension",
+      "previousTaskExposure": false,
+      "scope": "First campaign exposure of two tasks qualified from three frozen candidates in previously exposed package/families. Fixed anchored prompts, model pair and public-test cascade. Shared-control replay; no live latency or production claim.",
+      "sourceSha": "fed32a2b23634d80b5a2d12f368b6c1094a65d57",
+      "inferenceProtocolSha256": "998834253c913d48cd064729403cc00cc909a0aa17a285cc1dac6962a2d6f872",
+      "gradingProtocolSha256": "998834253c913d48cd064729403cc00cc909a0aa17a285cc1dac6962a2d6f872",
+      "resultSha256": "3e0d30dd629b764da8f63ed3e86e5cd34ebb749b7fac991c63a2c1988251c597",
+      "journalSha256": "460808e995bf641a5aeef7cf8debf07066bfc607a79d425dd652f07ef79d8f13",
+      "stateSha256": "d73955dd222a8cd6c17d38a272489ee9458c269701e55200d313043429931301",
+      "screenProtocolSha256": "bd0103c00cf44b2889c7c9e0f88e6f6bb08c76cb1d18b315da93be7cdf32049a",
+      "qualificationSha256": "34ed42a874c168d728d29980bbbc9ffc4f5bb82439ade1c32764b67a796eddfb",
+      "actualPairedCostMicros": 107053,
+      "cases": [
+        {
+          "id": "semver-2471d7543e2e",
+          "base": "8f05c87f56a4123259b8c6d9324f53eadb02e48f",
+          "oracle": "2471d7543e2e63d9d95358e2405e7e1cde926c36",
+          "editPaths": [
+            "classes/range.js"
+          ],
+          "tests": [
+            "test/classes/range.js"
+          ],
+          "admitted": false,
+          "qualification": {
+            "id": "semver-2471d7543e2e",
+            "eligible": false,
+            "results": {
+              "referenceFull": {
+                "valid": true,
+                "passed": true,
+                "assertions": 554,
+                "failedAssertions": 0,
+                "problems": []
+              },
+              "baselineFull": {
+                "valid": true,
+                "passed": false,
+                "assertions": 544,
+                "failedAssertions": 10,
+                "problems": []
+              },
+              "referencePublic": {
+                "valid": true,
+                "passed": true,
+                "assertions": 552,
+                "failedAssertions": 0,
+                "problems": []
+              },
+              "baselinePublic": {
+                "valid": true,
+                "passed": false,
+                "assertions": 542,
+                "failedAssertions": 10,
+                "problems": []
+              }
+            }
+          }
+        },
+        {
+          "id": "semver-c99f336fa3bd",
+          "base": "2677f2a88334b0e728dbfe9ad9f5f57458437c87",
+          "oracle": "c99f336fa3bdff465652f9041eab2127d2f52eb2",
+          "editPaths": [
+            "classes/semver.js",
+            "internal/re.js"
+          ],
+          "tests": [
+            "test/classes/semver.js",
+            "test/functions/coerce.js",
+            "test/functions/inc.js",
+            "test/internal/re.js"
+          ],
+          "admitted": true,
+          "qualification": {
+            "id": "semver-c99f336fa3bd",
+            "eligible": true,
+            "results": {
+              "referenceFull": {
+                "valid": true,
+                "passed": true,
+                "assertions": 1878,
+                "failedAssertions": 0,
+                "problems": []
+              },
+              "baselineFull": {
+                "valid": true,
+                "passed": false,
+                "assertions": 1878,
+                "failedAssertions": 3,
+                "problems": []
+              },
+              "referencePublic": {
+                "valid": true,
+                "passed": true,
+                "assertions": 1872,
+                "failedAssertions": 0,
+                "problems": []
+              },
+              "baselinePublic": {
+                "valid": true,
+                "passed": false,
+                "assertions": 1872,
+                "failedAssertions": 3,
+                "problems": []
+              }
+            }
+          }
+        },
+        {
+          "id": "semver-8a34bdecc783",
+          "base": "0864b3ce7932667013e0c7c5ec764777d4682883",
+          "oracle": "8a34bdecc783407f4e1a8a1ee1f67906b84a4b78",
+          "editPaths": [
+            "classes/semver.js"
+          ],
+          "tests": [
+            "test/classes/semver.js",
+            "test/functions/inc.js"
+          ],
+          "admitted": true,
+          "qualification": {
+            "id": "semver-8a34bdecc783",
+            "eligible": true,
+            "results": {
+              "referenceFull": {
+                "valid": true,
+                "passed": true,
+                "assertions": 1210,
+                "failedAssertions": 0,
+                "problems": []
+              },
+              "baselineFull": {
+                "valid": true,
+                "passed": false,
+                "assertions": 1210,
+                "failedAssertions": 11,
+                "problems": []
+              },
+              "referencePublic": {
+                "valid": true,
+                "passed": true,
+                "assertions": 1204,
+                "failedAssertions": 0,
+                "problems": []
+              },
+              "baselinePublic": {
+                "valid": true,
+                "passed": false,
+                "assertions": 1204,
+                "failedAssertions": 11,
+                "problems": []
+              }
+            }
+          }
+        }
+      ],
+      "records": [
+        {
+          "caseId": "semver-c99f336fa3bd",
+          "arm": "cheap",
+          "costMicros": 6022,
+          "normalizedMicros": 5138,
+          "publicValid": true,
+          "publicPassed": true,
+          "publicAssertions": 1872,
+          "fullValid": true,
+          "fullPassed": true,
+          "fullAssertions": 1878,
+          "success": true,
+          "artifactRejected": false
+        },
+        {
+          "caseId": "semver-c99f336fa3bd",
+          "arm": "strong",
+          "costMicros": 46747,
+          "normalizedMicros": 37909,
+          "publicValid": true,
+          "publicPassed": true,
+          "publicAssertions": 1872,
+          "fullValid": true,
+          "fullPassed": true,
+          "fullAssertions": 1878,
+          "success": true,
+          "artifactRejected": false
+        },
+        {
+          "caseId": "semver-8a34bdecc783",
+          "arm": "strong",
+          "costMicros": 49622,
+          "normalizedMicros": 42050,
+          "publicValid": false,
+          "publicPassed": false,
+          "publicAssertions": 1195,
+          "fullValid": null,
+          "fullPassed": null,
+          "fullAssertions": null,
+          "success": false,
+          "artifactRejected": false
+        },
+        {
+          "caseId": "semver-8a34bdecc783",
+          "arm": "cheap",
+          "costMicros": 4662,
+          "normalizedMicros": 3905,
+          "publicValid": true,
+          "publicPassed": true,
+          "publicAssertions": 1204,
+          "fullValid": true,
+          "fullPassed": true,
+          "fullAssertions": 1210,
+          "success": true,
+          "artifactRejected": false
+        }
+      ],
+      "summary": {
+        "cheapSuccess": 2,
+        "strongSuccess": 1,
+        "cascadeSuccess": 2,
+        "falseAccepts": 0,
+        "strongLosses": 0,
+        "cascadeCostMicros": 10684,
+        "strongCostMicros": 96369,
+        "normalizedStrongMicros": 79959,
+        "normalizedCascadeMicros": 9043
+      },
+      "artifactFormat": "anchors",
+      "contextProfile": "recursive-static-public-test-dependencies-with-root-index-resolution"
     }
   ]
 }

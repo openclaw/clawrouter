@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Extend the SemVer Fusion evidence with two further tasks, including a cheap-only match and an explicit failed strong control.
 - Record the SemVer Fusion pilot and same-package task-transfer results, including failed qualification and cost-increasing controls; keep production defaults unchanged.
 - Preserve unsaved Fusion settings and readiness-policy selection when an earlier save or console refresh completes.
 - Preserve exact microdollar amounts when editing provider budgets; reject fractional microdollars and out-of-range caps before saving.
