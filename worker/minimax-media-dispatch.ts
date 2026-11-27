@@ -4,7 +4,7 @@ import { miniMaxApiKeySecret, qualifyMiniMaxEnvironmentBinding, miniMaxMediaProj
 import { filterGrantCandidates } from "./grant-eligibility.ts";
 import { grantRoutingPolicy } from "./grant-routing.ts";
 import { assertPolicyModel } from "./policy-models.ts";
-import type { GrantRequirement } from "./provider-auth.ts";
+import type { GrantRequirement } from "./grant-compatibility.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";

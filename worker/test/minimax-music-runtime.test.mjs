@@ -5,7 +5,7 @@ import { configureMusic, musicBody, musicModel, musicModels, musicResult, musicS
 import { minimaxMusicBinding, readNativeMediaBinding } from "../../shared/native-media-binding.ts";
 import { minimaxSpeechBinding } from "../../shared/native-media-binding.ts";
 import { snapshot } from "../provider-catalog.ts";
-import { grantSupports } from "../provider-auth.ts";
+import { grantSupports } from "../grant-compatibility.ts";
 import { sha256Hex } from "../utils.ts";
 import { putGrantCredentials, materializeGrantCredentials, inspectGrantCredentials, revokeGrantCredentials, secretlessGrant } from "../grant-credentials.ts";
 import { routingProjection } from "../grant-projection.ts";

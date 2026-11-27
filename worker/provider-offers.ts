@@ -3,7 +3,7 @@ import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import type { ProviderOfferDefinition, ProviderOfferReference, ProviderProduct } from "../shared/provider-products.ts";
 import type { CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, UpstreamGrant } from "./types.ts";
 import { modelForEndpoint } from "./model-pricing.ts";
-import { grantSupports } from "./provider-auth.ts";
+import { grantSupports } from "./grant-compatibility.ts";
 
 export interface CompatibleProviderOffer {
   status: "compatible";

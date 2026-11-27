@@ -100,7 +100,8 @@ import { backgroundResponse, requireEmptyResponseControlBody, responsesControls,
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import { assertProviderAccess, configuredUpstream, signSigV4, upstreamAuth, type UpstreamAuth } from "./providers"; import { upstreamPath } from "./provider-request"; import { modelRoute, providerById } from "./provider-catalog"; import { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
-import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
+import { assertOperationConfiguration } from "./provider-auth.ts";
+import { grantSupports, openRouterPcmRequirement } from "./grant-compatibility.ts";
 import { inspectJsonError, normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import { decodePathSegment, errorResponse, json, maxJsonBodyBytes, maxMediaJsonBodyBytes, randomId, readJson, type JsonIntake } from "./utils";
@@ -1790,7 +1791,7 @@ async function auditSelectionFailure(request: Request, env: Env, context: Execut
   createProxyAccounting({ context, env, auth, selection, request, compound }).fail(statusCode, status);
 }
 
-async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string, requirement?: import("./provider-auth").GrantRequirement, selection?: ProxySelection, freshness: "cached" | "authoritative" = "cached"): Promise<AuthorizedIdentity | Response | null> {
+async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string, requirement?: import("./grant-compatibility").GrantRequirement, selection?: ProxySelection, freshness: "cached" | "authoritative" = "cached"): Promise<AuthorizedIdentity | Response | null> {
   if (mode === "proxy_key") {
     // Continuations select their recorded owner later. Invalid operations must
     // retain their existing error precedence without incrementing counters.

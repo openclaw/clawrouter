@@ -7,7 +7,7 @@ const { default: handler } = await import("../index.ts");
 const { modelRoute, providerById, providerModel, routeCatalog, unifiedPathForEndpoint } = await import("../provider-catalog.ts"); const { capabilityForPath } = await import("../../shared/route-catalog.ts");
 const { concreteOpenAiSelection, isSelectionFailure, prepareNativeRequest } = await import("../proxy-selection.ts");
 const { actualModelCost, estimateModelCost } = await import("../pricing.ts");
-const { grantSupports } = await import("../provider-auth.ts");
+const { grantSupports } = await import("../grant-compatibility.ts");
 const { operationAffordability } = await import("../operation-budget.ts");
 const { accountingReceipt, estimateCost } = await import("../proxy-accounting.ts");
 const { extractUsageTokens } = await import("../token-usage.ts");
