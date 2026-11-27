@@ -7,6 +7,7 @@
 - Record a three-task Fusion HTTP pilot with one successful fallback and 61.01% lower estimated API cost; report the fragile latency margin and native Mocha test accounting.
 
 - Record a five-task Fusion cost study with four successful fallbacks, 58.49% lower estimated API cost and a failed no-slowdown gate.
+- Record an object-equality Fusion transfer check with equal quality across all arms, lower small-model cost, and no fallback or added fusion-quality benefit.
 
 - Report native Node Fusion repair costs with independent cheap-model controls and explicit limits on routing and collaboration claims.
 - Record Fusion preparation and conditional repair pilots, including failed quality parity and cheap-first results without fallback rescues.
