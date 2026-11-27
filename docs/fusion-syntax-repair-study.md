@@ -60,3 +60,48 @@ changed together, so this trial does not isolate their individual effects.
 Costs use frozen tariffs and recorded usage, not invoice reconciliation. A
 larger distinct cohort, independent repeats and comparable end-to-end timing
 remain necessary before promoting the policy.
+
+## Follow-up: two cheap repairs failed
+
+A bounded follow-up on the original 30-task cohort did not reproduce the
+single-task repair success. It selected both initially null artifacts before
+the new calls: one syntax failure and one source exception. Both had saved
+decoded source edits. Each received one new Luna repair with the retained edits
+and compact public diagnostics. Both repairs became syntactically valid but
+failed public tests. Each path then used its original, single-call, public-passing
+fresh Terra control. Full tests confirmed both selected final artifacts.
+
+The new calls cost $0.001226 combined. All policy totals below include reused
+initial and strong calls at their original costs. The other 28 candidate
+outcomes and both control arms are reused. The controller replay checks the
+two modified paths, with public-only routing before full grading.
+
+| Policy on the original cohort | Full-suite passes | Model cost, USD |
+| --- | ---: | ---: |
+| Original cheap-repair candidate | 29/30 | 0.063159 |
+| Retained cheap repair, then cached fresh strong control | 30/30 | 0.060184 |
+| Skip cheap repair, same cached controls (retrospective) | 30/30 | 0.058958 |
+| Paired baseline | 30/30 | 0.076203 |
+| Direct strong control | 30/30 | 0.217653 |
+
+The reconstructed repaired policy is 21.02% below baseline, but **neither cheap
+repair passed**. Omitting those failed calls would be 22.63% below baseline with
+the same selected strong artifacts. That omission is a retrospective accounting
+comparison, not another prospectively tested policy. This result supports
+neither general cheap-repair promotion nor a cross-model collaboration claim.
+
+Control reuse matters: the earlier [missing-draft escalation study](fusion-missing-draft-study.md)
+made two new strong calls and reached 30/30 at $0.061164, only 19.74% below
+baseline, failing the frozen 20% savings gate. Substituting different recorded
+strong draws changes which side of that threshold the result falls on. The
+current arithmetic pass does not establish a robust cost advantage.
+
+The [sanitized follow-up records](fusion-retained-repair-followup.json) identify
+the six distinct calls, their reuse and the private receipt hashes. These are
+previously exposed tasks, not independent confirmation. There is no comparable
+end-to-end timing. No expanded semantic tests were rerun. The one changed
+artifact covered by the existing 23-task semantic audit is byte-identical to
+its previously audited strong control. Reusing that exact-source receipt
+preserves two reference mismatches and leaves the expanded result at **17/23**.
+The full-suite score cannot replace that broader check. Production qualification
+and Worker routing defaults remain unchanged.

@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "design": "exposed-two-case-replay-with-cached-fresh-controls",
+  "previouslyExposed": true,
+  "populationQualified": false,
+  "productionQualified": false,
+  "collaborationGainEstablished": false,
+  "timingComparable": false,
+  "expandedSemanticAuditRun": false,
+  "semanticEvidence": {
+    "method": "reuse-byte-identical-previously-audited-strong-artifact",
+    "taskId": "juliangruber/balanced-match@a508f2cb510d0848684caba628355852384d85be",
+    "sourceSha256": "438aaac99e1379b1e9cbec894145bb4b9f1b37070a50665ed3f31233a1b87aee",
+    "protocolSha256": "2e9b7cefdfa8af78f45085eaeceda579b9bbd55ed626eeaed23aed9a20e8271e",
+    "resultSha256": "25a9618b949dbe62c0ee9a984fac6881efaa9d6d6ed246876156bd44c3d0c525",
+    "changedArtifactsCovered": 1,
+    "changedMatchesReference": false,
+    "changedMismatches": 2,
+    "matchesReference": 17,
+    "tasks": 23,
+    "newNativeRuns": 0,
+    "newModelCalls": 0
+  },
+  "provenance": {
+    "originalProtocolSha256": "475b870aa9f4003f17fba5f1e23718d934b1024c9633bb18e9ff14f0a1e9ac61",
+    "originalAggregateSha256": "6392c8c5ad3f000f4c0c177ce20204e0fabedd4d5555f14723602f7d6f9a5b89",
+    "replayProtocolSha256": "caaa8686514ee383fb0f291e6057e7a30198ed808065d7856c8dc313acf8cbcc",
+    "replayResultSha256": "bde101a0b6ca8dc4a1032c7fb97f539ec2a65b86fdf20063c1f9705e53691b58"
+  },
+  "cases": [
+    {
+      "taskId": "process-warning-11c73b622aa2",
+      "initialFailure": "syntax",
+      "calls": [
+        {
+          "id": "initial-cheap",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 771,
+          "publicPassed": false,
+          "newInReplay": false
+        },
+        {
+          "id": "cheap-repair",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 839,
+          "publicPassed": false,
+          "newInReplay": true
+        },
+        {
+          "id": "fresh-strong-control",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 7856,
+          "publicPassed": true,
+          "newInReplay": false
+        }
+      ],
+      "fullPassed": true,
+      "fullTests": 6,
+      "retainedRepairCostMicros": 9466,
+      "skipRepairCostMicros": 8627
+    },
+    {
+      "taskId": "juliangruber/balanced-match@a508f2cb510d0848684caba628355852384d85be",
+      "initialFailure": "source-exception",
+      "calls": [
+        {
+          "id": "initial-cheap",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 607,
+          "publicPassed": false,
+          "newInReplay": false
+        },
+        {
+          "id": "cheap-repair",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 387,
+          "publicPassed": false,
+          "newInReplay": true
+        },
+        {
+          "id": "fresh-strong-control",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 4479,
+          "publicPassed": true,
+          "newInReplay": false
+        }
+      ],
+      "fullPassed": true,
+      "fullTests": 19,
+      "retainedRepairCostMicros": 5473,
+      "skipRepairCostMicros": 5086
+    }
+  ],
+  "newModelCalls": 2,
+  "newModelCostMicros": 1226,
+  "original": {
+    "tasks": 30,
+    "passed": 29,
+    "falseAccepts": 0,
+    "costMicros": 63159
+  },
+  "baseline": {
+    "tasks": 30,
+    "passed": 30,
+    "falseAccepts": 0,
+    "costMicros": 76203
+  },
+  "strong": {
+    "tasks": 30,
+    "passed": 30,
+    "falseAccepts": 0,
+    "costMicros": 217653
+  },
+  "reconstructed": {
+    "tasks": 30,
+    "passed": 30,
+    "falseAccepts": 0,
+    "costMicros": 60184
+  },
+  "skipRepairCounterfactual": {
+    "tasks": 30,
+    "passed": 30,
+    "falseAccepts": 0,
+    "costMicros": 58958,
+    "prospective": false,
+    "selectedAfterReplay": true
+  },
+  "priorFreshFallbackReplay": {
+    "tasks": 30,
+    "passed": 30,
+    "falseAccepts": 0,
+    "costMicros": 61164,
+    "newModelCalls": 2,
+    "newModelCostMicros": 14541
+  },
+  "costBasis": "frozen-tariffs-and-recorded-usage-not-invoice-reconciliation"
+}
