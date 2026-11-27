@@ -27,7 +27,12 @@ test('valid native failure gets one fresh fallback and retains both costs', asyn
 });
 
 test('repair fallback receives an isolated draft and only explicit public feedback', async () => {
-  const initial = { ...receipt(false), publicFeedback: 'public case failed', privateFinal: 'must not reach fallback' };
+  let feedbackReads = 0;
+  class NativeReceipt {
+    constructor() { Object.assign(this, receipt(false), { privateFinal: 'must not reach fallback' }); }
+    get publicFeedback() { feedbackReads++; return 'public case failed'; }
+  }
+  const initial = new NativeReceipt();
   initial.tests.diagnostics = 'also not copied';
   let calls = 0;
   const result = await runNativeCascade({ ...config, fallbackMode: 'repair', invokeAndVerify: async request => {
@@ -45,6 +50,7 @@ test('repair fallback receives an isolated draft and only explicit public feedba
     return receipt(true);
   } });
   assert.equal(initial.artifact.patch, 'source'); assert.equal(calls, 2);
+  assert.equal(feedbackReads, 1);
   assert.equal(result.passed, true); assert.equal(result.costMicros, 14);
 });
 

@@ -25,9 +25,10 @@ export async function runNativeCascade({ draftModel, fallbackModel, expectedTest
         assert.equal(typeof receipt.tests.passed, 'boolean', 'invalid_native_verdict');
       }
       if (phase === 'initial' && fallbackMode === 'repair' && receipt.tests?.passed !== true) {
-        assert.ok(receipt.publicFeedback === undefined || typeof receipt.publicFeedback === 'string'
-          && Buffer.byteLength(receipt.publicFeedback) <= 12000, 'invalid_native_public_feedback');
-        publicFeedback = receipt.publicFeedback ?? null;
+        const feedback = receipt.publicFeedback;
+        assert.ok(feedback === undefined || typeof feedback === 'string'
+          && Buffer.byteLength(feedback) <= 12000, 'invalid_native_public_feedback');
+        publicFeedback = feedback ?? null;
       }
       // Native test parsers may return class instances. Keep the receipt intact;
       // runVerifiedWorkflow separately clones candidate artifacts for isolation.
