@@ -434,6 +434,17 @@ native `checks` without stripping parser prototypes; those receipts may include
 source or diagnostic content. The existing `steps` and `onStep` metadata remain
 content-free. This adapter changes no serving defaults and makes no quality claim.
 
+Set `fallbackMode: 'repair'` to give the fallback an isolated `draft` and
+`feedback` in its `invokeAndVerify` request. Return an optional `publicFeedback`
+string with the initial failed receipt to supply that feedback; it must be at
+most 12,000 UTF-8 bytes. The adapter does not copy other receipt fields or test
+diagnostics into the fallback request. Include only feedback the model may see,
+and keep held-out evaluation results separate. A missing artifact remains `null`.
+The repair still uses the same native verification gate and two-call limit.
+Existing callers keep fresh fallback behavior and their original request shape.
+This is an in-memory helper; it has no stored state, pending callbacks or native
+deployment transition. Callers continue to own provider admission and accounting.
+
 For selector repairs, include preservation checks for inputs that must remain
 unselected. Build these checks from the baseline contract before generating a
 candidate, and run them for both strong controls and cheap drafts. Keep the

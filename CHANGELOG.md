@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Allow the native-test Fusion cascade to opt into a two-call repair with an isolated failed draft and bounded public feedback.
 - Add opt-in supplied-contract source handoff from a failed cheap candidate to a fresh strong fallback, preserving independent verification and shared budgets.
 
 - Add an opt-in native-test cascade adapter that rejects incomplete verification before fallback and preserves parser receipt types.
