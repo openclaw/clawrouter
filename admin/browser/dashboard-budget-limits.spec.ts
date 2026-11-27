@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import type { AdminUsageRow, BudgetStatus } from '../src/ui-types';
 import { fixtureReport, fixtureResponses } from './fixtures/personal-usage';
 import { completeDisplayOutcome } from './fixtures/complete-usage';
@@ -47,15 +47,7 @@ for (const role of ['admin', 'user'] as const) test(role + ' sees exact limits w
   await expect(keys).toContainText('This week: $0.02 used / unlimited · no cap · member override');
 });
 
-test('members see every held policy budget, including an exhausted seventh policy', async ({page}) => {
-  const policyIds = ['batch_jobs', 'build_tools', 'demo_models', 'docs_search', 'image_render', 'research', 'support_chat'];
-  const rows: AdminUsageRow[] = policyIds.map((policyId, index) => {
-    const used = index === 6 ? 10_000_000 : index * 1_000_000;
-    return {
-      kid: policyId, policyId, enabled: true, tenantId: 'synthetic', providers: ['openai'], monthlyBudgetMicros: 10_000_000,
-      budget: { configured: true, ledger: used === 10_000_000 ? 'blocked' : 'ready', limitMicros: 10_000_000, spentMicros: used, remainingMicros: 10_000_000 - used },
-    };
-  });
+async function openMemberBudgets(page: Page, rows: AdminUsageRow[]) {
   await page.route('**/v1/**', async route => {
     const url = new URL(route.request().url());
     expect(route.request().method()).toBe('GET');
@@ -72,6 +64,18 @@ test('members see every held policy budget, including an exhausted seventh polic
     await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
   });
   await page.goto('/dashboard/home');
+}
+
+test('members see every held policy budget, including an exhausted seventh policy', async ({page}) => {
+  const policyIds = ['batch_jobs', 'build_tools', 'demo_models', 'docs_search', 'image_render', 'research', 'support_chat'];
+  const rows: AdminUsageRow[] = policyIds.map((policyId, index) => {
+    const used = index === 6 ? 10_000_000 : index * 1_000_000;
+    return {
+      kid: policyId, policyId, enabled: true, tenantId: 'synthetic', providers: ['openai'], monthlyBudgetMicros: 10_000_000,
+      budget: { configured: true, ledger: used === 10_000_000 ? 'blocked' : 'ready', limitMicros: 10_000_000, spentMicros: used, remainingMicros: 10_000_000 - used },
+    };
+  });
+  await openMemberBudgets(page, rows);
   const panel = page.locator('.quotaPanel');
   await expect(panel.getByRole('heading', {name: 'Your policy budgets'})).toBeVisible();
   await expect(panel.locator('.quotaIdentity strong')).toHaveText(policyIds);
@@ -148,4 +152,38 @@ test('member budgets distinguish spent, missing and positive weekly balances aft
   }
   await expect(panel).not.toContainText('No cap at this scope');
   expect(reads).toBe(1);
+});
+
+test('member budget policy IDs keep their distinguishing suffixes visible above their windows', async ({page, isMobile}) => {
+  const prefix = 'research_infrastructure_shared_model_evaluation_us_east_batch_inference_regional_capacity_';
+  const rows = ['blue', 'gold'].map((suffix, index): AdminUsageRow => {
+    const cap = (limit: number, spent: number, reset: string) => ({configured:true, ledger:'durable_object', limitMicros:limit, spentMicros:spent, remainingMicros:limit-spent, resetsAt:reset});
+    return { kid:prefix + suffix, policyId:prefix + suffix, enabled:true, tenantId:'research', providers:['openai'], budgetScope:'principal',
+      budget:{...cap(100_000_000, 0, '2026-12-01T00:00:00Z'), daily:cap(1_000_000, 0, '2026-11-28T00:00:00Z'), weekly:cap(10_000_000, index ? 0 : 10_000_000, '2026-11-30T00:00:00Z')} };
+  });
+  await openMemberBudgets(page, rows);
+  await page.evaluate(() => document.fonts.ready);
+  const quota = page.locator('.quotaPanel');
+  for (const width of isMobile ? [320, 390] : [1440]) {
+    await page.setViewportSize({width, height:820});
+    for (const [i, row] of rows.entries()) {
+      const policy = quota.getByRole('article', {name:row.kid, exact:true});
+      const label = policy.getByText(row.kid, {exact:true});
+      await label.scrollIntoViewIfNeeded();
+      // A visible element or accessible name can still hide the distinguishing text behind an ellipsis.
+      const suffixFits = await label.evaluate(el => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.setStart(el.firstChild!, el.textContent!.length - 4);
+        const box = el.getBoundingClientRect();
+        const suffixRects = [...range.getClientRects()];
+        return suffixRects.length > 0 && suffixRects.every(r => r.width > 0 && r.left >= box.left - 1 && r.right <= box.right + 1 &&
+          r.top >= box.top - 1 && r.bottom <= box.bottom + 1 && r.left >= 0 && r.right <= innerWidth + 1);
+      });
+      expect(suffixFits, row.kid + ' suffix at ' + width + 'px').toBe(true);
+      await expect(policy.getByRole('group').locator('.quotaIdentity strong')).toHaveText(['Daily', 'Weekly', 'Monthly']);
+      await expect(policy.getByRole('group', {name:'Weekly'})).toContainText(i ? '$10.00 remaining' : '$0.00 remaining');
+    }
+    expect(await quota.evaluate(el => el.scrollWidth <= el.clientWidth + 1 && document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  }
 });
