@@ -121,7 +121,7 @@ export async function main(out) {
     { name: 'panel', strategy: 'ensemble', model: models.cheap, advisers: [models.strong, models.critic], effort: 'medium', maxOutputTokens: limit },
   ].map(configuration => ({ ...configuration, transport }));
   let pins;
-  if (transport === 'native') pins = await nativePins(process.env);
+  if (transport === 'native') pins = await nativePins(process.env, undefined, Object.values(models));
   else {
     const catalogResponse = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(30000) });
     if (!catalogResponse.ok) throw new Error('model catalog unavailable');
