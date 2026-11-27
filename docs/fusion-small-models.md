@@ -2672,3 +2672,12 @@ A zero-call follow-up recovered every rejected cheap edit through a unique
 exact-source match, and all seven recovered batches passed the original tests.
 The observed quality gap reflects edit-format rejection on this sample;
 prospective decoder validation is still required.
+
+
+## Fresh URI transfer check
+
+The [four-task URI comparison](fusion-uri-transfer-study.md) passed 4/4 in all
+three arms. Cascade cost 66.60% less and took 8.04% less workflow time than
+strong-only, but independent cheap-only matched quality at 80.39% less cost
+and 25.59% less time than cascade. The fusion-value gate failed. All six
+candidate qualifications, twelve arms and thirteen calls are retained.
