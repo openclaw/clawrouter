@@ -2653,3 +2653,9 @@ fallback API time by 24.19%, but failed its component cost gate. A complete
 six-task development replay then scored 6/6 in every arm: cascade used 70.12%
 less model cost than strong-only but took 3.40% longer, while cheap-only was
 both cheaper and faster. Neither experiment qualifies an overall gain.
+
+The [three-round LRU-cache comparison](fusion-lru-repeat-study.md) scored 9/9
+for cascade and strong-only, versus 5/9 for independent cheap-only. Aggregate
+model cost fell 51.92% and workflow time fell 3.31%, but two rounds were slower
+than strong-only. The stricter repeated-development gate failed. These are
+three independent tasks sampled three times, not nine independent tasks.

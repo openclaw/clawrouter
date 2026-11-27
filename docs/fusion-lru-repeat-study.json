@@ -1,0 +1,1576 @@
+{
+  "schema": "fusion-lru-repeat-study-v1",
+  "date": "2026-11-27",
+  "qualification": {
+    "protocolSha256": "0f722b89d358f0e2bfc2aa581ac584324bff4f5c358d06515285c6f813f163e5",
+    "qualificationSha256": "3ecb81a563a550c29537d592e6e5829637691d78f2524af311cc8caa0c2f5c23",
+    "scope": "Ten fixed unseen-in-campaign LRU cache repairs/features; historical public tasks, not training decontamination. Original changed JS test suites plus basic and size-calculation suites, one unchanged original group withheld where possible. Full means all selected suites, not the entire package. Memory/GC benchmark omitted before qualification, no new compute or model calls. Exact reference counts required for valid failing parent and passing reference, retain every failure without replacements. Max128files/64MiB.",
+    "candidates": [
+      {
+        "caseId": "lru-cache-05942bcc1023",
+        "repository": "isaacs/node-lru-cache",
+        "base": "32e7912b07c5fe68c8ed8a32d7795112eaf4ac50",
+        "oracle": "05942bcc1023c50fcb63a19d1835a474ef5a38ed",
+        "instruction": "feat: add noDeleteOnFetchRejection",
+        "qualified": true,
+        "results": {
+          "referenceFull": {
+            "valid": true,
+            "passed": true,
+            "assertions": 172
+          },
+          "baselineFull": {
+            "valid": true,
+            "passed": false,
+            "assertions": 172
+          },
+          "referencePublic": {
+            "valid": true,
+            "passed": true,
+            "assertions": 166
+          },
+          "baselinePublic": {
+            "valid": true,
+            "passed": false,
+            "assertions": 166
+          }
+        }
+      },
+      {
+        "caseId": "lru-cache-8069477499e5",
+        "repository": "isaacs/node-lru-cache",
+        "base": "3ad0061482c1a42e9d44cc0ac4dce3b2d7ad79e7",
+        "oracle": "8069477499e536dc11a0f99c659664786932c7aa",
+        "instruction": "handle failures from fetchMethod",
+        "qualified": false,
+        "results": {
+          "referenceFull": {
+            "valid": true,
+            "passed": true,
+            "assertions": 163
+          },
+          "baselineFull": {
+            "valid": true,
+            "passed": false,
+            "assertions": 164
+          },
+          "referencePublic": {
+            "valid": true,
+            "passed": true,
+            "assertions": 101
+          },
+          "baselinePublic": {
+            "valid": true,
+            "passed": false,
+            "assertions": 102
+          }
+        }
+      },
+      {
+        "caseId": "lru-cache-2cbea7e962c5",
+        "repository": "isaacs/node-lru-cache",
+        "base": "955935a45a42e81d45a998c45ab3bbd5cd582755",
+        "oracle": "2cbea7e962c53db944147a11eddbdcf717c746ab",
+        "instruction": "Better AbortController polyfill",
+        "qualified": false,
+        "results": {
+          "referenceFull": {
+            "valid": true,
+            "passed": true,
+            "assertions": 160
+          },
+          "baselineFull": {
+            "valid": true,
+            "passed": false,
+            "assertions": 158
+          },
+          "referencePublic": {
+            "valid": true,
+            "passed": true,
+            "assertions": 123
+          },
+          "baselinePublic": {
+            "valid": true,
+            "passed": false,
+            "assertions": 122
+          }
+        }
+      },
+      {
+        "caseId": "lru-cache-b571d06fec1e",
+        "repository": "isaacs/node-lru-cache",
+        "base": "0b6689cc060f7c2b8cb03a79d0098703fb832e23",
+        "oracle": "b571d06fec1eb5789d4ba8dd6828466614156740",
+        "instruction": "fix: double calculatedSize deduction on delete",
+        "qualified": true,
+        "results": {
+          "referenceFull": {
+            "valid": true,
+            "passed": true,
+            "assertions": 105
+          },
+          "baselineFull": {
+            "valid": true,
+            "passed": false,
+            "assertions": 105
+          },
+          "referencePublic": {
+            "valid": true,
+            "passed": true,
+            "assertions": 89
+          },
+          "baselinePublic": {
+            "valid": true,
+            "passed": false,
+            "assertions": 89
+          }
+        }
+      },
+      {
+        "caseId": "lru-cache-44c5ec96b87b",
+        "repository": "isaacs/node-lru-cache",
+        "base": "74044a7ff0c540c0a283229efb8e2da7ef943e05",
+        "oracle": "44c5ec96b87bf1a4999ee68ddb8f119dc62bc6f7",
+        "instruction": "feat: updateAgeOnHas",
+        "qualified": true,
+        "results": {
+          "referenceFull": {
+            "valid": true,
+            "passed": true,
+            "assertions": 355
+          },
+          "baselineFull": {
+            "valid": true,
+            "passed": false,
+            "assertions": 355
+          },
+          "referencePublic": {
+            "valid": true,
+            "passed": true,
+            "assertions": 221
+          },
+          "baselinePublic": {
+            "valid": true,
+            "passed": false,
+            "assertions": 221
+          }
+        }
+      },
+      {
+        "caseId": "lru-cache-b66bc6d84d20",
+        "repository": "isaacs/node-lru-cache",
+        "base": "b0e4020b7b2c619ba48a61758afa2c17fb8b7cd1",
+        "oracle": "b66bc6d84d20b9a071e2b252e66bfbcae5a8390f",
+        "instruction": "fix: actually use polyfilled AbortController class",
+        "qualified": false,
+        "results": {
+          "referenceFull": {
+            "valid": true,
+            "passed": true,
+            "assertions": 99
+          },
+          "baselineFull": {
+            "valid": true,
+            "passed": true,
+            "assertions": 99
+          },
+          "referencePublic": {
+            "valid": true,
+            "passed": true,
+            "assertions": 84
+          },
+          "baselinePublic": {
+            "valid": true,
+            "passed": true,
+            "assertions": 84
+          }
+        }
+      },
+      {
+        "caseId": "lru-cache-787343df2b0a",
+        "repository": "isaacs/node-lru-cache",
+        "base": "243114d7d4a72b81b40b8d546e457396a321cf10",
+        "oracle": "787343df2b0aed28453964d12c81e83b797097f8",
+        "instruction": "fetch: provide options and abort signal",
+        "qualified": false,
+        "results": {
+          "referenceFull": {
+            "valid": true,
+            "passed": true,
+            "assertions": 136
+          },
+          "baselineFull": {
+            "valid": true,
+            "passed": false,
+            "assertions": 123
+          },
+          "referencePublic": {
+            "valid": true,
+            "passed": true,
+            "assertions": 101
+          },
+          "baselinePublic": {
+            "valid": true,
+            "passed": false,
+            "assertions": 88
+          }
+        }
+      },
+      {
+        "caseId": "lru-cache-6c8537ea6f54",
+        "repository": "isaacs/node-lru-cache",
+        "base": "a923b9b6f91ff7aff0b50fa760c11e8ba9752ed5",
+        "oracle": "6c8537ea6f54762f1bf7c6e908800c6982d63410",
+        "instruction": "add cache.getRemainingTTL(key)",
+        "qualified": false,
+        "results": {
+          "referenceFull": {
+            "valid": true,
+            "passed": true,
+            "assertions": 349
+          },
+          "baselineFull": {
+            "valid": true,
+            "passed": false,
+            "assertions": 281
+          },
+          "referencePublic": {
+            "valid": true,
+            "passed": true,
+            "assertions": 208
+          },
+          "baselinePublic": {
+            "valid": true,
+            "passed": false,
+            "assertions": 158
+          }
+        }
+      },
+      {
+        "caseId": "lru-cache-c1ad5da5685b",
+        "repository": "isaacs/node-lru-cache",
+        "base": "7eb636828cafb8d1940d23685ae24854dc228c90",
+        "oracle": "c1ad5da5685b3f57922de8c220212aa3de0f9262",
+        "instruction": "defend against mutation while iterating",
+        "qualified": false,
+        "results": {
+          "referenceFull": {
+            "valid": true,
+            "passed": true,
+            "assertions": 101
+          },
+          "baselineFull": {
+            "valid": true,
+            "passed": false,
+            "assertions": 96
+          },
+          "referencePublic": {
+            "valid": true,
+            "passed": true,
+            "assertions": 88
+          },
+          "baselinePublic": {
+            "valid": true,
+            "passed": false,
+            "assertions": 85
+          }
+        }
+      },
+      {
+        "caseId": "lru-cache-212804e69d2e",
+        "repository": "isaacs/node-lru-cache",
+        "base": "04765f85a1e480c14b9928f2a40c4713ff8d611b",
+        "oracle": "212804e69d2e413f20d2fec3ea69f40c032d8d96",
+        "instruction": "fix: purgeStale lockup on list reordering",
+        "qualified": false,
+        "results": {
+          "referenceFull": {
+            "valid": true,
+            "passed": true,
+            "assertions": 331
+          },
+          "baselineFull": {
+            "valid": true,
+            "passed": false,
+            "assertions": 213
+          },
+          "referencePublic": {
+            "valid": true,
+            "passed": true,
+            "assertions": 197
+          },
+          "baselinePublic": {
+            "valid": true,
+            "passed": false,
+            "assertions": 198
+          }
+        }
+      }
+    ]
+  },
+  "workflow": {
+    "protocolSha256": "ba7c0734bcac7d1ab7820d054c6e46bf0483bb485ed8f7d935d1d8d42891d35b",
+    "auditSha256": "e616a3adaa925d5133c1158471f1aa0dfe4f20b7cccd03d88d6621c12e38000b",
+    "scope": "Every qualifying task from the fixed ten-task LRU roster, three independent draws each. Repetitions are not independent tasks. Three independent arms: direct strong, single cheap matching the cascade draft, and cheap plus at most one strong repair using only its own rejected proposal/public failure. Same original inputs in each round, hash-seeded arm order; no cross-round answers or labels. Full outcomes only after all calls. Strict original public/full counts and snapshots. Require aggregate AND each of three rounds to pass cost, latency and cheap-quality advantage gates; single repository, historical public data, no production claim. Stage cap $4 within cumulative $400; retain <=512files/64MiB. No new image or machine.",
+    "models": {
+      "openai/gpt-6-luna": {
+        "provider": "openai",
+        "upstream": "gpt-6-luna",
+        "price": {
+          "input": 1.0000000000000001e-7,
+          "cached": 1e-8,
+          "write": 1.25e-7,
+          "output": 5e-7,
+          "request": 0,
+          "tiers": []
+        },
+        "source": "https://developers.openai.com/api/docs/models/gpt-6-luna"
+      },
+      "openai/gpt-6.1-terra": {
+        "provider": "openai",
+        "upstream": "gpt-6.1-terra",
+        "price": {
+          "input": 0.000001,
+          "cached": 5e-8,
+          "write": 0.00000125,
+          "output": 0.000005,
+          "request": 0,
+          "tiers": []
+        },
+        "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+      }
+    },
+    "records": [
+      {
+        "caseId": "lru-cache-05942bcc1023-r1",
+        "kind": "repository",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 19358,
+        "costMicros": 23561,
+        "elapsedMs": 10426.00625,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 172,
+          "expectedTests": 172
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-05942bcc1023-r1",
+        "kind": "repository",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 2068,
+        "costMicros": 2489,
+        "elapsedMs": 11030.824541999998,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 172,
+          "expectedTests": 172
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-05942bcc1023-r1",
+        "kind": "repository",
+        "strategy": "cheap",
+        "publicPassed": false,
+        "escalated": false,
+        "normalizedMicros": 2154,
+        "costMicros": 641,
+        "elapsedMs": 7817.377791999999,
+        "full": {
+          "valid": false,
+          "passed": false
+        },
+        "passed": false
+      },
+      {
+        "caseId": "lru-cache-b571d06fec1e-r1",
+        "kind": "repository",
+        "strategy": "cheap",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1425,
+        "costMicros": 1746,
+        "elapsedMs": 5935.560667000002,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 105,
+          "expectedTests": 105
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-b571d06fec1e-r1",
+        "kind": "repository",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 13617,
+        "costMicros": 16826,
+        "elapsedMs": 6548.291917000002,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 105,
+          "expectedTests": 105
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-b571d06fec1e-r1",
+        "kind": "repository",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1461,
+        "costMicros": 306,
+        "elapsedMs": 6207.587708000006,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 105,
+          "expectedTests": 105
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-44c5ec96b87b-r1",
+        "kind": "repository",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": true,
+        "normalizedMicros": 24190,
+        "costMicros": 28808,
+        "elapsedMs": 23042.211290999992,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 355,
+          "expectedTests": 355
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-44c5ec96b87b-r1",
+        "kind": "repository",
+        "strategy": "cheap",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1899,
+        "costMicros": 415,
+        "elapsedMs": 7886.249416999999,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 355,
+          "expectedTests": 355
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-44c5ec96b87b-r1",
+        "kind": "repository",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 21618,
+        "costMicros": 25742,
+        "elapsedMs": 19068.156957999992,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 355,
+          "expectedTests": 355
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-05942bcc1023-r2",
+        "kind": "repository",
+        "strategy": "cheap",
+        "publicPassed": false,
+        "escalated": false,
+        "normalizedMicros": 2169,
+        "costMicros": 656,
+        "elapsedMs": 7643.1992089999985,
+        "full": {
+          "valid": false,
+          "passed": false
+        },
+        "passed": false
+      },
+      {
+        "caseId": "lru-cache-05942bcc1023-r2",
+        "kind": "repository",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": true,
+        "normalizedMicros": 21827,
+        "costMicros": 4483,
+        "elapsedMs": 17894.17004099999,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 172,
+          "expectedTests": 172
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-05942bcc1023-r2",
+        "kind": "repository",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 19948,
+        "costMicros": 3979,
+        "elapsedMs": 13375.377416999982,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 172,
+          "expectedTests": 172
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-b571d06fec1e-r2",
+        "kind": "repository",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 13747,
+        "costMicros": 1555,
+        "elapsedMs": 5218.308665999997,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 105,
+          "expectedTests": 105
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-b571d06fec1e-r2",
+        "kind": "repository",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1463,
+        "costMicros": 308,
+        "elapsedMs": 5580.059624999994,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 105,
+          "expectedTests": 105
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-b571d06fec1e-r2",
+        "kind": "repository",
+        "strategy": "cheap",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1439,
+        "costMicros": 284,
+        "elapsedMs": 5389.782500000001,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 105,
+          "expectedTests": 105
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-44c5ec96b87b-r2",
+        "kind": "repository",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 19993,
+        "costMicros": 4323,
+        "elapsedMs": 12976.868917000014,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 355,
+          "expectedTests": 355
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-44c5ec96b87b-r2",
+        "kind": "repository",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": true,
+        "normalizedMicros": 21360,
+        "costMicros": 4302,
+        "elapsedMs": 13872.002708000015,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 355,
+          "expectedTests": 355
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-44c5ec96b87b-r2",
+        "kind": "repository",
+        "strategy": "cheap",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1990,
+        "costMicros": 506,
+        "elapsedMs": 7188.737124999985,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 355,
+          "expectedTests": 355
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-05942bcc1023-r3",
+        "kind": "repository",
+        "strategy": "cheap",
+        "publicPassed": false,
+        "escalated": false,
+        "normalizedMicros": 2106,
+        "costMicros": 593,
+        "elapsedMs": 6779.196750000003,
+        "full": {
+          "valid": false,
+          "passed": false
+        },
+        "passed": false
+      },
+      {
+        "caseId": "lru-cache-05942bcc1023-r3",
+        "kind": "repository",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 2031,
+        "costMicros": 518,
+        "elapsedMs": 7410.363458000007,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 172,
+          "expectedTests": 172
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-05942bcc1023-r3",
+        "kind": "repository",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 19618,
+        "costMicros": 3649,
+        "elapsedMs": 9638.063416999998,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 172,
+          "expectedTests": 172
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-b571d06fec1e-r3",
+        "kind": "repository",
+        "strategy": "cheap",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1420,
+        "costMicros": 265,
+        "elapsedMs": 4592.286541999987,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 105,
+          "expectedTests": 105
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-b571d06fec1e-r3",
+        "kind": "repository",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 13887,
+        "costMicros": 1695,
+        "elapsedMs": 5530.973083000019,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 105,
+          "expectedTests": 105
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-b571d06fec1e-r3",
+        "kind": "repository",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1412,
+        "costMicros": 257,
+        "elapsedMs": 4636.727291000017,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 105,
+          "expectedTests": 105
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-44c5ec96b87b-r3",
+        "kind": "repository",
+        "strategy": "strong",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 21413,
+        "costMicros": 5743,
+        "elapsedMs": 16005.488500000007,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 355,
+          "expectedTests": 355
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-44c5ec96b87b-r3",
+        "kind": "repository",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "escalated": false,
+        "normalizedMicros": 1875,
+        "costMicros": 391,
+        "elapsedMs": 5845.919124999986,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 355,
+          "expectedTests": 355
+        },
+        "passed": true
+      },
+      {
+        "caseId": "lru-cache-44c5ec96b87b-r3",
+        "kind": "repository",
+        "strategy": "cheap",
+        "publicPassed": false,
+        "escalated": false,
+        "normalizedMicros": 1955,
+        "costMicros": 471,
+        "elapsedMs": 5481.398083999986,
+        "full": {
+          "valid": false,
+          "passed": false
+        },
+        "passed": false
+      }
+    ],
+    "calls": [
+      {
+        "stage": "case-0/strong/control",
+        "number": 1,
+        "id": "lru-cache-05942bcc1023-r1/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 23561,
+        "normalizedMicros": 19358,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 16810,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 509
+        },
+        "disposition": "complete",
+        "elapsedMs": 7119.027708
+      },
+      {
+        "stage": "case-0/cascade/draft",
+        "number": 1,
+        "id": "lru-cache-05942bcc1023-r1/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 2489,
+        "normalizedMicros": 2068,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 16810,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 773
+        },
+        "disposition": "complete",
+        "elapsedMs": 6454.716708000002
+      },
+      {
+        "stage": "case-0/cheap/cheap",
+        "number": 1,
+        "id": "lru-cache-05942bcc1023-r1/cheap",
+        "arm": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 641,
+        "normalizedMicros": 2154,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16810,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 944
+        },
+        "disposition": "complete",
+        "elapsedMs": 7111.817290999999
+      },
+      {
+        "stage": "case-1/cheap/cheap",
+        "number": 1,
+        "id": "lru-cache-b571d06fec1e-r1/cheap",
+        "arm": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 1746,
+        "normalizedMicros": 1425,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 12834,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 282
+        },
+        "disposition": "complete",
+        "elapsedMs": 3044.213125000002
+      },
+      {
+        "stage": "case-1/strong/control",
+        "number": 1,
+        "id": "lru-cache-b571d06fec1e-r1/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 16826,
+        "normalizedMicros": 13617,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 12834,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 156
+        },
+        "disposition": "complete",
+        "elapsedMs": 3362.121167000005
+      },
+      {
+        "stage": "case-1/cascade/draft",
+        "number": 1,
+        "id": "lru-cache-b571d06fec1e-r1/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 306,
+        "normalizedMicros": 1461,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 12834,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 353
+        },
+        "disposition": "complete",
+        "elapsedMs": 3649.8569999999963
+      },
+      {
+        "stage": "case-2/cascade/draft",
+        "number": 1,
+        "id": "lru-cache-44c5ec96b87b-r1/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 2290,
+        "normalizedMicros": 1877,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 16495,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 454
+        },
+        "disposition": "complete",
+        "elapsedMs": 3433.9888749999955
+      },
+      {
+        "stage": "case-2/cascade/fallback",
+        "number": 1,
+        "id": "lru-cache-44c5ec96b87b-r1/fallback",
+        "arm": "fallback",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 26518,
+        "normalizedMicros": 22313,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 16820,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 1098
+        },
+        "disposition": "complete",
+        "elapsedMs": 15863.001624999997
+      },
+      {
+        "stage": "case-2/cheap/cheap",
+        "number": 1,
+        "id": "lru-cache-44c5ec96b87b-r1/cheap",
+        "arm": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 415,
+        "normalizedMicros": 1899,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16495,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 498
+        },
+        "disposition": "complete",
+        "elapsedMs": 4294.925499999998
+      },
+      {
+        "stage": "case-2/strong/control",
+        "number": 1,
+        "id": "lru-cache-44c5ec96b87b-r1/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 25742,
+        "normalizedMicros": 21618,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 16495,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 1024
+        },
+        "disposition": "complete",
+        "elapsedMs": 15563.253459
+      },
+      {
+        "stage": "case-3/cheap/cheap",
+        "number": 1,
+        "id": "lru-cache-05942bcc1023-r2/cheap",
+        "arm": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 656,
+        "normalizedMicros": 2169,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16810,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 975
+        },
+        "disposition": "complete",
+        "elapsedMs": 6970.316458000001
+      },
+      {
+        "stage": "case-3/cascade/draft",
+        "number": 1,
+        "id": "lru-cache-05942bcc1023-r2/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 619,
+        "normalizedMicros": 2132,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16810,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 901
+        },
+        "disposition": "complete",
+        "elapsedMs": 6691.4367499999935
+      },
+      {
+        "stage": "case-3/cascade/fallback",
+        "number": 1,
+        "id": "lru-cache-05942bcc1023-r2/fallback",
+        "arm": "fallback",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 3864,
+        "normalizedMicros": 19695,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16810,
+          "cacheWriteInputTokens": 552,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 466
+        },
+        "disposition": "complete",
+        "elapsedMs": 6915.454417000001
+      },
+      {
+        "stage": "case-3/strong/control",
+        "number": 1,
+        "id": "lru-cache-05942bcc1023-r2/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 3979,
+        "normalizedMicros": 19948,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16810,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 627
+        },
+        "disposition": "complete",
+        "elapsedMs": 11322.227625000014
+      },
+      {
+        "stage": "case-4/strong/control",
+        "number": 1,
+        "id": "lru-cache-b571d06fec1e-r2/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 1555,
+        "normalizedMicros": 13747,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 12834,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 182
+        },
+        "disposition": "complete",
+        "elapsedMs": 3361.0221250000177
+      },
+      {
+        "stage": "case-4/cascade/draft",
+        "number": 1,
+        "id": "lru-cache-b571d06fec1e-r2/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 308,
+        "normalizedMicros": 1463,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 12834,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 357
+        },
+        "disposition": "complete",
+        "elapsedMs": 3714.5290000000095
+      },
+      {
+        "stage": "case-4/cheap/cheap",
+        "number": 1,
+        "id": "lru-cache-b571d06fec1e-r2/cheap",
+        "arm": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 284,
+        "normalizedMicros": 1439,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 12834,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 310
+        },
+        "disposition": "complete",
+        "elapsedMs": 3477.778874999989
+      },
+      {
+        "stage": "case-5/strong/control",
+        "number": 1,
+        "id": "lru-cache-44c5ec96b87b-r2/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 4323,
+        "normalizedMicros": 19993,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16495,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 699
+        },
+        "disposition": "complete",
+        "elapsedMs": 11171.243125000008
+      },
+      {
+        "stage": "case-5/cascade/draft",
+        "number": 1,
+        "id": "lru-cache-44c5ec96b87b-r2/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 393,
+        "normalizedMicros": 1877,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16495,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 454
+        },
+        "disposition": "complete",
+        "elapsedMs": 3587.441124999983
+      },
+      {
+        "stage": "case-5/cascade/fallback",
+        "number": 1,
+        "id": "lru-cache-44c5ec96b87b-r2/fallback",
+        "arm": "fallback",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 3909,
+        "normalizedMicros": 19483,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16495,
+          "cacheWriteInputTokens": 385,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 520
+        },
+        "disposition": "complete",
+        "elapsedMs": 7335.451000000001
+      },
+      {
+        "stage": "case-5/cheap/cheap",
+        "number": 1,
+        "id": "lru-cache-44c5ec96b87b-r2/cheap",
+        "arm": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 506,
+        "normalizedMicros": 1990,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16495,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 680
+        },
+        "disposition": "complete",
+        "elapsedMs": 5224.477957999974
+      },
+      {
+        "stage": "case-6/cheap/cheap",
+        "number": 1,
+        "id": "lru-cache-05942bcc1023-r3/cheap",
+        "arm": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 593,
+        "normalizedMicros": 2106,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16810,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 849
+        },
+        "disposition": "complete",
+        "elapsedMs": 6143.218957999983
+      },
+      {
+        "stage": "case-6/cascade/draft",
+        "number": 1,
+        "id": "lru-cache-05942bcc1023-r3/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 518,
+        "normalizedMicros": 2031,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16810,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 699
+        },
+        "disposition": "complete",
+        "elapsedMs": 5395.374958
+      },
+      {
+        "stage": "case-6/strong/control",
+        "number": 1,
+        "id": "lru-cache-05942bcc1023-r3/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 3649,
+        "normalizedMicros": 19618,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16810,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 561
+        },
+        "disposition": "complete",
+        "elapsedMs": 7650.011167000019
+      },
+      {
+        "stage": "case-7/cheap/cheap",
+        "number": 1,
+        "id": "lru-cache-b571d06fec1e-r3/cheap",
+        "arm": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 265,
+        "normalizedMicros": 1420,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 12834,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 272
+        },
+        "disposition": "complete",
+        "elapsedMs": 2669.2186670000083
+      },
+      {
+        "stage": "case-7/strong/control",
+        "number": 1,
+        "id": "lru-cache-b571d06fec1e-r3/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 1695,
+        "normalizedMicros": 13887,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 12834,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 210
+        },
+        "disposition": "complete",
+        "elapsedMs": 3686.5952080000134
+      },
+      {
+        "stage": "case-7/cascade/draft",
+        "number": 1,
+        "id": "lru-cache-b571d06fec1e-r3/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 257,
+        "normalizedMicros": 1412,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 12834,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 255
+        },
+        "disposition": "complete",
+        "elapsedMs": 2747.235167000006
+      },
+      {
+        "stage": "case-8/strong/control",
+        "number": 1,
+        "id": "lru-cache-44c5ec96b87b-r3/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 5743,
+        "normalizedMicros": 21413,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16495,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 983
+        },
+        "disposition": "complete",
+        "elapsedMs": 13513.326332999975
+      },
+      {
+        "stage": "case-8/cascade/draft",
+        "number": 1,
+        "id": "lru-cache-44c5ec96b87b-r3/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 391,
+        "normalizedMicros": 1875,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16495,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 450
+        },
+        "disposition": "complete",
+        "elapsedMs": 3817.995291999978
+      },
+      {
+        "stage": "case-8/cheap/cheap",
+        "number": 1,
+        "id": "lru-cache-44c5ec96b87b-r3/cheap",
+        "arm": "cheap",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 471,
+        "normalizedMicros": 1955,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 16495,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 610
+        },
+        "disposition": "complete",
+        "elapsedMs": 4850.080042000016
+      }
+    ],
+    "summary": {
+      "strong": {
+        "passed": 9,
+        "costMicros": 87073,
+        "elapsedMs": 98787.53512500001
+      },
+      "cascade": {
+        "passed": 9,
+        "costMicros": 41862,
+        "elapsedMs": 95519.865789
+      },
+      "falseAccepts": 0,
+      "strongLosses": 0,
+      "rescues": 3,
+      "escalations": 3,
+      "costRatio": 0.4807690099112239,
+      "elapsedRatio": 0.966922250546435,
+      "costComparison": {
+        "costBasis": "invoice-and-cache-neutral-v1",
+        "strong": {
+          "costMicros": 87073,
+          "normalizedMicros": 163199
+        },
+        "cascade": {
+          "costMicros": 41862,
+          "normalizedMicros": 77687
+        },
+        "costRatio": 0.4807690099112239,
+        "normalizedCostRatio": 0.47602620114093835,
+        "invoiceCostScreen": true,
+        "normalizedCostScreen": true,
+        "costScreen": true
+      },
+      "qualityMatchedCostScreen": true,
+      "liveDevelopmentLead": true,
+      "qualifiedProductionGain": false,
+      "cheap": {
+        "passed": 5,
+        "costMicros": 5577,
+        "elapsedMs": 58713.78808599996
+      },
+      "summaryPolicy": "routing-three-arm-v1",
+      "routingLead": true
+    },
+    "repeatSummary": {
+      "resultSha256": "f8bd5a1c4f32e33f89dfefda103f5895c0f3954faf20707ba292681c9915fc87",
+      "terminalAuditSha256": "e616a3adaa925d5133c1158471f1aa0dfe4f20b7cccd03d88d6621c12e38000b",
+      "independentTasks": 3,
+      "rounds": 3,
+      "caseDraws": 9,
+      "aggregate": {
+        "strong": {
+          "passed": 9,
+          "costMicros": 87073,
+          "elapsedMs": 98787.53512500001
+        },
+        "cascade": {
+          "passed": 9,
+          "costMicros": 41862,
+          "elapsedMs": 95519.865789
+        },
+        "falseAccepts": 0,
+        "strongLosses": 0,
+        "rescues": 3,
+        "escalations": 3,
+        "costRatio": 0.4807690099112239,
+        "elapsedRatio": 0.966922250546435,
+        "costComparison": {
+          "costBasis": "invoice-and-cache-neutral-v1",
+          "strong": {
+            "costMicros": 87073,
+            "normalizedMicros": 163199
+          },
+          "cascade": {
+            "costMicros": 41862,
+            "normalizedMicros": 77687
+          },
+          "costRatio": 0.4807690099112239,
+          "normalizedCostRatio": 0.47602620114093835,
+          "invoiceCostScreen": true,
+          "normalizedCostScreen": true,
+          "costScreen": true
+        },
+        "qualityMatchedCostScreen": true,
+        "liveDevelopmentLead": true,
+        "qualifiedProductionGain": false,
+        "cheap": {
+          "passed": 5,
+          "costMicros": 5577,
+          "elapsedMs": 58713.78808599996
+        },
+        "summaryPolicy": "routing-three-arm-v1",
+        "routingLead": true
+      },
+      "byRound": [
+        {
+          "round": 1,
+          "strong": {
+            "passed": 3,
+            "costMicros": 66129,
+            "elapsedMs": 36042.45512499999
+          },
+          "cascade": {
+            "passed": 3,
+            "costMicros": 31603,
+            "elapsedMs": 40280.62354099999
+          },
+          "falseAccepts": 0,
+          "strongLosses": 0,
+          "rescues": 1,
+          "escalations": 1,
+          "costRatio": 0.47789925751183293,
+          "elapsedRatio": 1.1175882275860918,
+          "costComparison": {
+            "costBasis": "invoice-and-cache-neutral-v1",
+            "strong": {
+              "costMicros": 66129,
+              "normalizedMicros": 54593
+            },
+            "cascade": {
+              "costMicros": 31603,
+              "normalizedMicros": 27719
+            },
+            "costRatio": 0.47789925751183293,
+            "normalizedCostRatio": 0.5077390874287913,
+            "invoiceCostScreen": true,
+            "normalizedCostScreen": true,
+            "costScreen": true
+          },
+          "qualityMatchedCostScreen": true,
+          "liveDevelopmentLead": false,
+          "qualifiedProductionGain": false,
+          "cheap": {
+            "passed": 2,
+            "costMicros": 2802,
+            "elapsedMs": 21639.187876
+          },
+          "summaryPolicy": "routing-three-arm-v1",
+          "routingLead": false
+        },
+        {
+          "round": 2,
+          "strong": {
+            "passed": 3,
+            "costMicros": 9857,
+            "elapsedMs": 31570.554999999993
+          },
+          "cascade": {
+            "passed": 3,
+            "costMicros": 9093,
+            "elapsedMs": 37346.232374
+          },
+          "falseAccepts": 0,
+          "strongLosses": 0,
+          "rescues": 2,
+          "escalations": 2,
+          "costRatio": 0.9224916303134828,
+          "elapsedRatio": 1.1829450693533898,
+          "costComparison": {
+            "costBasis": "invoice-and-cache-neutral-v1",
+            "strong": {
+              "costMicros": 9857,
+              "normalizedMicros": 53688
+            },
+            "cascade": {
+              "costMicros": 9093,
+              "normalizedMicros": 44650
+            },
+            "costRatio": 0.9224916303134828,
+            "normalizedCostRatio": 0.8316569810758456,
+            "invoiceCostScreen": false,
+            "normalizedCostScreen": false,
+            "costScreen": false
+          },
+          "qualityMatchedCostScreen": false,
+          "liveDevelopmentLead": false,
+          "qualifiedProductionGain": false,
+          "cheap": {
+            "passed": 2,
+            "costMicros": 1446,
+            "elapsedMs": 20221.718833999985
+          },
+          "summaryPolicy": "routing-three-arm-v1",
+          "routingLead": false
+        },
+        {
+          "round": 3,
+          "strong": {
+            "passed": 3,
+            "costMicros": 11087,
+            "elapsedMs": 31174.525000000023
+          },
+          "cascade": {
+            "passed": 3,
+            "costMicros": 1166,
+            "elapsedMs": 17893.00987400001
+          },
+          "falseAccepts": 0,
+          "strongLosses": 0,
+          "rescues": 0,
+          "escalations": 0,
+          "costRatio": 0.10516821502660774,
+          "elapsedRatio": 0.5739625503195316,
+          "costComparison": {
+            "costBasis": "invoice-and-cache-neutral-v1",
+            "strong": {
+              "costMicros": 11087,
+              "normalizedMicros": 54918
+            },
+            "cascade": {
+              "costMicros": 1166,
+              "normalizedMicros": 5318
+            },
+            "costRatio": 0.10516821502660774,
+            "normalizedCostRatio": 0.09683528169270549,
+            "invoiceCostScreen": true,
+            "normalizedCostScreen": true,
+            "costScreen": true
+          },
+          "qualityMatchedCostScreen": true,
+          "liveDevelopmentLead": true,
+          "qualifiedProductionGain": false,
+          "cheap": {
+            "passed": 1,
+            "costMicros": 1329,
+            "elapsedMs": 16852.881375999976
+          },
+          "summaryPolicy": "routing-three-arm-v1",
+          "routingLead": true
+        }
+      ],
+      "repeatGainQualified": false,
+      "scope": "Three independent draws per historical task are repeated observations, not additional independent tasks. One repository; no production qualification."
+    },
+    "newCostMicros": 134512,
+    "auditScope": "Complete outcome and cost replay matched every record; original measured workflow times preserved. No new model calls during audit.",
+    "infrastructureCost": "Verification infrastructure is not priced."
+  }
+}
