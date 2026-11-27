@@ -2647,3 +2647,9 @@ strong-only at 6/6, versus independent cheap-only at 4/6. Estimated model cost
 fell 55.88%, but workflow time increased 24.68%, failing the frozen no-slowdown
 gate. All 18 arms, 20 calls and ten candidate qualifications are retained. The
 result supports a cost/latency tradeoff, not an overall or production gain.
+
+The [repair-fallback follow-up](fusion-repair-latency-study.md) reduced paired
+fallback API time by 24.19%, but failed its component cost gate. A complete
+six-task development replay then scored 6/6 in every arm: cascade used 70.12%
+less model cost than strong-only but took 3.40% longer, while cheap-only was
+both cheaper and faster. Neither experiment qualifies an overall gain.
