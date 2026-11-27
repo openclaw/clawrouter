@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from "react";
+import { ConsoleRetryContext } from "./console-retry-button";
 import { authenticationRequired, request, type ConsoleRequest } from "./dashboard-fetch";
 import { errorMessage } from "./domain";
 import { useCredentialOperations, type CredentialOperations } from "./hooks/use-credential-operations";
@@ -150,7 +151,11 @@ function ConsoleDataProvider({ session, credentialOwner, requestForScope, probe,
     credentialRefresh.current = refresh;
     return () => { if (credentialRefresh.current === refresh) credentialRefresh.current = async () => undefined; };
   }, [controller.refreshMetadataAfterMutation, credentialRefresh]);
-  return <ConsoleControllerContext.Provider value={controller}>{children}</ConsoleControllerContext.Provider>;
+  return <ConsoleControllerContext.Provider value={controller}>
+    <ConsoleRetryContext.Provider value={{ busy: controller.session.busy, pending: controller.retryPending, retry: controller.retryRefresh }}>
+      {children}
+    </ConsoleRetryContext.Provider>
+  </ConsoleControllerContext.Provider>;
 }
 
 export function useConsole() {
