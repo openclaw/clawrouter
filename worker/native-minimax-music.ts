@@ -1,5 +1,5 @@
 import { jsonBodyBytes } from "./json-body.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { MiniMaxMusicCoverJson, musicCoverResponseLimits, observeMiniMaxMusic, prepareMiniMaxMusic, readMiniMaxMusicStream, type MiniMaxMusicRequest } from "./minimax-music.ts";
 import { consumeMiniMaxMusicCoverResponse, type MusicCoverResponseCapability } from "./minimax-music-cover-input.ts";
 import { readNativeJson } from "./native-json.ts";

@@ -1,5 +1,5 @@
 import { jsonBodyBytes } from "./json-body.ts";
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 import { miniMaxImageModel, miniMaxImagePath, observeMiniMaxImage, prepareMiniMaxImage } from "./minimax-images.ts";
 import { readNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";

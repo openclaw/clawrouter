@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const googleLiveModels = [
   "gemini-3.1-flash-live-preview", "gemini-3.8-live", "gemini-3.8-live-extended-thinking",

@@ -1,4 +1,4 @@
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 
 export const falSeedanceModels = ["bytedance/seedance-2.0/fast/text-to-video", "bytedance/seedance-2.0/fast/image-to-video",
   "bytedance/seedance-2.0/text-to-video", "bytedance/seedance-2.0/image-to-video",

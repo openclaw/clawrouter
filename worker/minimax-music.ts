@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
 import { inputRetirement } from "./input-retirement.ts";
 

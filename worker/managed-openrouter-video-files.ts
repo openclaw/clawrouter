@@ -1,5 +1,5 @@
 import type { ManagedFileAdapter, ManagedFileDescriptor } from "./managed-lifecycle-types.ts";
-import { exactMediaParams, mediaPublicPath } from "./managed-media-json.ts";
+import { exactMediaParams, mediaPublicPath } from "./media-wire.ts";
 import { observeOpenRouterVideo, openRouterVideoModels, readOpenRouterVideoContent, validateOpenRouterVideoId } from "./openrouter-video.ts";
 
 const contentPath = "/v1/videos/${video_id}/content", fileLimit = 16 * 1024 * 1024;

@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const kieGrokModels = ["grok-imagine/text-to-video", "grok-imagine/image-to-video"] as const;
 

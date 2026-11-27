@@ -1,5 +1,5 @@
 import { readGoogleJson } from "./google-json.ts";
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 
 export const googleImageModels = ["gemini-3.1-flash-image", "gemini-3-pro-image"] as const;
 const ratios = new Set(["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]);

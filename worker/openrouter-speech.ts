@@ -1,5 +1,5 @@
 import { inputRetirement } from "./input-retirement.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const openRouterSpeechModels = ["hexgrad/kokoro-82m", "elevenlabs/eleven-turbo-v2",
   "google/gemini-3.1-flash-tts-preview", "mistralai/voxtral-mini-tts-2603"] as const;

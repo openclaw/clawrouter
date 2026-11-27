@@ -1,7 +1,8 @@
 import { parseVydraCancelAcknowledgement, parseVydraJob, parseVydraSubmission, prepareVydraJob,
   validateVydraJobId, vydraJobPath } from "./vydra-jobs.ts";
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
+import { readMediaJson } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, noMediaQuery } from "./media-wire.ts";
 
 export const vydraManagedAdapter: ManagedLifecycleAdapter = {
   protocol: "vydra.jobs", requestFormats: ["vydra.job_create"], supportsResult: false, supportsCancel: true,

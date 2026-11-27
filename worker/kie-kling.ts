@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const kieKlingModels = ["kling-2.6/text-to-video", "kling-2.6/image-to-video"] as const;
 // Wire qualification only. In particular, a valid image URL grants no asset,

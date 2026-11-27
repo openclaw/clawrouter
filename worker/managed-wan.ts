@@ -1,5 +1,6 @@
 import type { ManagedLifecycleAdapter, ManagedObservation } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
+import { readMediaJson } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./media-wire.ts";
 
 export const wanModels = ["wan2.6-t2v", "wan2.6-i2v", "wan2.6-r2v", "wan2.6-r2v-flash", "wan2.7-r2v"] as const;
 const models: ReadonlySet<string> = new Set(wanModels);

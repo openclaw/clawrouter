@@ -1,4 +1,4 @@
-import { mediaObject } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export const KIE_SEEDANCE_FROZEN_MODEL = "bytedance/seedance-1.5-pro";
 

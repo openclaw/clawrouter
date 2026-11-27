@@ -1,5 +1,5 @@
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
-import { exactMediaParams, mediaObject, mediaPublicPath, noMediaQuery } from "./managed-media-json.ts";
+import { exactMediaParams, mediaObject, mediaPublicPath, noMediaQuery } from "./media-wire.ts";
 import { openRouterVideoFiles } from "./managed-openrouter-video-files.ts";
 import { openRouterVideoModels, prepareOpenRouterVideo, prepareOpenRouterVideoControl, readOpenRouterVideo,
   validateOpenRouterVideoId } from "./openrouter-video.ts";

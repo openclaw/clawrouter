@@ -1,5 +1,6 @@
 import { googleEmbeddingModels, prepareGoogleEmbedding } from "./provider-google-embeddings.ts";
-import { mediaObject, readMediaJson } from "./managed-media-json.ts";
+import { readMediaJson } from "./managed-media-json.ts";
+import { mediaObject } from "./media-wire.ts";
 
 export interface GoogleEmbeddingBatchRow { key: string; dimensions: number }
 export interface GoogleEmbeddingBatchInput {

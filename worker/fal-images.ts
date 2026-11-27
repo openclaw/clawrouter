@@ -1,5 +1,5 @@
 import { assertFalRunDispatch } from "./fal-dispatch.ts";
-import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./media-wire.ts";
 import { readNativeJson } from "./native-json.ts";
 
 export const falImageModels = ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image",

@@ -1,5 +1,5 @@
 import type { ManagedLifecycleAdapter, ManagedObservation, ManagedReadContext } from "./managed-lifecycle-types.ts";
-import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./managed-media-json.ts";
+import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./media-wire.ts";
 import { canonicalGoogleVeoBytes, googleVeoAssets, readGoogleVeoBytes } from "./provider-google-veo-files.ts";
 
 export const googleVeoModels = ["veo-3.1-fast-generate-preview", "veo-3.1-generate-preview", "veo-3.1-lite-generate-preview"] as const;
