@@ -1,9 +1,7 @@
-## Summary
+## What Problem This Solves
 
 <!--
-Start with the problem, task, or value for callers, operators, or maintainers.
-Then explain the implementation. Keep it specific to this change.
-
+Describe the concrete user, product, or operational problem.
 In 1–3 plain sentences, say who is affected, what happens today, and why it
 matters to them. For a bug, name the trigger if known. For a feature or internal
 work, describe the need in the actual workflow without inventing harm.
@@ -12,37 +10,35 @@ Could a reader understand the problem without knowing your proposed fix?
 Good: "Background checks can use up a new user's model allowance before they've
 asked the assistant to monitor anything."
 Bad: "Turn off periodic checks on fresh installs."
-
-Illustrative pairs (not claims about this PR):
-- Implementation-first: "Update grant selection."
-  Reader-first: "Requests can fail when a spent grant is selected despite another
-  eligible grant. Select an eligible grant so callers can continue."
-- Implementation-first: "Extract provider quota helpers."
-  Reader-first: "Provider quota declarations are duplicated across compiler paths.
-  Share the helpers so maintainers can update the contract in one place."
 -->
 
-## Verification
+## User Impact
 
 <!--
-Lead with what was checked and the observed outcome, then supporting commands or
-logs. State gaps or checks not run; do not present planned checks as results.
-
-Illustrative pair:
-- Command-only: "Ran pnpm worker:check."
-- Outcome-first: "The grant-selection regression passes: a spent grant no longer
-  prevents selection of another eligible grant. Worker checks pass
-  (`pnpm worker:check`)."
+"User impact: <what users, operators, or developers can now do or expect>."
+Lead with the concrete outcome in plain language, usually one sentence.
+For internal-only changes, say there is no user-visible change; do not invent a benefit.
+State deployment status. Keep important risks, breaking changes, migrations, and required user actions visible here.
 -->
 
-## Deployment status
+## Why This Change Was Made
 
-<!-- State whether this is deployed, pending deployment, or needs no deployment. -->
+<!--
+Briefly explain how the change addresses the problem without repeating the impact.
+Keep the body short. Leave file lists, internal acronyms, and root-cause walkthroughs
+in the diff or optional <details>; include technical detail only when it explains
+behavior or a material tradeoff. Do not hide risks or required actions in <details>.
+-->
 
-## Remaining risk
+## Evidence
 
-<!-- Describe remaining risk or limitations, or explain why there is no runtime impact. -->
+<!--
+Show the most useful proof that this change works. Screenshots, screencasts,
+terminal output, focused tests, CI results, live observations, redacted logs,
+and artifact links are all useful.
 
-<!-- If deployment/state/callback/credential/accounting contracts change: describe
-     the automatic transition, existing-state and pending-work proof, and recovery.
-     See docs/deployment-compatibility.md. No per-release operator preparation. -->
+Start with the behavior checked and the result in plain language. Reviewers will
+inspect the code, tests, and CI; do not make them decode command lists to learn
+what was verified. Put exact commands, commit hashes, and long output in links
+or optional <details>. Keep the useful evidence summary and meaningful gaps visible.
+-->
