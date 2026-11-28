@@ -1,10 +1,12 @@
 # Changelog
 
-- Record a native Go literal-row Fusion pilot with isolated public feedback, complete original-test grading, and explicit cost and timing limits.
 - Require one additive changelog description with commit and content hashes when building offline Fusion tasks from local Git history.
 
 ## Unreleased
 
+- Record a native Go literal-row Fusion pilot with isolated public feedback, complete original-test grading, and explicit cost and timing limits.
+
+- Record a two-task native Go Fusion pilot with matched strong-only acceptance, 38.13% lower model cost and 3.52% more warm workflow time, retaining failed cheap attempts and the harder task's cost regression.
 - Add an opt-in research helper for bounded, read-only source investigation with observed-line citations and a reserved final report call.
 
 - Reject supplied skipped, cancelled or todo test counts in caller-side Fusion native and agreement cascades before accepting an artifact or dispatching another model call.
