@@ -301,6 +301,68 @@ test('By key compares retained keys; selecting and clearing one preserves the re
  } finally { f.close(); }
 });
 
+test('long retained identities keep calls and keyboard focus visible without splitting numbers', async ({ page }, info) => {
+ const f = await serve(page, 'admin');
+ try {
+  const owner = 'production-observability-operations-europe@retained-identities.example.test';
+  const prefix = 'cred_' + '01hx47r9vg5zemx3a2b8n6qk0s'.repeat(2) + '_';
+  for (const suffix of ['alpha', 'bravo']) {
+   await f.ingest('retained-' + suffix, {principal_id: owner, credential_id: prefix + suffix, input_tokens: 1323070, output_tokens: 146958, actual_cost_micros: 532700});
+  }
+  await page.goto('/dashboard/usage');
+  const ranking = page.getByRole('region', {name: 'Retained usage ranking', exact: true});
+  await page.getByRole('button', {name: 'By key', exact: true}).click();
+  const identity = (suffix: string) => ranking.getByRole('button', {name: owner + ' · ' + prefix + suffix, exact: true});
+  await expect(identity('alpha')).toBeEnabled();
+  await page.evaluate(() => document.fonts.ready);
+  for (const width of (info.project.name === 'mobile' ? [320, 390] : [768, 1440])) {
+   await page.setViewportSize({width, height: 900});
+   await ranking.evaluate(el => el.scrollLeft = 0);
+   await ranking.focus();
+   const buttons = await ranking.getByRole('button').count();
+   for (let i = 0; i < buttons; i++) {
+    await page.keyboard.press('Tab');
+    if (await identity('alpha').evaluate(el => el.matches(':focus-visible'))) break;
+   }
+   await expect(identity('alpha')).toBeFocused();
+   const box = await identity('alpha').evaluate(el => {
+    const wrapper = el.closest('[role="region"]')!, row = el.closest('tr')!, cells = row.querySelectorAll('td');
+    const bounds = wrapper.getBoundingClientRect(), button = el.getBoundingClientRect(), style = getComputedStyle(el);
+    const ring = Math.max(0, parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset));
+    const numberLines = (cell: Element, value: string) => {
+     const walk = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+     for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+      const start = (node.textContent ?? '').indexOf(value);
+      if (start < 0) continue;
+      const range = document.createRange(); range.setStart(node, start); range.setEnd(node, start + value.length);
+      return range.getClientRects().length;
+     }
+     return 0;
+    };
+    return {left: bounds.left, right: bounds.right, focusLeft: button.left-ring, focusRight: button.right+ring,
+     clippedLabel: el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight,
+     callsRight: cells[0].getBoundingClientRect().right, scroll: wrapper.scrollLeft,
+     tableScroll: wrapper.scrollWidth - wrapper.clientWidth, pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+     intact: [numberLines(cells[1], '1,323,070'), numberLines(cells[1], '146,958'), numberLines(cells[2], '$0.5327')]};
+   });
+   expect(box.scroll).toBe(0);
+   expect(box.pageOverflow).toBe(0);
+   expect(box.clippedLabel).toBe(false);
+   expect(box.focusLeft).toBeGreaterThanOrEqual(box.left);
+   expect(box.focusRight).toBeLessThanOrEqual(box.right);
+   expect(box.callsRight).toBeLessThanOrEqual(box.right);
+   expect(box.intact).toEqual([1, 1, 1]);
+   if (width >= 768) expect(box.tableScroll).toBe(0);
+   else expect(box.tableScroll).toBeGreaterThan(0);
+  }
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('group', {name:'Displayed report scope'})).toContainText('Key: ' + prefix + 'alpha');
+  const events = page.getByRole('region', {name:'Retained events', exact:true});
+  await expect(events.locator('tbody tr')).toHaveCount(1);
+  await expect(events).not.toContainText(prefix + 'bravo');
+ } finally { f.close(); }
+});
+
 test('displayed key report uses retained bounds and never labels pending results', async ({page}) => {
  const f = await serve(page, 'admin'), release = Promise.withResolvers<void>();
  try {

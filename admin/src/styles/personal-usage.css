@@ -131,6 +131,18 @@
 .personalTable td:last-child { padding-right: 0; }
 .personalCosts { min-width: 620px; }
 .personalTable:not(.personalCosts) { min-width: 580px; }
+
+/* Bound identities, not their contents: historical IDs can differ only at the end. */
+.retainedKeyRanking { --identity-column: clamp(12rem, 56vw, 26rem); }
+.retainedKeyRanking thead th:first-child { width: var(--identity-column); }
+.retainedKeyRanking th[scope="row"] { padding-inline-start: 4px; } /* room for the focus outline */
+.retainedKeyRanking th[scope="row"] button {
+  display: block;
+  max-inline-size: var(--identity-column);
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.retainedKeyRanking td, .retainedKeyRanking thead th { overflow-wrap: normal; }
 .personalCostList { margin: 0; padding: 0; list-style: none; min-width: 190px; font-size: 11px; line-height: 1.8; }
 .personalCostList small { display: inline !important; }
 .personalTokenStats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; margin: 22px 0; }

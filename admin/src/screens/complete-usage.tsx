@@ -110,6 +110,7 @@ function DetailTotals({value}:{value:UsageAdditives}) {return <><dl className="p
 export function ExactRanking({data, inlineEvents = false}:{data:PersonalUsageData; inlineEvents?:boolean}) {
   const value=data.report.value,q=value?.query;if(!value||!q)return null;
   const stale = Boolean(data.report.error);
+  const byKey = q.groupBy === 'key';
   return (<section className="dashboardPanel personalSection">
       <header className="personalSectionHeader">
         <div><h2>Exact ranking by {q.groupBy}</h2><p>{count(value.rank.distinctGroups)} retained {value.rank.distinctGroups === 1 ? 'identity' : 'identities'}. Historical keys use retained IDs, not current names.</p></div>
@@ -121,7 +122,21 @@ export function ExactRanking({data, inlineEvents = false}:{data:PersonalUsageDat
         </div>
       </header>
       <p className="personalNote">{filterDescription(q.filters)}{stale ? ' · Last successful report. Retry the report to use this ranking.' : q.groupBy === 'key' && !q.filters.key ? ' · Select a key to filter the report and its events.' : ''}</p>
-      <div className="personalTableWrap" tabIndex={0} role="region" aria-label="Retained usage ranking"><table className="personalTable"><thead><tr><th>Retained identity</th><th>Model calls</th><th>Input / output tokens</th><th>Recorded accounting amount</th></tr></thead><tbody>{value.groups.map(g=><tr key={JSON.stringify(g.identity)}><th scope="row"><button type="button" disabled={stale || g.identity.value===null && q.groupBy!=='key' || q.groupBy==='key'&&data.audience==='admin'&&g.identity.owner===null} onClick={()=>selectGroup(data,g)}>{q.groupBy==='key'?(g.identity.owner??'Unavailable owner')+' · '+(g.identity.value??'Dashboard session'):(g.identity.value??'Unavailable identity')}</button></th><td>{count(g.metrics.calls)}</td><td>{g.metrics.inputReportedCalls?count(g.metrics.inputTokens):'Not reported'} / {g.metrics.outputReportedCalls?count(g.metrics.outputTokens):'Not reported'}</td><td><Recorded value={g}/></td></tr>)}</tbody></table></div>
+      <div className="personalTableWrap" tabIndex={0} role="region" aria-label="Retained usage ranking">
+        <table className={byKey ? 'personalTable retainedKeyRanking' : 'personalTable'}>
+          <thead><tr><th>Retained identity</th><th>Model calls</th><th>Input / output tokens</th><th>Recorded accounting amount</th></tr></thead>
+          <tbody>{value.groups.map(g => <tr key={JSON.stringify(g.identity)}>
+            <th scope="row"><button type="button" className={byKey ? 'buttonSecondary' : undefined}
+              disabled={stale || (!byKey && g.identity.value === null) || (byKey && data.audience === 'admin' && g.identity.owner === null)}
+              onClick={() => selectGroup(data,g)}>
+              {byKey ? (g.identity.owner ?? 'Unavailable owner') + ' · ' + (g.identity.value ?? 'Dashboard session') : (g.identity.value ?? 'Unavailable identity')}
+            </button></th>
+            <td>{count(g.metrics.calls)}</td>
+            <td>{g.metrics.inputReportedCalls ? count(g.metrics.inputTokens) : 'Not reported'} / {g.metrics.outputReportedCalls ? count(g.metrics.outputTokens) : 'Not reported'}</td>
+            <td><Recorded value={g}/></td>
+          </tr>)}</tbody>
+        </table>
+      </div>
       <p>Exact remainder outside this rank page: {count(value.remainder.metrics.calls)} calls.</p><details><summary>Remainder field and money coverage</summary><Recorded value={value.remainder}/><DetailTotals value={value.remainder}/></details>
       <div className="personalActions"><button type="button" disabled={stale || !value.rank.offset} onClick={()=>data.refine({...q,rankOffset:Math.max(0,value.rank.offset-100)})}>Previous ranks</button><button type="button" disabled={stale || !value.rank.hasMore} onClick={()=>data.refine({...q,rankOffset:value.rank.offset+100})}>Next ranks</button>{inlineEvents ? <button type="button" aria-expanded={data.eventsShown} disabled={stale && !data.eventsShown} onClick={()=>data.showEvents(!data.eventsShown)}>{data.eventsShown?'Hide':'Show'} events</button> : null}</div>
     </section>);
