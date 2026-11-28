@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Record a two-task native Go Fusion pilot with matched strong-only acceptance, 38.13% lower model cost and 3.52% more warm workflow time, retaining failed cheap attempts and the harder task's cost regression.
 - Reject supplied skipped, cancelled or todo test counts in caller-side Fusion native and agreement cascades before accepting an artifact or dispatching another model call.
 - Record a fresh-control Fusion repair comparison where all arms pass but the cascade costs more and takes longer than strong-only.
 - Record two failed Fusion cheap-repair follow-ups, including cached-control accounting and a cheaper retrospective skip-repair comparison.
