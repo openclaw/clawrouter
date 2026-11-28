@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "study": "native-go-literal-row-pilot",
+  "recordedDate": "2026-11-28",
+  "productionQualified": false,
+  "configuration": {
+    "attemptLimit": 2,
+    "outputTokenLimitPerCall": 8192,
+    "reasoningEffort": "low",
+    "serviceTier": "default",
+    "models": {
+      "cheap": "openai/gpt-6-luna",
+      "strong": "openai/gpt-6.1-terra"
+    },
+    "frozenPerTokenUsd": {
+      "openai/gpt-6-luna": {
+        "input": 1.0000000000000001e-07,
+        "cached": 1e-08,
+        "write": 1.25e-07,
+        "output": 5e-07,
+        "request": 0,
+        "tiers": []
+      },
+      "openai/gpt-6.1-terra": {
+        "input": 1e-06,
+        "cached": 5e-08,
+        "write": 1.25e-06,
+        "output": 5e-06,
+        "request": 0,
+        "tiers": []
+      }
+    },
+    "policies": {
+      "cheap": [
+        "cheap",
+        "cheap"
+      ],
+      "strong": [
+        "strong",
+        "strong"
+      ],
+      "cascade": [
+        "cheap",
+        "strong"
+      ]
+    },
+    "workflowMs": "Warm policy workflow, including model calls and public validation; excludes shared compiler warmup and later full grading.",
+    "costMicros": "Usage priced with the frozen study tariffs, rounded per call; includes rejected drafts. Not invoice reconciliation or current pricing."
+  },
+  "case": {
+    "id": "openclaw/crawlkit@232aef3d30b8f31801f0687afd577e4cf922475e",
+    "sourceUrl": "https://github.com/openclaw/crawlkit/commit/232aef3d30b8f31801f0687afd577e4cf922475e",
+    "scope": "Output package slice of an author-described multi-package hardening change.",
+    "protocolSha256": "612e49e64bc2d9c35c7f7cf08e170237d7a9eb119ed3fa28635a17cba457b31b",
+    "resultSha256": "1aad051b99eacc9538e90fd4e3f7db7f0072b4b6c4b7b8c178d0d39daf8be5c5",
+    "qualificationProtocolSha256": "9c93cd69e4f17d6e6d8b00eed2985c8aab7e91ebcd36cd43b7505b3331d280ad",
+    "qualificationResultSha256": "e70e09e30fd195c6c7de1cdbafe4c410ccbcc68a6c09043ad1f39ff849f53afc",
+    "testName": "TestWriteLogRejectsAmbiguousLabels",
+    "publicLiteralRows": 1,
+    "withheldLiteralRows": 1,
+    "fullLiteralRows": 2,
+    "nativeTestEventsPerPartition": 1,
+    "runs": [
+      {
+        "policy": "cheap",
+        "accepted": true,
+        "fullTestsPassed": 1,
+        "costMicros": 555,
+        "normalizedMicros": 555,
+        "workflowMs": 9556.843584,
+        "calls": [
+          {
+            "model": "openai/gpt-6-luna",
+            "costMicros": 555,
+            "normalizedMicros": 555,
+            "usage": {
+              "uncachedInputTokens": 1365,
+              "cacheReadInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "cacheWrite1hInputTokens": 0,
+              "outputTokens": 836
+            },
+            "elapsedMs": 7475.781875000001
+          }
+        ]
+      },
+      {
+        "policy": "strong",
+        "accepted": true,
+        "fullTestsPassed": 1,
+        "costMicros": 2930,
+        "normalizedMicros": 2931,
+        "workflowMs": 5846.125457999999,
+        "calls": [
+          {
+            "model": "openai/gpt-6.1-terra",
+            "costMicros": 2930,
+            "normalizedMicros": 2931,
+            "usage": {
+              "uncachedInputTokens": 1365,
+              "cacheReadInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "cacheWrite1hInputTokens": 0,
+              "outputTokens": 313
+            },
+            "elapsedMs": 4428.147832999999
+          }
+        ]
+      },
+      {
+        "policy": "cascade",
+        "accepted": true,
+        "fullTestsPassed": 1,
+        "costMicros": 448,
+        "normalizedMicros": 448,
+        "workflowMs": 6857.893959000001,
+        "calls": [
+          {
+            "model": "openai/gpt-6-luna",
+            "costMicros": 448,
+            "normalizedMicros": 448,
+            "usage": {
+              "uncachedInputTokens": 1365,
+              "cacheReadInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "cacheWrite1hInputTokens": 0,
+              "outputTokens": 623
+            },
+            "elapsedMs": 5592.4229589999995
+          }
+        ]
+      }
+    ]
+  },
+  "limits": [
+    "One small historical task; unknown training exposure; no population accuracy or production qualification.",
+    "Literal rows are two inputs to one original test, not two independent tasks or two native test events.",
+    "Full original table is preserved; public compilation, execution and repair feedback include only the public row.",
+    "Private raw traces and harness are not published; hashes bind observations but do not independently reproduce model calls.",
+    "Frozen tariffs and warm workflow time exclude local compute billing and later full grading."
+  ]
+}

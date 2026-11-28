@@ -1,5 +1,9 @@
 # Low-cost Fusion research and screening
 
+The [Go literal-row pilot](fusion-go-row-study.md) adds one small historical
+repair: all three policies passed; cheap-first cost less but took longer than
+direct strong. Its two literal inputs remain one test and one task.
+
 The [live Undici transfer pilot](fusion-undici-live-transfer.md) matched
 strong-only at 3/3 tasks with 58.85% lower model cost and 17.68% less measured
 workflow time, including public verification. One cheap draft required a
