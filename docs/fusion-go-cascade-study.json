@@ -1,0 +1,282 @@
+{
+  "schemaVersion": 1,
+  "study": "native-go-cascade-pilot-20261128",
+  "status": "development-evidence",
+  "productionQualified": false,
+  "scope": "Two historical Go repairs on their first recorded model comparison. Cached source and author narrative; prior model-training or local exposure is unknown. Subsequent repeated-task experiments are excluded.",
+  "configuration": {
+    "attemptLimit": 2,
+    "outputTokenLimitPerCall": 8192,
+    "reasoningEffort": "low",
+    "serviceTier": "default",
+    "models": {
+      "cheap": "openai/gpt-6-luna",
+      "strong": "openai/gpt-6.1-terra"
+    },
+    "frozenPerTokenUsd": {
+      "openai/gpt-6-luna": {
+        "input": 1.0000000000000001e-07,
+        "cached": 1e-08,
+        "write": 1.25e-07,
+        "output": 5e-07,
+        "request": 0,
+        "tiers": []
+      },
+      "openai/gpt-6.1-terra": {
+        "input": 1e-06,
+        "cached": 5e-08,
+        "write": 1.25e-06,
+        "output": 5e-06,
+        "request": 0,
+        "tiers": []
+      }
+    },
+    "policies": {
+      "cheap": [
+        "cheap",
+        "cheap"
+      ],
+      "strong": [
+        "strong",
+        "strong"
+      ],
+      "cascade": [
+        "cheap",
+        "strong"
+      ]
+    },
+    "workflowMs": "Warm policy workflow, including model calls and public validation; excludes shared compiler warmup and later full grading.",
+    "costMicros": "Usage priced with the frozen study tariffs, rounded per call; includes rejected drafts. Not invoice reconciliation or current pricing."
+  },
+  "cases": [
+    {
+      "id": "openclaw/octopool@235198394d45d893904e39dd0a99ccfe1b015375",
+      "sourceUrl": "https://github.com/openclaw/octopool/commit/235198394d45d893904e39dd0a99ccfe1b015375",
+      "protocolSha256": "a5aadaa7c620013dfb0f8258126160892c041adab7609be7977074a0ada601e3",
+      "resultSha256": "e5c1f8b80d4861094460baf369161ff49196ea28c45d6e9bf717bf4eb92ddff7",
+      "publicTests": 7,
+      "fullTests": 8,
+      "runs": [
+        {
+          "policy": "cheap",
+          "accepted": true,
+          "fullGradeAttempted": true,
+          "fullTestsPassed": 8,
+          "costMicros": 3745,
+          "normalizedMicros": 3745,
+          "workflowMs": 18993.3995,
+          "calls": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1902,
+              "normalizedMicros": 1902,
+              "usage": {
+                "uncachedInputTokens": 13213,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 1161
+              },
+              "elapsedMs": 8142.277124999999
+            },
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1843,
+              "normalizedMicros": 1843,
+              "usage": {
+                "uncachedInputTokens": 14085,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 869
+              },
+              "elapsedMs": 6074.317959
+            }
+          ]
+        },
+        {
+          "policy": "strong",
+          "accepted": true,
+          "fullGradeAttempted": true,
+          "fullTestsPassed": 8,
+          "costMicros": 17638,
+          "normalizedMicros": 17638,
+          "workflowMs": 13029.777041999998,
+          "calls": [
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 17638,
+              "normalizedMicros": 17638,
+              "usage": {
+                "uncachedInputTokens": 13213,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 885
+              },
+              "elapsedMs": 10864.351000000002
+            }
+          ]
+        },
+        {
+          "policy": "cascade",
+          "accepted": true,
+          "fullGradeAttempted": true,
+          "fullTestsPassed": 8,
+          "costMicros": 1823,
+          "normalizedMicros": 1823,
+          "workflowMs": 9836.237625000002,
+          "calls": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1823,
+              "normalizedMicros": 1823,
+              "usage": {
+                "uncachedInputTokens": 13213,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 1002
+              },
+              "elapsedMs": 7071.617666999999
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openclaw/octopool@b4c6de2610e67f3f97e388b9d583f565fe750309",
+      "sourceUrl": "https://github.com/openclaw/octopool/commit/b4c6de2610e67f3f97e388b9d583f565fe750309",
+      "protocolSha256": "e5d5378a2e1566296a43effeb5c4ec4df2c4509ba36f9aed69edd39b179580c0",
+      "resultSha256": "1b81d4f0e995e622492d18b7eff098a769024156c9f2d63bf963af07ccb1698e",
+      "publicTests": 2,
+      "fullTests": 3,
+      "runs": [
+        {
+          "policy": "cheap",
+          "accepted": false,
+          "fullGradeAttempted": false,
+          "fullTestsPassed": null,
+          "costMicros": 4020,
+          "normalizedMicros": 4020,
+          "workflowMs": 18179.03625,
+          "calls": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 2038,
+              "normalizedMicros": 2038,
+              "usage": {
+                "uncachedInputTokens": 15141,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 1047
+              },
+              "elapsedMs": 7816.268624999999
+            },
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1982,
+              "normalizedMicros": 1982,
+              "usage": {
+                "uncachedInputTokens": 16121,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 739
+              },
+              "elapsedMs": 5591.919624999999
+            }
+          ]
+        },
+        {
+          "policy": "strong",
+          "accepted": true,
+          "fullGradeAttempted": true,
+          "fullTestsPassed": 3,
+          "costMicros": 22066,
+          "normalizedMicros": 22067,
+          "workflowMs": 18769.491833000004,
+          "calls": [
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 22066,
+              "normalizedMicros": 22067,
+              "usage": {
+                "uncachedInputTokens": 15141,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 1385
+              },
+              "elapsedMs": 16695.934625
+            }
+          ]
+        },
+        {
+          "policy": "cascade",
+          "accepted": true,
+          "fullGradeAttempted": true,
+          "fullTestsPassed": 3,
+          "costMicros": 22743,
+          "normalizedMicros": 22743,
+          "workflowMs": 23082.976624999996,
+          "calls": [
+            {
+              "model": "openai/gpt-6-luna",
+              "costMicros": 1983,
+              "normalizedMicros": 1983,
+              "usage": {
+                "uncachedInputTokens": 15141,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 937
+              },
+              "elapsedMs": 7639.085958000003
+            },
+            {
+              "model": "openai/gpt-6.1-terra",
+              "costMicros": 20760,
+              "normalizedMicros": 20760,
+              "usage": {
+                "uncachedInputTokens": 15740,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "cacheWrite1hInputTokens": 0,
+                "outputTokens": 1004
+              },
+              "elapsedMs": 12127.201582999995
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "cheap": {
+      "accepted": 1,
+      "tasks": 2,
+      "calls": 4,
+      "costMicros": 7765,
+      "normalizedMicros": 7765,
+      "workflowMs": 37172.435750000004
+    },
+    "strong": {
+      "accepted": 2,
+      "tasks": 2,
+      "calls": 2,
+      "costMicros": 39704,
+      "normalizedMicros": 39705,
+      "workflowMs": 31799.268875
+    },
+    "cascade": {
+      "accepted": 2,
+      "tasks": 2,
+      "calls": 3,
+      "costMicros": 24566,
+      "normalizedMicros": 24566,
+      "workflowMs": 32919.21425
+    }
+  }
+}
