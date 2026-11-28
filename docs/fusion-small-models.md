@@ -1,5 +1,9 @@
 # Low-cost Fusion research and screening
 
+The [Go literal-row pilot](fusion-go-row-study.md) adds one small historical
+repair: all three policies passed; cheap-first cost less but took longer than
+direct strong. Its two literal inputs remain one test and one task.
+
 The [native Go pilot](fusion-go-cascade-study.md) records two selected repairs:
 cascade and strong-only each passed both, while cheap-only passed one. Cascade
 used 38.13% less usage-priced model cost and 3.52% more warm workflow time.
